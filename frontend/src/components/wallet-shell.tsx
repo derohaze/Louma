@@ -310,11 +310,11 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
           </div>
         </header>
         {/*
-          * The shell is exactly one viewport tall, so the page itself never scrolls and the
-          * rounded top corners of the surface stay put. Only <main> scrolls (see below).
-          * `bg-shell` (not `bg-panel`): the surface background is only visible through those
-          * corners, and it must match the dark shell for the arcs to read as curves.
-          */}
+         * The shell is exactly one viewport tall, so the page itself never scrolls and the
+         * rounded top corners of the surface stay put. Only <main> scrolls (see below).
+         * `bg-shell` (not `bg-panel`): the surface background is only visible through those
+         * corners, and it must match the dark shell for the arcs to read as curves.
+         */}
         <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
           <aside className="hidden h-full w-[86px] shrink-0 overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
             {[
