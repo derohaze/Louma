@@ -176,12 +176,12 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
     [userId, email, wallet, transactions, loading, error],
   );
   const sidebar = (
-    <aside className="h-full w-[286px] shrink-0 overflow-y-auto bg-[#E9E9EC] px-3 py-4">
+    <aside className="h-full w-[228px] shrink-0 overflow-y-auto bg-[#E9E9EC] px-3 py-4">
       <Button
         variant="ghost"
         onClick={() => setWorkspaceOpen((v) => !v)}
         aria-expanded={workspaceOpen}
-        className="mb-1 h-11 w-full justify-start gap-3 rounded-xl px-4 text-sm font-semibold text-[#58585E] hover:bg-card/70"
+        className="mb-1 h-10 w-full justify-start gap-2.5 rounded-xl px-3 text-sm font-semibold text-[#58585E] hover:bg-card/70"
       >
         <span>WALLET WORKSPACE</span>
         <Icon
@@ -208,7 +208,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
               tabIndex={workspaceOpen ? 0 : -1}
               style={{ transitionDelay: workspaceOpen ? `${index * 75}ms` : "0ms" }}
               className={cn(
-                "mb-1 flex h-11 w-full items-center gap-3 rounded-xl px-4 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
+                "mb-1 flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
                 workspaceOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
                 title === label
                   ? "bg-card text-[#323234] shadow-sm"
@@ -316,7 +316,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
          * corners, and it must match the dark shell for the arcs to read as curves.
          */}
         <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
-          <aside className="hidden h-full w-[86px] shrink-0 overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
+          <aside className="hidden h-full w-[72px] shrink-0 overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
             {[
               [Home01Icon, "Workspace", "/"],
               [Wallet01Icon, "Wallet", "/wallet"],
@@ -329,14 +329,14 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                 key={label as string}
                 to={href as "/"}
                 className={cn(
-                  "flex min-h-[76px] flex-col items-center justify-center gap-1 text-[11px] font-semibold",
+                  "flex min-h-[68px] flex-col items-center justify-center gap-1 text-[11px] font-semibold",
                   index === 0
                     ? "bg-background text-[#323234]"
                     : "text-[#58585E] hover:bg-background/70 hover:text-[#323234]",
                 )}
               >
                 <Icon icon={icon as IconData} size={21} />
-                <span className="max-w-[74px] text-center leading-4">{label as string}</span>
+                <span className="max-w-[64px] text-center leading-4">{label as string}</span>
               </Link>
             ))}
           </aside>
@@ -350,7 +350,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
             )}
           >
             <div className="overflow-hidden">
-              <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[286px] overflow-y-auto bg-[#E9E9EC] shadow-xl">
+              <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-y-auto bg-[#E9E9EC] shadow-xl">
                 {sidebar}
               </div>
             </div>
