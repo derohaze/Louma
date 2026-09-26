@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Workspace-only content: not part of the shipped app.
+# ---------------------------------------------------------------------------
+cryptonel-website-main/
+.agents/
+.freebuff/
+AGENTS.md
+
+# ---------------------------------------------------------------------------
+# Dependencies and build output (frontend/.gitignore covers these too, repeated
+# here so they are ignored wherever the tooling runs from).
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+build/
+.output/
+.vinxi/
+.nitro/
+.tanstack/
+.wrangler/
+.vercel/
+.netlify/
+
+# ---------------------------------------------------------------------------
+# Environment / secrets
+# ---------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.dev.vars
+.dev.vars.*
+
+# ---------------------------------------------------------------------------
+# Logs, caches, OS and editor noise
+# ---------------------------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.cache/
+.temp/
+tmp/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.sw?

@@ -1,0 +1,15 @@
+# Normalise line endings in the repository so Windows and Linux/macOS checkouts
+# produce identical blobs and diffs.
+* text=auto eol=lf
+
+# Keep binaries untouched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
