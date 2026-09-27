@@ -2,7 +2,6 @@ import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Wallet01Icon,
   ArrowRight01Icon,
   ArrowDownLeft01Icon,
   ArrowUpRight01Icon,
@@ -401,7 +400,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder="Search pages, transfers, and settings"
-                      className="h-auto flex-1 border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:ring-0"
+                      className="h-auto flex-1 border-0 bg-transparent p-0 ps-2 text-[15px] shadow-none focus-visible:ring-0"
                     />
                     <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
                       <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
@@ -482,10 +481,6 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                 <DropdownMenuItem onSelect={() => navigate({ to: "/profile" })}>
                   <Icon icon={UserCircleIcon} />
                   Profile
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => navigate({ to: "/wallet" })}>
-                  <Icon icon={Wallet01Icon} />
-                  Wallet
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => navigate({ to: "/security" })}>
                   <Icon icon={SecurityCheckIcon} />
