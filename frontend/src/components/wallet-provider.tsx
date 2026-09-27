@@ -10,6 +10,8 @@ import {
   type ApiUser,
 } from "@/lib/api";
 import { WalletContext, type Transaction, type Wallet } from "@/hooks/wallet-context";
+import { useIsomorphicLayoutEffect } from "@/hooks/use-isomorphic-layout-effect";
+import { clearWalletSnapshot, readWalletSnapshot, writeWalletSnapshot } from "@/lib/wallet-cache";
 
 const PAGE_SIZE = 20;
 
@@ -35,6 +37,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [notificationsRevision, setNotificationsRevision] = useState(0);
   /** Guards the bootstrap effect: React runs it twice in development, not once per visit. */
   const bootstrapped = useRef(false);
+
+  /**
+   * Restores this tab's last snapshot before the browser paints, so a page that was already visited
+   * opens with its data instead of the skeleton. It cannot seed the `useState` calls above: the
+   * server answers with the loading state, and a first client render that already held data would
+   * be a hydration mismatch. A layout effect keeps that first render identical and still swaps the
+   * snapshot in before anything is painted.
+   */
+  useIsomorphicLayoutEffect(() => {
+    const snapshot = readWalletSnapshot();
+    if (!snapshot) return;
+    setUser(snapshot.user);
+    setWallet(snapshot.wallet);
+    setTransactions(snapshot.transactions);
+    setNextCursor(snapshot.nextCursor);
+    setSecurity(snapshot.security);
+    setLoading(false);
+  }, []);
+
+  /**
+   * Mirrors every confirmed snapshot into the tab cache. The effect runs only while a session is
+   * held: ending one (sign-out, rejected token) clears the cache explicitly, so this never has to
+   * guess whether an empty state means "signed out" or "not loaded yet".
+   */
+  useEffect(() => {
+    if (!user) return;
+    writeWalletSnapshot({ user, wallet, transactions, nextCursor, security });
+  }, [user, wallet, transactions, nextCursor, security]);
 
   const refreshSecurity = useCallback(async () => {
     setSecurity(await api.get<ApiSecurityOverview>("/api/v1/security"));
@@ -68,18 +98,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setNextCursor(page.nextCursor);
   }, [nextCursor]);
 
+  /**
+   * Ends the session on the server first. Clearing local state after a failed logout would look like
+   * a success while the refresh cookie stayed valid — and the sign-in page would then refresh that
+   * cookie and send the same person straight back into the wallet — so the failure is handed to the
+   * caller to report instead of being swallowed.
+   */
   const signOut = useCallback(async () => {
-    try {
-      await endSession();
-    } finally {
-      clearAccessToken();
-      setUser(null);
-      setWallet(null);
-      setTransactions([]);
-      setNextCursor(null);
-      setSecurity(null);
-      await navigate({ to: "/login", replace: true });
-    }
+    await endSession();
+    clearAccessToken();
+    clearWalletSnapshot();
+    setUser(null);
+    setWallet(null);
+    setTransactions([]);
+    setNextCursor(null);
+    setSecurity(null);
+    await navigate({ to: "/login", replace: true });
   }, [navigate]);
 
   useEffect(() => {
@@ -92,6 +126,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // A rejected session is not an error state: the visitor is simply not signed in.
         if (cause instanceof ApiError && cause.status === 401) {
           clearAccessToken();
+          clearWalletSnapshot();
           await navigate({ to: "/login", replace: true });
           return;
         }

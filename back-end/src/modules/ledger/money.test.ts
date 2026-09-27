@@ -115,3 +115,27 @@ test("a debit grows the normal side and a credit shrinks it", () => {
   assert.equal(accountDelta("debit", 500), 500);
   assert.equal(accountDelta("credit", 500), -500);
 });
+
+test("the maximum transfer keeps its fee and net inside exact integer bounds", () => {
+  const amounts = calculateTransferAmounts(MAX_TRANSFER_MINOR);
+  assert.equal(amounts.feeMinor, 100_000_000); // 1% of 1,000,000.0000, exact
+  assert.equal(amounts.netAmountMinor, 9_900_000_000);
+  assert.ok(Number.isSafeInteger(amounts.feeMinor));
+  assert.ok(Number.isSafeInteger(amounts.netAmountMinor));
+  assert.equal(amounts.feeMinor + amounts.netAmountMinor, MAX_TRANSFER_MINOR);
+});
+
+test("formatting refuses values that could not have come from the money arithmetic", () => {
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => formatMoney(value), `formatMoney(${value}) must throw`);
+  }
+});
+
+test("the fee never exceeds the amount and the net stays positive across the whole range", () => {
+  for (const amountMinor of [1, 2, 49, 50, 51, 99, 100, 101, 9_999, 10_000, 10_001, 999_999, 1_000_000]) {
+    const amounts = calculateTransferAmounts(amountMinor);
+    assert.ok(amounts.feeMinor >= 0 && amounts.feeMinor <= amountMinor);
+    assert.ok(amounts.netAmountMinor > 0);
+    assert.equal(amounts.amountMinor - amounts.feeMinor, amounts.netAmountMinor);
+  }
+});

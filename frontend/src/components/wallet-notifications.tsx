@@ -34,6 +34,9 @@ export function WalletNotifications() {
    * and an account with more unread than that would show a badge that can never reach zero.
    */
   const [unreadCount, setUnreadCount] = useState(0);
+  /** Cursor of the next older page, so notices beyond the first twenty stay reachable. */
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   /**
@@ -52,10 +55,13 @@ export function WalletNotifications() {
 
   const load = useCallback(async () => {
     try {
-      const response = await api.get<{ notifications: ApiNotification[]; unread: number }>(
-        "/api/v1/notifications?limit=20",
-      );
+      const response = await api.get<{
+        notifications: ApiNotification[];
+        unread: number;
+        nextCursor: string | null;
+      }>("/api/v1/notifications?limit=20");
       setNotifications(response.notifications);
+      setNextCursor(response.nextCursor);
       setUnreadCount(response.unread);
       if (initialCount.current === null) initialCount.current = response.unread;
       setError("");
@@ -65,6 +71,30 @@ export function WalletNotifications() {
       setLoaded(true);
     }
   }, []);
+
+  /**
+   * Appends the next older page. Without it the panel could only ever show the newest twenty while
+   * "mark all as read" acknowledged notices the owner had no way to open.
+   */
+  const loadOlder = useCallback(async () => {
+    if (!nextCursor) return;
+    setLoadingOlder(true);
+    try {
+      const response = await api.get<{
+        notifications: ApiNotification[];
+        unread: number;
+        nextCursor: string | null;
+      }>(`/api/v1/notifications?limit=20&cursor=${encodeURIComponent(nextCursor)}`);
+      setNotifications((previous) => [...previous, ...response.notifications]);
+      setNextCursor(response.nextCursor);
+      setUnreadCount(response.unread);
+      setError("");
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [nextCursor]);
 
   /**
    * The badge follows the server, so the list reloads on mount, whenever this tab did something that
@@ -199,6 +229,18 @@ export function WalletNotifications() {
                 ? "You are all caught up. Transfer and security notices appear here."
                 : "Loading notifications…"}
             </p>
+          )}
+          {nextCursor && !error && (
+            <div className="border-t border-gray-100 py-3 text-center">
+              <button
+                type="button"
+                disabled={loadingOlder}
+                onClick={() => void loadOlder()}
+                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
+              >
+                {loadingOlder ? "Loading older notices…" : "Load older notices"}
+              </button>
+            </div>
           )}
         </div>
       </PopoverContent>

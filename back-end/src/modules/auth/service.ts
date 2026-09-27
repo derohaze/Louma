@@ -8,11 +8,14 @@ import { createAccessToken, verifyAccessToken } from "../security/access-token.j
 import { createOpaqueToken, decryptSecret, hashRecoveryCode, hashToken } from "../security/crypto.js";
 import { verifyTotpToken } from "../security/totp.js";
 import { formatMoney } from "../ledger/money.js";
+import { isPublicIp, lookupIpLocation, type IpLocation } from "../geo/ipinfo.js";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
+  PENDING_2FA_TTL_MS,
   REFRESH_TOKEN_TTL_MS,
   type PublicUser,
   type SessionRecord,
+  type SignupLocation,
   type UserRecord,
   type WalletRecord,
 } from "../../shared/types.js";
@@ -24,6 +27,13 @@ const PASSWORD_MAX_LENGTH = 128;
 const PASSWORD_MIN_LENGTH = 8;
 const ARGON2_OPTIONS = { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 let dummyPasswordHash: Promise<string> | null = null;
+/**
+ * A refresh token that is exactly one rotation old is either a second tab racing the first (both
+ * send the cookie they read before either rotation landed) or a token that leaked. Inside this
+ * window the rotation is served normally; outside it the token counts as stolen and the whole
+ * account is signed out — which is what reuse detection exists for.
+ */
+const REFRESH_REUSE_GRACE_MS = 30_000;
 
 function getDummyPasswordHash(): Promise<string> {
   dummyPasswordHash ??= argon2.hash(randomBytes(32).toString("hex"), ARGON2_OPTIONS);
@@ -79,7 +89,9 @@ async function issueSession(input: {
     userAgent: safeUserAgent(input.userAgent),
     createdAt: now,
     lastActiveAt: now,
-    expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS),
+    // A pending two-factor session lives for the challenge window, not for the 30 days a real
+    // session gets: it holds no usable credentials, and a stale one would only be a way back in.
+    expiresAt: new Date(now.getTime() + (input.status === "pending_two_factor" ? PENDING_2FA_TTL_MS : REFRESH_TOKEN_TTL_MS)),
     revokedAt: null,
   } satisfies Omit<SessionRecord, "_id">;
   await input.collections.sessions.insertOne(session as SessionRecord);
@@ -99,6 +111,8 @@ export async function register(input: {
   displayName: unknown;
   requestId: string;
   userAgent: string | undefined;
+  /** The address the request came from, as Fastify resolved it (see `trustProxy` in config/env.ts). */
+  ipAddress: string;
 }): Promise<Awaited<ReturnType<typeof issueSession>> & { wallet: { id: string; address: string } }> {
   const email = normalizeEmail(input.email);
   validatePassword(input.password);
@@ -111,6 +125,9 @@ export async function register(input: {
     email,
     passwordHash: await argon2.hash(input.password, ARGON2_OPTIONS),
     profile: { displayName, country: null },
+    // Stored as it arrives, before any third party is asked anything: the address is the part of
+    // "where did this account come from" that must never depend on a lookup being up.
+    signupLocation: { ipAddress: input.ipAddress, city: null, region: null, country: null, org: null, timezone: null, capturedAt: now, resolvedAt: null } satisfies SignupLocation,
     status: "active",
     emailVerifiedAt: null,
     createdAt: now,
@@ -124,6 +141,7 @@ export async function register(input: {
     addressNormalized: walletAddress,
     ownerUserId: user.publicId,
     status: "active",
+    financialVersion: 0,
     createdAt: now,
     updatedAt: now,
     customAddressChangedAt: null,
@@ -163,6 +181,40 @@ export async function register(input: {
   return { ...tokens, wallet: { id: walletPublicId, address: walletAddress } };
 }
 
+/**
+ * Geo-enriches the account a registration just created. It runs after the response, never on the
+ * registration path: the IP is already stored with the account, so a missing token, a slow lookup,
+ * or an ipinfo outage costs the extra fields and nothing else. Returns what it stored, so the caller
+ * can record it; throws only when the lookup itself failed.
+ */
+export async function captureSignupLocation(input: {
+  collections: Collections;
+  config: AppConfig;
+  ownerUserId: string;
+  ipAddress: string;
+}): Promise<IpLocation | null> {
+  if (!input.config.ipinfoToken || !isPublicIp(input.ipAddress)) return null;
+  const location = await lookupIpLocation({
+    ipAddress: input.ipAddress,
+    token: input.config.ipinfoToken,
+    timeoutMs: input.config.ipinfoTimeoutMs,
+  });
+  await input.collections.users.updateOne(
+    { publicId: input.ownerUserId },
+    {
+      $set: {
+        "signupLocation.city": location.city,
+        "signupLocation.region": location.region,
+        "signupLocation.country": location.country,
+        "signupLocation.org": location.org,
+        "signupLocation.timezone": location.timezone,
+        "signupLocation.resolvedAt": new Date(),
+      },
+    },
+  );
+  return location;
+}
+
 export async function login(input: {
   collections: Collections;
   config: AppConfig;
@@ -191,6 +243,30 @@ export async function login(input: {
   return issueSession({ ...input, user, ...(twoFactor ? { status: "pending_two_factor" as const } : {}) });
 }
 
+/**
+ * Issues the next refresh token for one active session. The update only lands while the session
+ * still looks the way the caller saw it (`guard`), so two concurrent rotations cannot both win: the
+ * loser is answered 401 and simply refreshes again. The displaced token is kept as the previous
+ * hash, which is what lets reuse detection recognise it later.
+ */
+async function rotateSession(input: {
+  collections: Collections;
+  config: AppConfig;
+  session: SessionRecord;
+  guard: Record<string, unknown>;
+  now: Date;
+}): Promise<{ user: PublicUser; accessToken: string; refreshToken: string; accessTokenTtlSeconds: number; sessionId: string }> {
+  const user = await input.collections.users.findOne({ publicId: input.session.ownerUserId, status: "active" });
+  if (!user) throw unauthorized();
+  const nextRefreshToken = createOpaqueToken();
+  const result = await input.collections.sessions.updateOne(
+    { _id: input.session._id, status: "active", ...input.guard },
+    { $set: { previousRefreshTokenHash: input.session.refreshTokenHash, refreshTokenHash: hashToken(nextRefreshToken), lastActiveAt: input.now, expiresAt: new Date(input.now.getTime() + REFRESH_TOKEN_TTL_MS) } },
+  );
+  if (result.modifiedCount !== 1) throw unauthorized();
+  return { user: toPublicUser(user), accessToken: await createAccessToken({ userId: user.publicId, sessionId: input.session.publicId }, input.config.accessTokenSecret), refreshToken: nextRefreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId: input.session.publicId };
+}
+
 export async function refreshSession(input: {
   collections: Collections;
   config: AppConfig;
@@ -198,22 +274,21 @@ export async function refreshSession(input: {
   requestId: string;
 }): Promise<{ user: PublicUser; accessToken: string; refreshToken: string; accessTokenTtlSeconds: number; sessionId: string }> {
   const tokenHash = hashToken(input.refreshToken);
-  const session = await input.collections.sessions.findOne({ refreshTokenHash: tokenHash, status: "active", expiresAt: { $gt: new Date() } });
-  if (!session) {
-    const reused = await input.collections.sessions.findOne({ previousRefreshTokenHash: tokenHash, status: "active" });
-    if (reused) {
-      await input.collections.sessions.updateMany({ ownerUserId: reused.ownerUserId, status: "active" }, { $set: { status: "revoked", revokedAt: new Date(), refreshTokenHash: null } });
-      await recordSecurityEvent({ collections: input.collections, ownerUserId: reused.ownerUserId, sessionId: reused.publicId, eventType: "refresh_token_reuse_detected", outcome: "failure", correlationId: input.requestId });
-    }
-    throw unauthorized();
-  }
-  const user = await input.collections.users.findOne({ publicId: session.ownerUserId, status: "active" });
-  if (!user) throw unauthorized();
-  const nextRefreshToken = createOpaqueToken();
   const now = new Date();
-  const result = await input.collections.sessions.updateOne({ _id: session._id, status: "active", refreshTokenHash: tokenHash }, { $set: { previousRefreshTokenHash: tokenHash, refreshTokenHash: hashToken(nextRefreshToken), lastActiveAt: now, expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS) } });
-  if (result.modifiedCount !== 1) throw unauthorized();
-  return { user: toPublicUser(user), accessToken: await createAccessToken({ userId: user.publicId, sessionId: session.publicId }, input.config.accessTokenSecret), refreshToken: nextRefreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId: session.publicId };
+  const session = await input.collections.sessions.findOne({ refreshTokenHash: tokenHash, status: "active", expiresAt: { $gt: now } });
+  if (!session) {
+    const raced = await input.collections.sessions.findOne({ previousRefreshTokenHash: tokenHash, status: "active" });
+    if (!raced) throw unauthorized();
+    if (now.getTime() - raced.lastActiveAt.getTime() > REFRESH_REUSE_GRACE_MS) {
+      await input.collections.sessions.updateMany({ ownerUserId: raced.ownerUserId, status: "active" }, { $set: { status: "revoked", revokedAt: now, refreshTokenHash: null } });
+      await recordSecurityEvent({ collections: input.collections, ownerUserId: raced.ownerUserId, sessionId: raced.publicId, eventType: "refresh_token_reuse_detected", outcome: "failure", correlationId: input.requestId });
+      throw unauthorized();
+    }
+    // Inside the grace window this is a second tab, not a replay: the session is rotated again so
+    // both callers end up with a usable token, and nothing is revoked.
+    return rotateSession({ collections: input.collections, config: input.config, session: raced, guard: { previousRefreshTokenHash: tokenHash }, now });
+  }
+  return rotateSession({ collections: input.collections, config: input.config, session, guard: { refreshTokenHash: tokenHash }, now });
 }
 
 export async function completeTwoFactor(input: {
@@ -226,7 +301,9 @@ export async function completeTwoFactor(input: {
   requestId: string;
 }): Promise<{ user: PublicUser; accessToken: string; refreshToken: string; accessTokenTtlSeconds: number; sessionId: string }> {
   const tokenHash = hashToken(input.refreshToken);
-  const session = await input.collections.sessions.findOne({ publicId: input.sessionId, status: "pending_two_factor", refreshTokenHash: tokenHash });
+  // The pending session expires with the challenge it was created for; without this check a code
+  // generated much later could still promote a challenge that was never completed in time.
+  const session = await input.collections.sessions.findOne({ publicId: input.sessionId, status: "pending_two_factor", refreshTokenHash: tokenHash, expiresAt: { $gt: new Date() } });
   if (!session || session.twoFactorAttempts >= 5) throw unauthorized();
   const user = await input.collections.users.findOne({ publicId: session.ownerUserId, status: "active" });
   const credential = await input.collections.twoFactorCredentials.findOne({ ownerUserId: session.ownerUserId, enabledAt: { $ne: null } });
@@ -313,5 +390,9 @@ export async function authenticateUser(input: { collections: Collections; config
   const claims = await verifyAccessToken(token, input.config.accessTokenSecret);
   const session = await input.collections.sessions.findOne({ publicId: claims.sessionId, ownerUserId: claims.userId, status: "active", expiresAt: { $gt: new Date() } }, { projection: { publicId: 1 } });
   if (!session) throw unauthorized();
+  // Sign-in and refresh both refuse a suspended account, so an access token issued before the
+  // suspension must stop working too: otherwise the account keeps acting until its token expires.
+  const user = await input.collections.users.findOne({ publicId: claims.userId, status: "active" }, { projection: { publicId: 1 } });
+  if (!user) throw unauthorized();
   return { userId: claims.userId, sessionId: claims.sessionId };
 }

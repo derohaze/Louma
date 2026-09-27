@@ -21,13 +21,19 @@ function publicWallet(wallet: WalletRecord, balanceMinor: number): PublicWallet 
 export async function getWallet(input: { collections: Collections; ownerUserId: string }): Promise<PublicWallet> {
   const wallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
   if (!wallet) throw notFound();
+  // A wallet without its ledger account is a data-integrity fault, not a zero balance: answering
+  // 0.0000 here would publish a fictitious balance and hide the drift from every detector.
   const account = await input.collections.ledgerAccounts.findOne({ walletId: wallet.publicId, accountType: "wallet", currency: "LMA" }, { projection: { balanceMinor: 1 } });
-  return publicWallet(wallet, account?.balanceMinor ?? 0);
+  if (!account) throw new Error(`Wallet ${wallet.publicId} has no LMA ledger account`);
+  return publicWallet(wallet, account.balanceMinor);
 }
 
 export async function setWalletFrozen(input: { collections: Collections; ownerUserId: string; frozen: boolean; requestId: string }): Promise<PublicWallet> {
   const status = input.frozen ? "frozen" : "active";
   const now = new Date();
+  // Bumping `financialVersion` here is the other half of the transfer/freeze conflict boundary: a
+  // transfer in flight holds its own increment inside its transaction, so whichever lands second
+  // serialises after the first and the wallet state the transfer saw is the one that decides.
   const result = await input.collections.wallets.updateOne(
     { ownerUserId: input.ownerUserId, status: { $ne: status } },
     { $set: { status, updatedAt: now }, $inc: { financialVersion: 1 } },

@@ -58,7 +58,19 @@ const authenticated = { preHandler: requireAuth } satisfies RouteShorthandOption
 export async function registerCustomerRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/v1/auth/register", { config: { rateLimit: { max: 5, timeWindow: 60_000 } }, schema: authBody(registerSchema) }, async (request, reply) => {
     const body = parseBody(registerSchema, request.body);
-    const session = await auth.register({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ...body, requestId: request.id, userAgent: request.headers["user-agent"] });
+    // `request.ip` is the socket address, or the forwarded one when TRUST_PROXY is on. It is stored
+    // with the account immediately and enriched afterwards, because a lookup service is not part of
+    // registering: it may only add fields, and never delay or fail the request.
+    const ipAddress = request.ip.slice(0, 45);
+    const session = await auth.register({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ...body, requestId: request.id, userAgent: request.headers["user-agent"], ipAddress });
+    void auth
+      .captureSignupLocation({ collections: app.collections, config: app.config, ownerUserId: session.user.id, ipAddress })
+      .then((location) => {
+        if (location) request.log.info({ userId: session.user.id, ip: location.ipAddress, country: location.country, city: location.city }, "signup_location_captured");
+      })
+      .catch((error: unknown) => {
+        request.log.warn({ err: error, userId: session.user.id }, "signup_location_lookup_failed");
+      });
     setAuthResponseCookie(app, reply, session.refreshToken);
     return reply.code(201).send({ user: session.user, wallet: session.wallet, accessToken: session.accessToken, accessTokenTtlSeconds: session.accessTokenTtlSeconds, sessionId: session.sessionId });
   });
@@ -134,20 +146,21 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
 
   app.get("/api/v1/security", authenticated, async (request) => security.getSecurityOverview({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }));
 
-  app.post("/api/v1/security/2fa/enable", { ...authenticated, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (request) => {
-    const body = parseBody(z.object({ password: loginPasswordSchema }).strict(), request.body);
-    return security.beginTwoFactorSetup({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body });
-  });
+  // Enrolment is started from the authenticated session alone; the setup only counts once the new
+  // authenticator confirms it with a code (see /2fa/confirm), so no password is collected here.
+  app.post("/api/v1/security/2fa/enable", { ...authenticated, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (request) => security.beginTwoFactorSetup({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }));
   app.post("/api/v1/security/2fa/confirm", authenticated, async (request) => {
     const body = parseBody(z.object({ code: totpCodeSchema }).strict(), request.body);
     return security.confirmTwoFactorSetup({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
+  // Both take one authenticator or recovery code and no password: the code is the proof that the
+  // person asking to weaken the account still holds the second factor.
   app.post("/api/v1/security/2fa/disable", authenticated, async (request) => {
-    const body = parseBody(z.object({ password: loginPasswordSchema, code: z.string().min(6).max(64) }).strict(), request.body);
+    const body = parseBody(z.object({ code: z.string().min(6).max(64) }).strict(), request.body);
     return security.disableTwoFactor({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
   app.post("/api/v1/security/2fa/recovery-codes", authenticated, async (request) => {
-    const body = parseBody(z.object({ password: loginPasswordSchema, code: z.string().min(6).max(64) }).strict(), request.body);
+    const body = parseBody(z.object({ code: z.string().min(6).max(64) }).strict(), request.body);
     return security.regenerateRecoveryCodes({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
   app.post("/api/v1/security/freeze", authenticated, async (request) => wallets.setWalletFrozen({ collections: app.collections, ownerUserId: getAuth(request).userId, frozen: true, requestId: request.id }));
@@ -193,7 +206,10 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     if (!user || !(await (await import("argon2")).verify(user.passwordHash, body.currentPassword).catch(() => false))) throw forbidden("invalid_credentials", "The current password is incorrect.");
     const updated = await app.collections.users.updateOne({ _id: user._id, passwordHash: user.passwordHash }, { $set: { passwordHash: await (await import("argon2")).hash(body.newPassword, { type: (await import("argon2")).argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 }), updatedAt: new Date() } });
     if (updated.modifiedCount !== 1) throw badRequest("password_change_conflict", "The password changed. Sign in again and retry.");
-    await app.collections.sessions.updateMany({ ownerUserId: current.userId, status: "active", publicId: { $ne: current.sessionId } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
+    // Every other session goes, a half-finished two-factor challenge included: that challenge was
+    // started with the old password, and completing it afterwards would hand back a session the
+    // password change was meant to end.
+    await app.collections.sessions.updateMany({ ownerUserId: current.userId, status: { $in: ["active", "pending_two_factor"] }, publicId: { $ne: current.sessionId } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
     await recordSecurityEvent({ collections: app.collections, ownerUserId: current.userId, sessionId: current.sessionId, eventType: "password_changed", outcome: "success", correlationId: request.id });
     return { changed: true };
   });

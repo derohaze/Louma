@@ -45,10 +45,19 @@ export function TransferContent() {
   const [error, setError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   /**
-   * One idempotency key per transfer attempt. A retry of a request the API may already have applied
-   * carries the same key, so the backend replays the original result instead of moving funds twice.
+   * One idempotency key per transfer attempt, kept together with the parameters it was minted for.
+   * A retry of the same parameters — including a retry after a response that never arrived, the one
+   * case where the wallet may already have been debited — reuses the key, so the backend replays the
+   * original transfer instead of moving funds twice. Only a confirmed transfer ends the attempt.
    */
-  const idempotencyKey = useRef<string | null>(null);
+  const attempt = useRef<{ key: string; fingerprint: string } | null>(null);
+  /** Mirrors the backend's fingerprint: the same three fields make two attempts the same one. */
+  const attemptFingerprint = (recipient: string, amountValue: string, noteValue: string) =>
+    JSON.stringify([
+      recipient.trim().toLowerCase(),
+      amountValue,
+      sanitizeText(noteValue, LIMITS.maxNoteLength),
+    ]);
   const frozen = security?.wallet.status === "frozen";
   const needsPassword = security?.transferPassword.enabled ?? false;
   const balanceMinor = wallet ? moneyToMinorUnits(wallet.balance) : 0;
@@ -67,8 +76,12 @@ export function TransferContent() {
     setError("");
     setMessage("");
     try {
-      const key = idempotencyKey.current ?? crypto.randomUUID();
-      idempotencyKey.current = key;
+      const fingerprint = attemptFingerprint(address, decimalAmount, note);
+      const pending =
+        attempt.current?.fingerprint === fingerprint
+          ? attempt.current
+          : { key: crypto.randomUUID(), fingerprint };
+      attempt.current = pending;
       await api.post<{ transaction: Transaction }>(
         "/api/v1/transfers",
         {
@@ -77,9 +90,10 @@ export function TransferContent() {
           note: sanitizeText(note, LIMITS.maxNoteLength),
           ...(transferPassword ? { transferPassword } : {}),
         },
-        { idempotencyKey: key },
+        { idempotencyKey: pending.key },
       );
-      idempotencyKey.current = null;
+      // Only a transfer the API confirmed clears the attempt; a failure keeps its key for the retry.
+      attempt.current = null;
       setConfirmOpen(false);
       setMessage("Transfer completed.");
       setAddress("");
@@ -125,8 +139,6 @@ export function TransferContent() {
       setError(amountCheck.error);
       return;
     }
-    // A fresh attempt gets a fresh key; confirming the dialog reuses it.
-    idempotencyKey.current = crypto.randomUUID();
     setConfirmOpen(true);
   };
 
@@ -277,13 +289,7 @@ export function TransferContent() {
           </div>
         </section>
       )}
-      <AlertDialog
-        open={confirmOpen}
-        onOpenChange={(open) => {
-          setConfirmOpen(open);
-          if (!open) idempotencyKey.current = null;
-        }}
-      >
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Send {currency(decimalAmount || "0")}?</AlertDialogTitle>
@@ -293,10 +299,27 @@ export function TransferContent() {
               {note.trim() ? ` Note: ${note.trim()}.` : ""} Transfers cannot be reversed.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {/* The failure is shown where the person is looking: the dialog stays open until the API
+              answers, so an error inside it is the only one they would see. */}
+          {error && (
+            <div className="px-1">
+              <FormMessage tone="error">{error}</FormMessage>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={busy} onClick={() => void completeTransfer()}>
-              Confirm transfer
+            {/*
+             * The click keeps the dialog open: the request is still in flight, and an error has to
+             * be shown where the person is looking instead of behind a dialog that closed itself.
+             */}
+            <AlertDialogAction
+              disabled={busy}
+              onClick={(event) => {
+                event.preventDefault();
+                void completeTransfer();
+              }}
+            >
+              {busy ? "Sending…" : "Confirm transfer"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -444,9 +467,14 @@ export function HistoryContent() {
                     {transaction.note ? ` · ${transaction.note}` : ""}
                   </p>
                 </Link>
+                {/*
+                 * A received transfer credits the net amount: the amount the sender paid includes
+                 * the network tax, so showing it here would claim the wallet grew by more than it
+                 * did.
+                 */}
                 <strong className="text-sm">
                   {isSent ? "-" : "+"}
-                  {currency(transaction.amount)}
+                  {currency(isSent ? transaction.amount : transaction.netAmount)}
                 </strong>
               </div>
             );
@@ -479,40 +507,35 @@ export function HistoryContent() {
           />
         )}
       </section>
-      <div className="mt-4 flex items-center justify-between gap-3">
-        {nextCursor ? (
-          <Button
-            variant="outline"
-            disabled={loadingMore}
-            onClick={() => {
-              setLoadingMore(true);
-              void loadMore().finally(() => setLoadingMore(false));
-            }}
-          >
-            {loadingMore ? "Loading…" : "Load older transactions"}
-          </Button>
-        ) : (
-          <span className="text-xs text-muted-foreground">
-            Every recorded transaction is loaded.
-          </span>
-        )}
-        {pages > 1 && (
-          <div className="flex items-center gap-3">
-            <Button variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-              Previous
+      {(nextCursor || pages > 1) && (
+        <div className="mt-4 flex items-center justify-between gap-3">
+          {nextCursor && (
+            <Button
+              variant="outline"
+              disabled={loadingMore}
+              onClick={() => {
+                setLoadingMore(true);
+                void loadMore().finally(() => setLoadingMore(false));
+              }}
+            >
+              {loadingMore ? "Loading…" : "Load older transactions"}
             </Button>
-            <span className="text-sm">
-              {page} / {pages}
-            </span>
-            <Button variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
-              Next
-            </Button>
-          </div>
-        )}
-      </div>
-      <div className="mt-4">
-        <FactList items={[["Tap a row", "Opens the full transfer detail"]]} />
-      </div>
+          )}
+          {pages > 1 && (
+            <div className="flex items-center gap-3">
+              <Button variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                Previous
+              </Button>
+              <span className="text-sm">
+                {page} / {pages}
+              </span>
+              <Button variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
+                Next
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }

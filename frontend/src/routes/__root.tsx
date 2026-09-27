@@ -8,6 +8,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { Toaster } from "@/components/ui/sonner";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -159,6 +160,11 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      {/*
+       * One notification surface for the whole app, so a failed action (a logout that never reached
+       * the API) can be reported where the customer is looking instead of being swallowed.
+       */}
+      <Toaster />
     </QueryClientProvider>
   );
 }

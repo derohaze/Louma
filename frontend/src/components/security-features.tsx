@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   LIMITS,
   isOneTimeCode,
@@ -51,9 +52,10 @@ export function TwoFactorContent() {
   const { security, refreshSecurity } = useWallet();
   const enabled = security?.twoFactor.enabled ?? false;
   const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
-  const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
+  /** True while the switch is off but the server still has two-factor on, waiting for one code. */
+  const [confirmingOff, setConfirmingOff] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -71,16 +73,44 @@ export function TwoFactorContent() {
     }
   };
 
+  /**
+   * Enrolment is started by the switch itself: the session is already authenticated and the new
+   * authenticator has to prove itself with a code before it is stored as enabled, so no password is
+   * asked for here.
+   */
   const startSetup = () =>
     run(async () => {
       const response = await api.post<{ secret: string; otpauthUri: string }>(
         "/api/v1/security/2fa/enable",
-        { password },
       );
       setSetup({ secret: response.secret, otpauthUri: response.otpauthUri });
-      setPassword("");
       return "Scan the key in your authenticator app, then enter the six-digit code it shows.";
     });
+
+  const cancelSetup = () => {
+    setSetup(null);
+    setCode("");
+    setError("");
+    setMessage("");
+  };
+
+  /**
+   * The switch on the panel header is the whole entry point. On: start setup. Off during setup:
+   * abandon it. Off while enabled: ask for one code, because turning a second factor off is the
+   * dangerous direction and a code is the only proof still required.
+   */
+  const toggle = (next: boolean) => {
+    if (busy) return;
+    setMessage("");
+    setError("");
+    if (next) {
+      if (!enabled && !setup) void startSetup();
+    } else if (setup) {
+      cancelSetup();
+    } else if (enabled) {
+      setConfirmingOff(true);
+    }
+  };
 
   const confirmSetup = () =>
     run(async () => {
@@ -96,10 +126,10 @@ export function TwoFactorContent() {
 
   const disable = () =>
     run(async () => {
-      await api.post("/api/v1/security/2fa/disable", { password, code });
-      setPassword("");
+      await api.post("/api/v1/security/2fa/disable", { code });
       setCode("");
       setCodes([]);
+      setConfirmingOff(false);
       await refreshSecurity();
       return "Two-factor authentication is off.";
     });
@@ -108,10 +138,9 @@ export function TwoFactorContent() {
     run(async () => {
       const response = await api.post<{ recoveryCodes: string[] }>(
         "/api/v1/security/2fa/recovery-codes",
-        { password, code },
+        { code },
       );
       setCodes(response.recoveryCodes);
-      setPassword("");
       setCode("");
       await refreshSecurity();
       return "New recovery codes generated. The old set no longer works.";
@@ -124,9 +153,50 @@ export function TwoFactorContent() {
         <Panel
           title={enabled ? "Two-factor authentication is on" : "Two-factor authentication is off"}
           description={feature.description}
-          action={<StatusPill enabled={enabled} />}
+          action={
+            <Switch
+              checked={confirmingOff ? false : enabled || setup !== null}
+              onCheckedChange={toggle}
+              disabled={busy}
+              aria-label="Two-factor authentication"
+            />
+          }
         >
-          {enabled ? (
+          {enabled && confirmingOff ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Enter a current authenticator or recovery code to turn two-factor off.
+              </p>
+              <label className="block max-w-xs text-sm font-semibold">
+                Authenticator or recovery code
+                <Input
+                  className="mt-2"
+                  autoComplete="one-time-code"
+                  maxLength={64}
+                  value={code}
+                  onChange={(event) => setCode(event.target.value.slice(0, 64))}
+                />
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="destructive"
+                  disabled={busy || code.length < 6}
+                  onClick={() => void disable()}
+                >
+                  {busy ? "Turning off…" : "Turn off two-factor"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setConfirmingOff(false);
+                    setCode("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : enabled ? (
             <p className="text-sm text-muted-foreground">
               {security?.twoFactor.recoveryCodesRemaining ?? 0} recovery codes remaining
               {security?.twoFactor.enabledAt
@@ -170,33 +240,21 @@ export function TwoFactorContent() {
                   placeholder="123456"
                 />
               </label>
-              <Button disabled={busy || !isOneTimeCode(code)} onClick={() => void confirmSetup()}>
-                <Icon icon={LockIcon} size={16} />
-                {busy ? "Checking…" : "Turn on two-factor"}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={busy || !isOneTimeCode(code)} onClick={() => void confirmSetup()}>
+                  <Icon icon={LockIcon} size={16} />
+                  {busy ? "Checking…" : "Turn on two-factor"}
+                </Button>
+                <Button variant="outline" onClick={cancelSetup}>
+                  Cancel
+                </Button>
+              </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              <p className="flex items-start gap-2 rounded-xl border border-warning bg-warning/10 p-4 text-sm">
-                <Icon icon={AlertCircleIcon} size={18} className="mt-0.5 shrink-0" />
-                Without a second factor, anyone with your password can sign in.
-              </p>
-              <label className="block max-w-xs text-sm font-semibold">
-                Account password
-                <Input
-                  className="mt-2"
-                  type="password"
-                  autoComplete="current-password"
-                  maxLength={LIMITS.maxPasswordLength}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="••••••••"
-                />
-              </label>
-              <Button disabled={busy || !password} onClick={() => void startSetup()}>
-                {busy ? "Starting…" : "Start setup"}
-              </Button>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Turn the switch on to set up an authenticator app: you get a secret key and a QR code
+              to scan, then confirm the first code it shows. No password needed.
+            </p>
           )}
         </Panel>
         {codes.length > 0 && (
@@ -226,20 +284,9 @@ export function TwoFactorContent() {
           <>
             <Panel
               title="Regenerate recovery codes"
-              description="Your password and a current authenticator or recovery code are required."
+              description="A current authenticator or recovery code is required."
             >
-              <div className="grid max-w-xl gap-4 sm:grid-cols-2">
-                <label className="block text-sm font-semibold">
-                  Account password
-                  <Input
-                    className="mt-2"
-                    type="password"
-                    autoComplete="current-password"
-                    maxLength={LIMITS.maxPasswordLength}
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                  />
-                </label>
+              <div className="max-w-xs">
                 <label className="block text-sm font-semibold">
                   Authenticator or recovery code
                   <Input
@@ -253,48 +300,11 @@ export function TwoFactorContent() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
                   variant="outline"
-                  disabled={busy || !password || code.length < 6}
+                  disabled={busy || code.length < 6}
                   onClick={() => void regenerate()}
                 >
                   <Icon icon={RefreshIcon} size={16} />
                   Generate new codes
-                </Button>
-              </div>
-            </Panel>
-            <Panel
-              title="Turn off two-factor authentication"
-              description="Confirm with your password and a current code."
-              tone="danger"
-            >
-              <div className="grid max-w-xl gap-4 sm:grid-cols-2">
-                <label className="block text-sm font-semibold">
-                  Account password
-                  <Input
-                    className="mt-2"
-                    type="password"
-                    autoComplete="current-password"
-                    maxLength={LIMITS.maxPasswordLength}
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                  />
-                </label>
-                <label className="block text-sm font-semibold">
-                  Authenticator or recovery code
-                  <Input
-                    className="mt-2"
-                    maxLength={64}
-                    value={code}
-                    onChange={(event) => setCode(event.target.value.slice(0, 64))}
-                  />
-                </label>
-              </div>
-              <div className="mt-4">
-                <Button
-                  variant="destructive"
-                  disabled={busy || !password || code.length < 6}
-                  onClick={() => void disable()}
-                >
-                  Turn off two-factor
                 </Button>
               </div>
             </Panel>
@@ -441,6 +451,11 @@ export function FreezeWalletContent() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  /**
+   * The unfreeze dialog is controlled so it can stay open across the request: an error has to be read
+   * in the dialog the customer is looking at, and the dialog must only close on success.
+   */
+  const [unfreezeOpen, setUnfreezeOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const frozen = security?.wallet.status === "frozen";
@@ -465,6 +480,7 @@ export function FreezeWalletContent() {
           ? "Wallet frozen. Nothing leaves it until you unfreeze."
           : "Wallet unfrozen. Transfers work again.",
       );
+      if (!value) setUnfreezeOpen(false);
       await Promise.all([refresh(), refreshSecurity()]);
     } catch (cause) {
       setError(messageForError(cause));
@@ -485,7 +501,7 @@ export function FreezeWalletContent() {
           }
           action={
             frozen ? (
-              <AlertDialog>
+              <AlertDialog open={unfreezeOpen} onOpenChange={setUnfreezeOpen}>
                 <AlertDialogTrigger asChild>
                   <Button disabled={busy}>
                     <Icon icon={CheckmarkCircle02Icon} size={17} />
@@ -530,9 +546,14 @@ export function FreezeWalletContent() {
                     <AlertDialogCancel>Keep it frozen</AlertDialogCancel>
                     <AlertDialogAction
                       disabled={busy || !password || (requiresCode && code.length < 6)}
-                      onClick={() => void apply(false)}
+                      onClick={(event) => {
+                        // Keep the dialog open while the request runs: closing it on click would hide
+                        // the reason an unfreeze failed, leaving the customer with no explanation.
+                        event.preventDefault();
+                        void apply(false);
+                      }}
                     >
-                      Unfreeze wallet
+                      {busy ? "Unfreezing…" : "Unfreeze wallet"}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>

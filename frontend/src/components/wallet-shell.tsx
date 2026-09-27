@@ -15,6 +15,7 @@ import {
   Copy01Icon,
   Logout01Icon,
 } from "@hugeicons/core-free-icons";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -27,8 +28,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useWallet } from "@/hooks/wallet-context";
+import { messageForError } from "@/lib/api";
 import { WalletProvider } from "@/components/wallet-provider";
 import { WalletNotifications } from "@/components/wallet-notifications";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   findActiveSection,
@@ -90,6 +93,35 @@ export function EmptyState({
     </div>
   );
 }
+/**
+ * Placeholder for a page that has nothing to show yet. It follows the rhythm every wallet page
+ * opens with — heading, action, then the card grid — so the layout does not jump when the real
+ * content arrives. It lives in the shell because the shell is what gates the content, which makes
+ * it the skeleton for every page at once.
+ */
+function PageSkeleton({ title }: { title: string }) {
+  return (
+    <div aria-busy="true">
+      <p role="status" className="sr-only">
+        Loading {title}…
+      </p>
+      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <Skeleton className="h-7 w-44" />
+          <Skeleton className="mt-3 h-4 w-64" />
+        </div>
+        <Skeleton className="h-10 w-36 rounded-full" />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 6 }, (_, index) => (
+          <Skeleton key={index} className="h-28 rounded-2xl" />
+        ))}
+      </div>
+      <Skeleton className="mt-4 h-72 rounded-[22px]" />
+    </div>
+  );
+}
+
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -181,7 +213,9 @@ function RailLink({ section, current }: { section: NavSection; current: boolean 
 /**
  * Every wallet page renders inside this shell. The provider loads the account, the wallet, the
  * first page of transactions, and the security overview from the API; the shell then gates the
- * content on that state, so no page ever renders a number the server has not confirmed.
+ * content on that state, so no page ever renders a number the server has not confirmed. A page the
+ * tab has already visited reopens from its cached snapshot, so the skeleton below is what a first
+ * visit (or a hard reload) shows, not what every click does.
  */
 export function WalletPage({ children, title }: { children: ReactNode; title: string }) {
   return (
@@ -303,24 +337,8 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
       </nav>
     </aside>
   );
-  /**
-   * Until the account is loaded (or while the gate redirects to the sign-in page), show only the
-   * brand mark: dashboard content must never flash before the API has answered.
-   */
-  if (loading) {
-    return (
-      <div className="grid min-h-dvh place-items-center bg-shell">
-        <img
-          src="/Louma_Brand_logos/png/louma-logo-128x128.png"
-          alt="Louma logo"
-          width={64}
-          height={64}
-          draggable={false}
-          className="size-16 shrink-0 border-0 bg-transparent object-contain shadow-none"
-        />
-      </div>
-    );
-  }
+  // The chrome — header, rail, navigation — renders from data the app already has, so it is painted
+  // at once and only the page body waits (see PageSkeleton).
   return (
     <div className="min-h-dvh bg-shell text-foreground">
       <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground">
@@ -474,7 +492,17 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => void signOut()}>
+              {/* A logout that never reached the API leaves the session alive: say so instead of
+                  pretending the customer is signed out. */}
+              <DropdownMenuItem
+                onSelect={() =>
+                  void signOut().catch((cause: unknown) =>
+                    toast.error("Could not sign you out", {
+                      description: `${messageForError(cause)} The session is still active.`,
+                    }),
+                  )
+                }
+              >
                 <Icon icon={Logout01Icon} />
                 Log out
               </DropdownMenuItem>
@@ -558,7 +586,9 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 The wallet is frozen, so every transfer is refused until you unfreeze it.
               </p>
             )}
-            {error ? (
+            {loading ? (
+              <PageSkeleton title={title} />
+            ) : error ? (
               <EmptyState
                 title="Wallet unavailable"
                 detail={error}
