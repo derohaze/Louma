@@ -198,8 +198,10 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
    * Demo auth gate: every wallet page waits for this check, so an unauthenticated visitor
    * never sees dashboard content. The check runs in an effect (never during render) to keep
    * server and client rendering identical, since the session lives in localStorage.
+   * Initialized synchronously from the remembered session, so moving between pages never
+   * flashes the splash: an authenticated visitor paints the dashboard on the first frame.
    */
-  const [authChecked, setAuthChecked] = useState(false);
+  const [authChecked, setAuthChecked] = useState(() => isAuthed());
   /** The account menu shows the profile name, so it reads the store on every render. */
   const profile = readProfile();
   const navigate = useNavigate();
