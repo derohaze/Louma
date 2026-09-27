@@ -1,28 +1,24 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
-  CpuIcon,
   Home04Icon,
   QrCodeIcon,
   Settings01Icon,
   TransactionHistoryIcon,
-  TrophyIcon,
   UserCircleIcon,
   Wallet01Icon,
 } from "@hugeicons/core-free-icons";
-import { settingsPages, type SettingsHref } from "@/lib/demo-settings";
+import { settingsPages, type SettingsHref } from "@/lib/settings-pages";
 import { securityCenter, securityPages, type SecurityHref } from "@/lib/security-catalog";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
 export type NavHref =
   | "/"
-  | "/mining"
   | "/transfer"
   | "/wallet"
   | "/history"
   | "/custom-address"
-  | "/leaderboard"
   | "/profile"
   | SecurityHref
   | SettingsHref;
@@ -71,13 +67,6 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     ],
   },
   {
-    title: "Mining",
-    icon: CpuIcon,
-    items: [
-      { title: "Mining", href: "/mining", icon: CpuIcon, searchTerms: "hashrate rigs rewards" },
-    ],
-  },
-  {
     title: "Wallet",
     icon: Wallet01Icon,
     items: [
@@ -116,18 +105,6 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         href: "/history",
         icon: TransactionHistoryIcon,
         searchTerms: "transactions history transfers search filter",
-      },
-    ],
-  },
-  {
-    title: "Account",
-    icon: TrophyIcon,
-    items: [
-      {
-        title: "Leaderboard",
-        href: "/leaderboard",
-        icon: TrophyIcon,
-        searchTerms: "ranking positions",
       },
     ],
   },
