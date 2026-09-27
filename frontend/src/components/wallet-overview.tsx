@@ -21,7 +21,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/use-wallet";
 import { currency, dateText } from "@/lib/wallet-format";
-import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
+import { navSections } from "@/lib/wallet-nav";
+import { EmptyState, Icon, PageHeader } from "./wallet-shell";
+type OverviewMetric = {
+  icon: Parameters<typeof Icon>[0]["icon"];
+  label: string;
+  value: number;
+  suffix: string;
+  hint: string;
+  href: "/wallet" | "/history" | "/custom-address" | "/security";
+};
+
 function Count({ value, suffix = "" }: { value: number; suffix?: string }) {
   const [display, setDisplay] = useState(0);
   useEffect(() => {
@@ -74,11 +84,61 @@ export function OverviewContent() {
       };
     });
   }, [transactions]);
+  const metrics: OverviewMetric[] = [
+    {
+      icon: Wallet01Icon,
+      label: "Available Balance",
+      value: wallet?.balance ?? 0,
+      suffix: " WLT",
+      hint: "Current wallet",
+      href: "/wallet",
+    },
+    {
+      icon: ArrowDownLeft01Icon,
+      label: "Total Received",
+      value: totalIn,
+      suffix: " WLT",
+      hint: "All incoming transfers",
+      href: "/history",
+    },
+    {
+      icon: ArrowUpRight01Icon,
+      label: "Total Sent",
+      value: totalOut,
+      suffix: " WLT",
+      hint: "All outgoing transfers",
+      href: "/history",
+    },
+    {
+      icon: TransactionHistoryIcon,
+      label: "Transactions",
+      value: transactions.length,
+      suffix: "",
+      hint: "Search and export history",
+      href: "/history",
+    },
+    {
+      icon: QrCodeIcon,
+      label: "Custom Address",
+      value: wallet ? 1 : 0,
+      suffix: "",
+      hint: "Receiving address",
+      href: "/custom-address",
+    },
+    {
+      icon: SecurityCheckIcon,
+      label: "Security Status",
+      value: wallet?.backup_confirmed ? 1 : 0,
+      suffix: " / 1",
+      hint: wallet?.backup_confirmed ? "Backup confirmed" : "Backup not confirmed",
+      href: "/security",
+    },
+  ];
   return (
     <>
       <PageHeader
-        title="Wallet Overview"
-        subtitle="Your balance and transaction activity."
+        title="Overview"
+        subtitle="Balance and activity at a glance, with a link into every section."
         action={
           <Link to="/transfer">
             <Button>
@@ -89,39 +149,27 @@ export function OverviewContent() {
         }
       />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {[
-          [Wallet01Icon, "Available Balance", wallet?.balance ?? 0, " WLT"],
-          [ArrowDownLeft01Icon, "Total Received", totalIn, " WLT"],
-          [ArrowUpRight01Icon, "Total Sent", totalOut, " WLT"],
-          [TransactionHistoryIcon, "Transactions", transactions.length, ""],
-          [QrCodeIcon, "Wallet Addresses", wallet ? 1 : 0, ""],
-          [SecurityCheckIcon, "Security Status", wallet?.backup_confirmed ? 1 : 0, " / 1"],
-        ].map(([icon, label, value, suffix], index) => (
-          <article
-            key={label as string}
-            className="min-h-28 rounded-2xl border bg-card p-4 shadow-sm animate-fade-in"
+        {/*
+         * Summary only: each card links to the page that owns the detail, so these figures
+         * never drift from the wallet, history, or settings screens.
+         */}
+        {metrics.map((metric, index) => (
+          <Link
+            key={metric.label}
+            to={metric.href}
+            className="min-h-28 rounded-2xl border bg-card p-4 shadow-sm transition-colors animate-fade-in hover:bg-secondary/50"
             style={{ animationDelay: `${index * 75}ms`, animationFillMode: "both" }}
           >
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <Icon
-                icon={icon as typeof Wallet01Icon}
-                size={18}
-                className="text-muted-foreground"
-              />
-              <span>{label as string}</span>
+              <Icon icon={metric.icon} size={18} className="text-muted-foreground" />
+              <span>{metric.label}</span>
               <Icon icon={ArrowRight01Icon} size={15} className="ms-auto text-muted-foreground" />
             </div>
             <strong className="mt-5 block font-display text-2xl">
-              <Count value={value as number} suffix={suffix as string} />
+              <Count value={metric.value} suffix={metric.suffix} />
             </strong>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {index === 5
-                ? wallet?.backup_confirmed
-                  ? "Backup confirmed"
-                  : "Backup not confirmed"
-                : "Current wallet"}
-            </p>
-          </article>
+            <p className="mt-1 text-xs text-muted-foreground">{metric.hint}</p>
+          </Link>
         ))}
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
@@ -183,29 +231,31 @@ export function OverviewContent() {
         </section>
         <section className="rounded-[22px] border bg-card shadow-sm">
           <div className="border-b px-5 py-4">
-            <h2 className="font-display text-base font-semibold">Wallet address</h2>
-          </div>
-          <div className="p-5">
-            <p className="text-xs text-muted-foreground">Receive WLT at</p>
-            <div className="mt-2 flex items-center gap-2 rounded-xl bg-secondary p-3">
-              <code className="min-w-0 flex-1 break-all text-sm">{wallet?.address}</code>
-              {wallet?.address && <CopyButton text={wallet.address} />}
-            </div>
-            <p className="mt-5 text-xs text-muted-foreground">Security</p>
-            <p className="mt-2 flex items-center gap-2 text-sm font-semibold">
-              <Icon
-                icon={SecurityCheckIcon}
-                size={18}
-                className={wallet?.backup_confirmed ? "text-success" : "text-warning"}
-              />
-              {wallet?.backup_confirmed ? "Backup confirmed" : "Backup not confirmed"}
+            <h2 className="font-display text-base font-semibold">Sections</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Every page lives in the section that owns it.
             </p>
-            <Link
-              to="/settings"
-              className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-primary"
-            >
-              Manage security <Icon icon={ArrowRight01Icon} size={16} />
-            </Link>
+          </div>
+          <div className="space-y-5 p-5">
+            {navSections.map((section) => (
+              <div key={section.title}>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {section.title}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {section.items.map((item) => (
+                    <Link
+                      key={item.href}
+                      to={item.href}
+                      className="inline-flex items-center gap-2 rounded-full border bg-secondary/60 px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-card"
+                    >
+                      <Icon icon={item.icon} size={15} />
+                      {item.title}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       </div>

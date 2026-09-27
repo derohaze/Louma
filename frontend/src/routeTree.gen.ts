@@ -13,6 +13,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
+import { Route as MiningRouteImport } from './routes/mining'
+import { Route as SecurityRouteImport } from './routes/security'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TransferRouteImport } from './routes/transfer'
 import { Route as WalletRouteImport } from './routes/wallet'
@@ -37,6 +39,16 @@ const LeaderboardRoute = LeaderboardRouteImport.update({
   path: '/leaderboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MiningRoute = MiningRouteImport.update({
+  id: '/mining',
+  path: '/mining',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityRoute = SecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -58,6 +70,8 @@ export interface FileRoutesByFullPath {
   '/custom-address': typeof CustomAddressRoute
   '/history': typeof HistoryRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/mining': typeof MiningRoute
+  '/security': typeof SecurityRoute
   '/settings': typeof SettingsRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
@@ -67,6 +81,8 @@ export interface FileRoutesByTo {
   '/custom-address': typeof CustomAddressRoute
   '/history': typeof HistoryRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/mining': typeof MiningRoute
+  '/security': typeof SecurityRoute
   '/settings': typeof SettingsRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
@@ -77,6 +93,8 @@ export interface FileRoutesById {
   '/custom-address': typeof CustomAddressRoute
   '/history': typeof HistoryRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/mining': typeof MiningRoute
+  '/security': typeof SecurityRoute
   '/settings': typeof SettingsRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
@@ -88,6 +106,8 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/history'
     | '/leaderboard'
+    | '/mining'
+    | '/security'
     | '/settings'
     | '/transfer'
     | '/wallet'
@@ -97,6 +117,8 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/history'
     | '/leaderboard'
+    | '/mining'
+    | '/security'
     | '/settings'
     | '/transfer'
     | '/wallet'
@@ -106,6 +128,8 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/history'
     | '/leaderboard'
+    | '/mining'
+    | '/security'
     | '/settings'
     | '/transfer'
     | '/wallet'
@@ -116,6 +140,8 @@ export interface RootRouteChildren {
   CustomAddressRoute: typeof CustomAddressRoute
   HistoryRoute: typeof HistoryRoute
   LeaderboardRoute: typeof LeaderboardRoute
+  MiningRoute: typeof MiningRoute
+  SecurityRoute: typeof SecurityRoute
   SettingsRoute: typeof SettingsRoute
   TransferRoute: typeof TransferRoute
   WalletRoute: typeof WalletRoute
@@ -151,6 +177,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LeaderboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mining': {
+      id: '/mining'
+      path: '/mining'
+      fullPath: '/mining'
+      preLoaderRoute: typeof MiningRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security': {
+      id: '/security'
+      path: '/security'
+      fullPath: '/security'
+      preLoaderRoute: typeof SecurityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -180,6 +220,8 @@ const rootRouteChildren: RootRouteChildren = {
   CustomAddressRoute: CustomAddressRoute,
   HistoryRoute: HistoryRoute,
   LeaderboardRoute: LeaderboardRoute,
+  MiningRoute: MiningRoute,
+  SecurityRoute: SecurityRoute,
   SettingsRoute: SettingsRoute,
   TransferRoute: TransferRoute,
   WalletRoute: WalletRoute,

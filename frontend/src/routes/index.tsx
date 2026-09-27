@@ -4,15 +4,15 @@ import { OverviewContent } from "@/components/wallet-overview";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Wallet Overview — WLT" },
+      { title: "Overview — WLT" },
       {
         name: "description",
-        content: "Review your WLT wallet balance, addresses, security, and transaction activity.",
+        content: "Balance and activity at a glance, with a link into every WLT wallet section.",
       },
-      { property: "og:title", content: "Wallet Overview — WLT" },
+      { property: "og:title", content: "Overview — WLT" },
       {
         property: "og:description",
-        content: "Review your WLT wallet balance, addresses, security, and transaction activity.",
+        content: "Balance and activity at a glance, with a link into every WLT wallet section.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

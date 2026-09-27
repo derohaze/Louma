@@ -3,6 +3,7 @@ import { useState } from "react";
 import {
   ArrowUpRight01Icon,
   ArrowDownLeft01Icon,
+  ArrowRight01Icon,
   Download01Icon,
   QrCodeIcon,
   SecurityCheckIcon,
@@ -471,23 +472,22 @@ export function LeaderboardContent() {
     </>
   );
 }
-export function SettingsContent() {
+/** Security and backup have their own page, so Settings only carries wallet preferences. */
+export function SecurityContent() {
   const { wallet, refresh } = useWallet();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const change = async (field: "privacy_mode" | "backup_confirmed", value: boolean) => {
+  const confirmBackup = async (value: boolean) => {
     setBusy(true);
     setMessage("");
-    updateDemoWallet(
-      field === "privacy_mode" ? { privacy_mode: value } : { backup_confirmed: value },
-    );
+    updateDemoWallet({ backup_confirmed: value });
     setBusy(false);
     setMessage("Settings saved.");
     await refresh();
   };
   return (
     <>
-      <PageHeader title="Settings" subtitle="Security, privacy, and wallet backup." />
+      <PageHeader title="Security" subtitle="Sign-in safety and wallet backup." />
       <div className="space-y-4">
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
           <h2 className="flex items-center gap-2 font-display font-semibold">
@@ -503,20 +503,6 @@ export function SettingsContent() {
           </p>
         </section>
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
-          <h2 className="font-display font-semibold">Privacy</h2>
-          <label className="mt-4 flex items-center gap-3 text-sm">
-            <Checkbox
-              checked={wallet?.privacy_mode ?? false}
-              disabled={busy}
-              onCheckedChange={(checked) => void change("privacy_mode", checked === true)}
-            />
-            Hide balance on this screen
-          </label>
-          <p className="mt-2 text-xs text-muted-foreground">
-            This preference is saved to your account. Public rankings remain unavailable.
-          </p>
-        </section>
-        <section className="rounded-[22px] border bg-card p-5 shadow-sm">
           <h2 className="font-display font-semibold">Backup</h2>
           <p className="mt-3 text-sm text-muted-foreground">
             Save your receiving address for reference. This is not a private key or recovery phrase.
@@ -529,10 +515,55 @@ export function SettingsContent() {
             <Checkbox
               checked={wallet?.backup_confirmed ?? false}
               disabled={busy}
-              onCheckedChange={(checked) => void change("backup_confirmed", checked === true)}
+              onCheckedChange={(checked) => void confirmBackup(checked === true)}
             />
             I saved my receiving address
           </label>
+        </section>
+        {message && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {message}
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+export function SettingsContent() {
+  const { wallet, refresh } = useWallet();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const change = async (value: boolean) => {
+    setBusy(true);
+    setMessage("");
+    updateDemoWallet({ privacy_mode: value });
+    setBusy(false);
+    setMessage("Settings saved.");
+    await refresh();
+  };
+  return (
+    <>
+      <PageHeader title="Settings" subtitle="Wallet preferences." />
+      <div className="space-y-4">
+        <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+          <h2 className="font-display font-semibold">Privacy</h2>
+          <label className="mt-4 flex items-center gap-3 text-sm">
+            <Checkbox
+              checked={wallet?.privacy_mode ?? false}
+              disabled={busy}
+              onCheckedChange={(checked) => void change(checked === true)}
+            />
+            Hide balance on this screen
+          </label>
+          <p className="mt-2 text-xs text-muted-foreground">
+            This preference is saved to your account. Public rankings remain unavailable.
+          </p>
+          <Link
+            to="/security"
+            className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-primary"
+          >
+            Security and backup <Icon icon={ArrowRight01Icon} size={16} />
+          </Link>
         </section>
         {message && (
           <p role="status" className="text-sm text-muted-foreground">

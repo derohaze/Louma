@@ -3,24 +3,17 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Wallet01Icon,
-  DashboardSquare01Icon,
   ArrowDown01Icon,
   ArrowRight01Icon,
   Home01Icon,
-  TransactionHistoryIcon,
   Settings01Icon,
   SparklesIcon,
   Search01Icon,
   UserCircleIcon,
   Menu01Icon,
-  LanguageCircleIcon,
-  TrophyIcon,
-  QrCodeIcon,
   SecurityCheckIcon,
   ArrowUpRight01Icon,
-  ArrowDownLeft01Icon,
   Copy01Icon,
-  Notification01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +29,14 @@ import {
 import { WalletContext } from "@/hooks/use-wallet";
 import { WalletNotifications } from "@/components/wallet-notifications";
 import { cn } from "@/lib/utils";
+import {
+  findActiveSection,
+  navItems,
+  navSections,
+  type NavHref,
+  type NavItem,
+  type NavSection,
+} from "@/lib/wallet-nav";
 import { DEMO_USER_EMAIL, DEMO_USER_ID, readTransactions, readWallet } from "@/lib/demo-wallet";
 import { currency } from "@/lib/wallet-format";
 import type { Transaction, Wallet } from "@/lib/demo-wallet";
@@ -109,20 +110,30 @@ export function CopyButton({ text }: { text: string }) {
   );
 }
 
-const navItems: {
-  title: string;
-  href:
-    "/" | "/transfer" | "/wallet" | "/history" | "/custom-address" | "/leaderboard" | "/settings";
-  icon: IconData;
-}[] = [
-  { title: "Overview", href: "/", icon: DashboardSquare01Icon },
-  { title: "Transfer", href: "/transfer", icon: ArrowUpRight01Icon },
-  { title: "Wallet", href: "/wallet", icon: Wallet01Icon },
-  { title: "History", href: "/history", icon: TransactionHistoryIcon },
-  { title: "Custom Address", href: "/custom-address", icon: QrCodeIcon },
-  { title: "Leaderboard", href: "/leaderboard", icon: TrophyIcon },
-  { title: "Settings", href: "/settings", icon: Settings01Icon },
-];
+/** Flat position of every page, so the staggered entrance follows the visible order. */
+const navOrder = new Map<NavHref, number>(navItems.map((item, index) => [item.href, index]));
+
+/**
+ * Compact rail item: the rail lists sections, and the panel below shows the pages of the one
+ * the route belongs to. Clicking a section opens its landing page.
+ */
+function RailLink({ section, current }: { section: NavSection; current: boolean }) {
+  return (
+    <Link
+      to={section.items[0].href}
+      aria-current={current ? "page" : undefined}
+      className={cn(
+        "flex min-h-[68px] flex-col items-center justify-center gap-1 text-[11px] font-semibold",
+        current
+          ? "bg-background text-[#323234]"
+          : "text-[#58585E] hover:bg-background/70 hover:text-[#323234]",
+      )}
+    >
+      <Icon icon={section.icon} size={21} />
+      <span className="max-w-[64px] text-center leading-4">{section.title}</span>
+    </Link>
+  );
+}
 
 export function WalletPage({ children, title }: { children: ReactNode; title: string }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -131,7 +142,6 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [rtl, setRtl] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -144,12 +154,6 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [location.pathname]);
-  useEffect(() => {
-    document.documentElement.dir = rtl ? "rtl" : "ltr";
-    return () => {
-      document.documentElement.dir = "ltr";
-    };
-  }, [rtl]);
   const refresh = async () => {
     setUserId(DEMO_USER_ID);
     setEmail(DEMO_USER_EMAIL);
@@ -175,7 +179,52 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
     () => ({ userId, email, wallet, transactions, loading, error, refresh }),
     [userId, email, wallet, transactions, loading, error],
   );
-  const sidebar = (
+  const activeSection = findActiveSection(location.pathname);
+  const panelLink = ({ title: label, href, icon }: NavItem) => {
+    const current = location.pathname === href;
+    return (
+      <Link
+        key={href}
+        to={href}
+        onClick={() => setMobileNavOpen(false)}
+        tabIndex={workspaceOpen ? 0 : -1}
+        aria-current={current ? "page" : undefined}
+        style={{ transitionDelay: workspaceOpen ? `${(navOrder.get(href) ?? 0) * 60}ms` : "0ms" }}
+        className={cn(
+          "mb-1 flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
+          workspaceOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
+          current
+            ? "bg-card text-[#323234] shadow-sm"
+            : "text-[#58585E] hover:bg-card/70 hover:text-[#323234]",
+        )}
+      >
+        <Icon icon={icon} size={21} />
+        <span>{label}</span>
+        {!current && <Icon icon={ArrowRight01Icon} size={15} className="ms-auto" />}
+      </Link>
+    );
+  };
+  const sectionNav = (section: NavSection) => (
+    <div key={section.title} className="mb-1">
+      {/* A single-page section repeats its own name in the link, so the label is redundant. */}
+      {section.items.length > 1 && (
+        <p
+          className={cn(
+            "px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-[#8A8A93] transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
+            workspaceOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
+          )}
+        >
+          {section.title}
+        </p>
+      )}
+      {section.items.map((item) => panelLink(item))}
+    </div>
+  );
+  /**
+   * `allSections` is used by the mobile drawer, where the rail that switches sections is not
+   * rendered; the desktop panel stays scoped to the section of the current page.
+   */
+  const sidebar = (allSections: boolean) => (
     <aside className="h-full w-[228px] shrink-0 overflow-y-auto bg-[#E9E9EC] px-3 py-4">
       <Button
         variant="ghost"
@@ -183,7 +232,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
         aria-expanded={workspaceOpen}
         className="mb-1 h-10 w-full justify-start gap-2.5 rounded-xl px-3 text-sm font-semibold text-[#58585E] hover:bg-card/70"
       >
-        <span>WALLET WORKSPACE</span>
+        <span>WLT WALLET</span>
         <Icon
           icon={ArrowDown01Icon}
           size={17}
@@ -200,26 +249,9 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
         )}
       >
         <nav className="overflow-hidden">
-          {navItems.map(({ title: label, href, icon }, index) => (
-            <Link
-              key={href}
-              to={href}
-              onClick={() => setMobileNavOpen(false)}
-              tabIndex={workspaceOpen ? 0 : -1}
-              style={{ transitionDelay: workspaceOpen ? `${index * 75}ms` : "0ms" }}
-              className={cn(
-                "mb-1 flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
-                workspaceOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-                title === label
-                  ? "bg-card text-[#323234] shadow-sm"
-                  : "text-[#58585E] hover:bg-card/70 hover:text-[#323234]",
-              )}
-            >
-              <Icon icon={icon} size={21} />
-              <span>{label}</span>
-              {title !== label && <Icon icon={ArrowRight01Icon} size={15} className="ms-auto" />}
-            </Link>
-          ))}
+          {(allSections || !activeSection ? navSections : [activeSection]).map((section) =>
+            sectionNav(section),
+          )}
         </nav>
       </div>
     </aside>
@@ -231,7 +263,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
           <div className="flex w-[330px] items-center gap-5">
             <div className="grid size-10 place-items-center font-display text-xl font-bold">WL</div>
             <div className="hidden rounded-full border border-primary/70 bg-primary/35 px-4 py-2 text-xs font-semibold lg:block">
-              Wallet workspace
+              WLT wallet
             </div>
           </div>
           <div className="ms-auto flex items-center gap-3">
@@ -283,18 +315,13 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                   <Icon icon={Wallet01Icon} />
                   Wallet
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => navigate({ to: "/settings" })}>
+                <DropdownMenuItem onSelect={() => navigate({ to: "/security" })}>
                   <Icon icon={SecurityCheckIcon} />
-                  Security & settings
+                  Security
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    setRtl(!rtl);
-                  }}
-                >
-                  <Icon icon={LanguageCircleIcon} />
-                  Direction<span className="ms-auto">{rtl ? "RTL" : "LTR"}</span>
+                <DropdownMenuItem onSelect={() => navigate({ to: "/settings" })}>
+                  <Icon icon={Settings01Icon} />
+                  Settings
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -317,30 +344,15 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
          */}
         <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
           <aside className="hidden h-full w-[72px] shrink-0 overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
-            {[
-              [Home01Icon, "Workspace", "/"],
-              [Wallet01Icon, "Wallet", "/wallet"],
-              [TransactionHistoryIcon, "History", "/history"],
-              [ArrowDownLeft01Icon, "Transfers", "/transfer"],
-              [Notification01Icon, "Activity", "/leaderboard"],
-              [Settings01Icon, "Settings", "/settings"],
-            ].map(([icon, label, href], index) => (
-              <Link
-                key={label as string}
-                to={href as "/"}
-                className={cn(
-                  "flex min-h-[68px] flex-col items-center justify-center gap-1 text-[11px] font-semibold",
-                  index === 0
-                    ? "bg-background text-[#323234]"
-                    : "text-[#58585E] hover:bg-background/70 hover:text-[#323234]",
-                )}
-              >
-                <Icon icon={icon as IconData} size={21} />
-                <span className="max-w-[64px] text-center leading-4">{label as string}</span>
-              </Link>
+            {navSections.map((section) => (
+              <RailLink
+                key={section.title}
+                section={section}
+                current={section.title === activeSection?.title}
+              />
             ))}
           </aside>
-          <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex">{sidebar}</div>
+          <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex">{sidebar(false)}</div>
           <div
             className={cn(
               "fixed inset-x-0 top-[68px] z-40 grid bg-shell/30 transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] lg:hidden",
@@ -351,7 +363,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
           >
             <div className="overflow-hidden">
               <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-y-auto bg-[#E9E9EC] shadow-xl">
-                {sidebar}
+                {sidebar(true)}
               </div>
             </div>
           </div>
@@ -370,8 +382,12 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
             <div className="relative mx-auto max-w-[1380px] p-5 lg:p-8">
               <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
                 <Icon icon={Home01Icon} size={17} />
-                <Icon icon={ArrowRight01Icon} size={15} />
-                <span>Wallet Workspace</span>
+                {activeSection && activeSection.title !== title && (
+                  <>
+                    <Icon icon={ArrowRight01Icon} size={15} />
+                    <span>{activeSection.title}</span>
+                  </>
+                )}
                 <Icon icon={ArrowRight01Icon} size={15} />
                 <strong className="text-foreground">{title}</strong>
               </div>
