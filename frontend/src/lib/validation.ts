@@ -1,8 +1,9 @@
-import { moneyFromMinorUnits, moneyToMinorUnits } from "@/lib/wallet-format";
+import { roundAmount } from "@/lib/wallet-format";
 
 /**
  * Every rule the wallet applies to what someone types, in one module with no UI imports. The forms
- * read these rules, and the backend re-checks the same limits, so the two never drift apart.
+ * read these rules and the demo store applies them again before it writes anything, so a future
+ * backend can mirror one file instead of re-deriving the rules from the screens.
  */
 
 /** Upper bounds for every free-text field, so nothing unbounded can reach a request body. */
@@ -60,8 +61,8 @@ export const oneTimeCodeDigits = (value: string): string =>
 
 export interface AmountCheck {
   ok: boolean;
-  /** Exact decimal string to send to the API; an invalid amount is represented as `0`. */
-  value: string;
+  /** The amount to use once `ok` is true; 0 otherwise. */
+  value: number;
   error: string;
 }
 
@@ -71,37 +72,20 @@ export interface AmountCheck {
  */
 export const parseAmount = (
   raw: string,
-  options: {
-    min?: number;
-    max?: number;
-    /**
-     * Upper bound in integer minor units. Used where the limit is real money (an account balance),
-     * so the comparison never goes through a floating-point value.
-     */
-    maxMinor?: number;
-  } = {},
+  { min = LIMITS.minAmount, max = LIMITS.maxAmount }: { min?: number; max?: number } = {},
 ): AmountCheck => {
-  const { min = LIMITS.minAmount, max = LIMITS.maxAmount, maxMinor } = options;
   const text = raw.trim();
-  if (!text) return { ok: false, value: "0", error: "Enter an amount." };
+  if (!text) return { ok: false, value: 0, error: "Enter an amount." };
   if (!new RegExp(`^\\d+(\\.\\d{1,${LIMITS.amountDecimals}})?$`).test(text)) {
-    return { ok: false, value: "0", error: "Enter a positive amount, with up to four decimals." };
+    return { ok: false, value: 0, error: "Enter a positive amount, with up to four decimals." };
   }
-  let minor: number;
-  try {
-    minor = moneyToMinorUnits(text);
-  } catch {
-    return { ok: false, value: "0", error: "Enter a positive amount, with up to four decimals." };
+  const value = Number(text);
+  if (!Number.isFinite(value) || value <= 0) {
+    return { ok: false, value: 0, error: "Enter an amount greater than zero." };
   }
-  if (minor <= 0) return { ok: false, value: "0", error: "Enter an amount greater than zero." };
-  if (minor < moneyToMinorUnits(min.toFixed(LIMITS.amountDecimals))) {
-    return { ok: false, value: "0", error: "That amount is too small to send." };
-  }
-  const ceiling = maxMinor ?? moneyToMinorUnits(max.toFixed(LIMITS.amountDecimals));
-  if (minor > ceiling) {
-    return { ok: false, value: "0", error: "That amount is more than you can send." };
-  }
-  return { ok: true, value: moneyFromMinorUnits(minor), error: "" };
+  if (value < min) return { ok: false, value: 0, error: "That amount is too small to send." };
+  if (value > max) return { ok: false, value: 0, error: "That amount is more than you can send." };
+  return { ok: true, value: roundAmount(value), error: "" };
 };
 
 export interface PasswordRule {

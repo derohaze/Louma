@@ -1,103 +1,87 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  ArrowDownLeft01Icon,
-  ArrowUpRight01Icon,
+  CreditCardAddIcon,
+  MoneyReceive01Icon,
   Notification01Icon,
-  SecurityCheckIcon,
+  Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { api, messageForError, type ApiNotification } from "@/lib/api";
-import { useWallet } from "@/hooks/wallet-context";
-import { dateText } from "@/lib/wallet-format";
+import { cn } from "@/lib/utils";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
-/** Icon per notification kind, so a security notice reads differently from a transfer notice. */
-const kindIcons: Record<string, IconData> = {
-  transfer_received: ArrowDownLeft01Icon,
-  transfer_sent: ArrowUpRight01Icon,
-  security: SecurityCheckIcon,
-};
+export interface WalletTask {
+  id: string;
+  icon: IconData;
+  title: string;
+  description: string;
+  actionLabel: string;
+  /** Button tone: violet for the primary task, dark for the secondary (matches reference). */
+  tone?: "violet" | "dark";
+}
 
-/**
- * The bell reads the account's notifications from the API. Nothing is invented: when the account
- * has no notifications the panel says so instead of showing placeholder tasks.
- */
-export function WalletNotifications() {
-  const { notificationsRevision } = useWallet();
+const DEFAULT_TASKS: WalletTask[] = [
+  {
+    id: "add-payment-method",
+    icon: CreditCardAddIcon,
+    title: "Add a payment method to your wallet",
+    description:
+      "Link a card or bank account to fund your wallet instantly and never miss a top-up.",
+    actionLabel: "Add Now",
+    tone: "violet",
+  },
+  {
+    id: "claim-bonus",
+    icon: MoneyReceive01Icon,
+    title: "Claim your welcome currency bonus",
+    description:
+      "Activate your account bonus and get free credit added directly to your wallet balance.",
+    actionLabel: "Claim Now",
+    tone: "dark",
+  },
+];
+
+export function WalletNotifications({
+  tasks = DEFAULT_TASKS,
+  onAction,
+}: {
+  tasks?: WalletTask[];
+  onAction?: (id: string) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState<ApiNotification[]>([]);
-  /**
-   * The count comes from the server, not from the loaded page: the panel asks for twenty notices,
-   * and an account with more unread than that would show a badge that can never reach zero.
-   */
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [error, setError] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const [readIds, setReadIds] = useState<string[]>([]);
   /**
    * The badge slide-in must only play when the unread count changes in place
    * (a new notification). Every route renders its own shell, so navigation
    * remounts this button — playing the enter animation on mount makes the
-   * badge look like it jumps on every page change. The count the first load
-   * reports is therefore the baseline, and only a later change animates.
+   * badge look like it jumps on every page change.
    */
   const [canAnimate, setCanAnimate] = useState(false);
-  const initialCount = useRef<number | null>(null);
   useEffect(() => {
     const frame = requestAnimationFrame(() => setCanAnimate(true));
     return () => cancelAnimationFrame(frame);
   }, []);
-
-  const load = useCallback(async () => {
-    try {
-      const response = await api.get<{ notifications: ApiNotification[]; unread: number }>(
-        "/api/v1/notifications?limit=20",
-      );
-      setNotifications(response.notifications);
-      setUnreadCount(response.unread);
-      if (initialCount.current === null) initialCount.current = response.unread;
-      setError("");
-    } catch (cause) {
-      setError(messageForError(cause));
-    } finally {
-      setLoaded(true);
-    }
-  }, []);
-
+  const unreadCount = tasks.filter((t) => !readIds.includes(t.id)).length;
   /**
-   * The badge follows the server, so the list reloads on mount, whenever this tab did something that
-   * can produce a notice (a transfer), and when the window is focused again.
+   * Count on first paint of this mount (navigation remounts the shell).
+   * Flipping `data-animate` alone must not start the slide-in, so the
+   * animation is armed only once the count actually differs from it.
    */
-  useEffect(() => {
-    void load();
-  }, [load, notificationsRevision]);
+  const initialCount = useRef<number | null>(null);
+  if (initialCount.current === null) {
+    initialCount.current = unreadCount;
+  }
+  const badgeChanged = unreadCount !== initialCount.current;
+  const markRead = (id: string) => setReadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  const markAllRead = () => setReadIds(tasks.map((t) => t.id));
 
-  useEffect(() => {
-    const onFocus = () => void load();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [load]);
-
-  /** The badge is only as fresh as the last read, so the list reloads whenever the panel opens. */
-  useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
-
-  /** Clearing the badge is the only way to acknowledge a notice: they carry no action of their own. */
-  const markAllRead = useCallback(async () => {
-    try {
-      await api.post<{ read: number; unread: number }>("/api/v1/notifications/read", {});
-      setError("");
-      await load();
-    } catch (cause) {
-      setError(messageForError(cause));
-    }
-  }, [load]);
-
-  /** Flipping `data-animate` alone must not start the slide-in, so the count has to actually differ. */
-  const badgeChanged = initialCount.current !== null && unreadCount !== initialCount.current;
+  const handleAction = (id: string) => {
+    markRead(id);
+    onAction?.(id);
+    setOpen(false);
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -139,67 +123,68 @@ export function WalletNotifications() {
         className="w-[400px] max-w-[calc(100vw-2rem)] rounded-[24px] border-0 bg-[#E9E9EC] p-3 shadow-2xl"
       >
         <div className="mb-1 flex items-center justify-between gap-2 px-2 pb-2 pt-1">
-          <h2 className="text-[17px] font-bold text-gray-900">Notifications</h2>
-          <div className="flex shrink-0 items-center gap-3">
-            {unreadCount > 0 && (
-              <button
-                type="button"
-                onClick={() => void markAllRead()}
-                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700"
-              >
-                Mark all as read
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700"
-            >
-              Refresh
-            </button>
-          </div>
+          <h2 className="text-[17px] font-bold text-gray-900">Tasks to complete</h2>
+          <button
+            type="button"
+            onClick={markAllRead}
+            disabled={unreadCount === 0}
+            className="shrink-0 text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:cursor-default disabled:opacity-40"
+          >
+            Mark all as read
+          </button>
         </div>
         <div className="rounded-[20px] bg-white px-4 shadow-sm">
-          {error ? (
-            <p className="py-6 text-sm text-destructive">{error}</p>
-          ) : notifications.length ? (
-            <div className="divide-y divide-gray-100">
-              {notifications.map((item) => (
-                <article key={item.id} className="py-4">
+          <div className="divide-y divide-gray-100">
+            {tasks.map((task) => {
+              const read = readIds.includes(task.id);
+              return (
+                <article key={task.id} className={cn("py-4")}>
                   <div className="flex items-start gap-3">
                     <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900">
-                      <HugeiconsIcon
-                        icon={kindIcons[item.kind] ?? Notification01Icon}
-                        size={20}
-                        strokeWidth={1.7}
-                      />
+                      <HugeiconsIcon icon={task.icon} size={20} strokeWidth={1.7} />
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start gap-2">
-                        {item.readAt === null && (
+                        {!read && (
                           <span
                             aria-label="Unread"
                             className="mt-2 size-2 shrink-0 rounded-full bg-[#F5334F]"
                           />
                         )}
                         <p className="flex-1 text-[15px] font-bold leading-snug text-gray-900">
-                          {item.title}
+                          {task.title}
                         </p>
+                        <button
+                          type="button"
+                          onClick={() => markRead(task.id)}
+                          disabled={read}
+                          aria-label={`Mark "${task.title}" as read`}
+                          className="shrink-0 rounded-full p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
+                        >
+                          <HugeiconsIcon icon={Tick02Icon} size={18} strokeWidth={2} />
+                        </button>
                       </div>
-                      <p className="mt-1 text-[13px] leading-relaxed text-gray-500">{item.body}</p>
-                      <p className="mt-1 text-[12px] text-gray-400">{dateText(item.createdAt)}</p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-gray-500">
+                        {task.description}
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={() => handleAction(task.id)}
+                        className={cn(
+                          "mt-3 h-9 rounded-full px-5 text-[13px] font-bold text-white",
+                          task.tone === "dark"
+                            ? "bg-gray-900 hover:bg-gray-800"
+                            : "bg-primary hover:bg-primary/90",
+                        )}
+                      >
+                        {task.actionLabel}
+                      </Button>
                     </div>
                   </div>
                 </article>
-              ))}
-            </div>
-          ) : (
-            <p className="py-6 text-sm text-gray-500">
-              {loaded
-                ? "You are all caught up. Transfer and security notices appear here."
-                : "Loading notifications…"}
-            </p>
-          )}
+              );
+            })}
+          </div>
         </div>
       </PopoverContent>
     </Popover>

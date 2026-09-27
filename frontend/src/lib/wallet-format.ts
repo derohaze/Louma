@@ -1,56 +1,27 @@
 /** Louma's ticker; every amount the wallet shows goes through here. */
 export const CURRENCY = "LMA";
-export const MONEY_DECIMALS = 4;
-export const MONEY_SCALE = 10_000;
-const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.(\d{1,4}))?$/;
 
-export function moneyToMinorUnits(value: string | number): number {
-  const text = typeof value === "number" ? value.toFixed(MONEY_DECIMALS) : value.trim();
-  const match = MONEY_PATTERN.exec(text);
-  if (!match) throw new RangeError("Invalid LMA amount");
-  const [whole, fraction = ""] = text.split(".");
-  const minor = Number(whole) * MONEY_SCALE + Number(fraction.padEnd(MONEY_DECIMALS, "0"));
-  if (!Number.isSafeInteger(minor)) throw new RangeError("LMA amount is outside the safe range");
-  return minor;
-}
+export const currency = (amount: number) =>
+  `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  }).format(amount)} ${CURRENCY}`;
 
-export function moneyFromMinorUnits(minor: number): string {
-  if (!Number.isSafeInteger(minor) || minor < 0) throw new RangeError("Invalid LMA amount");
-  return `${Math.floor(minor / MONEY_SCALE)}.${String(minor % MONEY_SCALE).padStart(MONEY_DECIMALS, "0")}`;
-}
+/**
+ * Network tax on every transfer: the sender pays the amount they typed and the recipient is
+ * credited the amount minus this share. It applies to every wallet — there are no plans, tiers, or
+ * exemptions.
+ */
+export const TRANSFER_TAX_RATE = 0.01;
 
-export function sumMoney(values: readonly (string | number)[]): string {
-  // The generic parameter is explicit: without it TypeScript picks the array's own element type as
-  // the accumulator, and the sum is typed `string | number`.
-  return moneyFromMinorUnits(
-    values.reduce<number>((sum, value) => sum + moneyToMinorUnits(value), 0),
-  );
-}
+/** Two decimals, the smallest unit the wallet shows and stores. */
+export const roundAmount = (amount: number): number => Number(amount.toFixed(2));
 
-/** Convert to a chart coordinate only; all wallet totals are summed in integer minor units first. */
-export function moneyChartValue(value: string | number): number {
-  return moneyToMinorUnits(value) / MONEY_SCALE;
-}
+/** Tax taken out of `amount` before the recipient is credited. */
+export const transferTax = (amount: number): number => roundAmount(amount * TRANSFER_TAX_RATE);
 
-function groupedMoneyValue(value: string | number): string {
-  const minor = moneyToMinorUnits(value);
-  const whole = Math.floor(minor / MONEY_SCALE);
-  const fraction = String(minor % MONEY_SCALE).padStart(MONEY_DECIMALS, "0");
-  const visibleFraction = fraction.replace(/0+$/, "").padEnd(2, "0");
-  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(whole)}.${visibleFraction}`;
-}
-
-export const currency = (amount: string | number) => `${groupedMoneyValue(amount)} ${CURRENCY}`;
-
-/** Network fee rounded to the nearest smallest unit, matching the backend's integer rule. */
-export function transferTax(amount: string | number): string {
-  const minor = moneyToMinorUnits(amount);
-  return moneyFromMinorUnits(Math.floor((minor + 50) / 100));
-}
-
-export function transferNet(amount: string | number): string {
-  return moneyFromMinorUnits(moneyToMinorUnits(amount) - moneyToMinorUnits(transferTax(amount)));
-}
+/** What actually reaches the recipient after the tax is deducted. */
+export const transferNet = (amount: number): number => roundAmount(amount - transferTax(amount));
 
 export const dateText = (date: string) =>
   new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(

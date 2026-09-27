@@ -11,8 +11,10 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
 /**
  * Static description of the wallet's security controls: what exists, what it is called, and how
- * much it counts towards the security score. The sidebar, the routes, and the Security Center all
- * read this catalog, so a feature can never be listed in the navigation without a page behind it.
+ * much it counts towards the security score. The sidebar, the routes, and the demo store all read
+ * this catalog so a feature can never be listed in the navigation without a page behind it.
+ *
+ * Names mirror the controls of the previous wallet so the redesign stays recognisable.
  */
 export type SecurityHref =
   | "/security"

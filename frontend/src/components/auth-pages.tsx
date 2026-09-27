@@ -7,15 +7,9 @@ import {
   ViewIcon,
   ViewOffIcon,
 } from "@hugeicons/core-free-icons";
+import { demoLogin, isAuthed } from "@/lib/demo-auth";
+import { DEMO_USER_EMAIL } from "@/lib/demo-wallet";
 import { cn } from "@/lib/utils";
-import {
-  api,
-  clearAccessToken,
-  completeTwoFactor,
-  login,
-  messageForError,
-  register,
-} from "@/lib/api";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
@@ -32,24 +26,63 @@ function AuthIcon({
 }
 
 /**
- * Sends an already-signed-in visitor straight to the dashboard: the session lives in an httpOnly
- * refresh cookie, so a returning visitor would otherwise see the sign-in form before the API
- * answers.
+ * Sends an already-signed-in visitor straight to the dashboard, so the auth
+ * screens never flash for someone with a remembered demo session.
  */
 function useRedirectWhenAuthed() {
   const navigate = useNavigate();
   useEffect(() => {
-    let active = true;
-    void api
-      .get("/api/v1/me")
-      .then(() => {
-        if (active) void navigate({ to: "/" });
-      })
-      .catch(() => clearAccessToken());
-    return () => {
-      active = false;
-    };
+    if (isAuthed()) {
+      void navigate({ to: "/" });
+    }
   }, [navigate]);
+}
+
+/**
+ * Official multicolor Google "G" mark (brand asset, inline so it stays sharp
+ * at any size without an extra request).
+ */
+function GoogleMark() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden focusable="false">
+      <path
+        fill="#4285F4"
+        d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z"
+      />
+    </svg>
+  );
+}
+
+function GoogleSignIn({ onClick }: { onClick: () => void }) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex h-12 w-full cursor-pointer items-center justify-center gap-3 rounded-full border border-[#DFDFE6] bg-white text-sm font-semibold text-[#1B1B21] transition-colors hover:bg-[#F5F5F7]"
+      >
+        <GoogleMark />
+        Continue with Google
+      </button>
+      <div className="my-6 flex items-center gap-4 text-xs text-[#8A8A93]">
+        <span className="h-px flex-1 bg-[#E4E4E9]" />
+        or
+        <span className="h-px flex-1 bg-[#E4E4E9]" />
+      </div>
+    </>
+  );
 }
 
 function AuthField({
@@ -193,12 +226,11 @@ function AuthShell({
   );
 }
 
-function SubmitButton({ children, disabled = false }: { children: ReactNode; disabled?: boolean }) {
+function SubmitButton({ children }: { children: ReactNode }) {
   return (
     <button
       type="submit"
-      disabled={disabled}
-      className="h-12 w-full cursor-pointer rounded-full bg-shell font-display text-[15px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+      className="h-12 w-full cursor-pointer rounded-full bg-shell font-display text-[15px] font-semibold text-primary-foreground transition-opacity hover:opacity-90"
     >
       {children}
     </button>
@@ -210,30 +242,10 @@ export function LoginContent() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      if (pendingSessionId) {
-        await completeTwoFactor({ sessionId: pendingSessionId, code });
-        setPendingSessionId(null);
-        await navigate({ to: "/" });
-      } else {
-        const response = await login({ email: email.trim(), password });
-        if (response.requiresTwoFactor) setPendingSessionId(response.sessionId);
-        else await navigate({ to: "/" });
-      }
-    } catch (cause) {
-      setError(messageForError(cause));
-    } finally {
-      setBusy(false);
-    }
+  const enter = (value: string) => {
+    demoLogin(value.trim() === "" ? DEMO_USER_EMAIL : value);
+    void navigate({ to: "/" });
   };
 
   return (
@@ -249,55 +261,38 @@ export function LoginContent() {
         </>
       }
     >
-      <form className="space-y-3" onSubmit={(event) => void submit(event)}>
-        {pendingSessionId ? (
-          <AuthField
-            label="Authenticator or recovery code"
-            type="text"
-            inputMode="numeric"
-            maxLength={64}
-            required
-            value={code}
-            autoComplete="one-time-code"
-            onChange={(event) => setCode(event.target.value)}
-          />
-        ) : (
-          <>
-            <AuthField
-              label="Email"
-              type="email"
-              placeholder="Email"
-              required
-              value={email}
-              autoComplete="email"
-              onChange={(event) => setEmail(event.target.value)}
-            />
-            <PasswordField
-              label="Password"
-              value={password}
-              onChange={setPassword}
-              autoComplete="current-password"
-            />
-          </>
-        )}
-        {!pendingSessionId && (
-          <div className="flex justify-end">
-            <Link
-              to="/forgot-password"
-              className="text-xs font-semibold text-[#6E6E77] hover:underline"
-            >
-              Forgot password?
-            </Link>
-          </div>
-        )}
-        <SubmitButton disabled={busy}>
-          {busy ? "Signing in…" : pendingSessionId ? "Verify code" : "Log in"}
-        </SubmitButton>
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+      <GoogleSignIn onClick={() => enter(DEMO_USER_EMAIL)} />
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          enter(email);
+        }}
+      >
+        <AuthField
+          label="Email"
+          type="email"
+          placeholder="Email"
+          required
+          value={email}
+          autoComplete="email"
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <PasswordField
+          label="Password"
+          value={password}
+          onChange={setPassword}
+          autoComplete="current-password"
+        />
+        <div className="flex justify-end">
+          <Link
+            to="/forgot-password"
+            className="text-xs font-semibold text-[#6E6E77] hover:underline"
+          >
+            Forgot password?
+          </Link>
+        </div>
+        <SubmitButton>Log in</SubmitButton>
       </form>
     </AuthShell>
   );
@@ -309,21 +304,10 @@ export function SignupContent() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await register({ email: email.trim(), password, displayName: name.trim() });
-      await navigate({ to: "/" });
-    } catch (cause) {
-      setError(messageForError(cause));
-    } finally {
-      setBusy(false);
-    }
+  const enter = (value: string) => {
+    demoLogin(value.trim() === "" ? DEMO_USER_EMAIL : value);
+    void navigate({ to: "/" });
   };
 
   return (
@@ -339,7 +323,14 @@ export function SignupContent() {
         </>
       }
     >
-      <form className="space-y-3" onSubmit={(event) => void submit(event)}>
+      <GoogleSignIn onClick={() => enter(DEMO_USER_EMAIL)} />
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          enter(email);
+        }}
+      >
         <AuthField
           label="Full name"
           type="text"
@@ -364,12 +355,7 @@ export function SignupContent() {
           onChange={setPassword}
           autoComplete="new-password"
         />
-        <SubmitButton disabled={busy}>{busy ? "Creating account…" : "Start"}</SubmitButton>
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
+        <SubmitButton>Start</SubmitButton>
       </form>
     </AuthShell>
   );
@@ -379,8 +365,6 @@ export function ForgotPasswordContent() {
   useRedirectWhenAuthed();
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
 
   return (
     <AuthShell
@@ -419,17 +403,9 @@ export function ForgotPasswordContent() {
       ) : (
         <form
           className="space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setBusy(true);
-            setError("");
-            // The API owns the outcome: until an email provider is configured it refuses the
-            // request, and that message is what the visitor is shown.
-            void api
-              .post<void>("/api/v1/auth/forgot-password", { email: email.trim() }, { auth: false })
-              .then(() => setSent(true))
-              .catch((cause: unknown) => setError(messageForError(cause)))
-              .finally(() => setBusy(false));
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSent(true);
           }}
         >
           <AuthField
@@ -441,12 +417,7 @@ export function ForgotPasswordContent() {
             autoComplete="email"
             onChange={(e) => setEmail(e.target.value)}
           />
-          <SubmitButton disabled={busy}>{busy ? "Sending…" : "Send reset link"}</SubmitButton>
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
+          <SubmitButton>Send reset link</SubmitButton>
         </form>
       )}
     </AuthShell>

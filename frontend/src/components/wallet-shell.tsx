@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowRight01Icon,
@@ -26,8 +26,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useWallet } from "@/hooks/wallet-context";
-import { WalletProvider } from "@/components/wallet-provider";
+import { WalletContext } from "@/hooks/use-wallet";
 import { WalletNotifications } from "@/components/wallet-notifications";
 import { cn } from "@/lib/utils";
 import {
@@ -38,10 +37,15 @@ import {
   type NavItem,
   type NavSection,
 } from "@/lib/wallet-nav";
+import { readSecurity, subscribeSecurity } from "@/lib/demo-security";
+import { demoLogout, isAuthed } from "@/lib/demo-auth";
 import { LIMITS } from "@/lib/validation";
+import { DEMO_USER_EMAIL, DEMO_USER_ID, readTransactions, readWallet } from "@/lib/demo-wallet";
+import { readProfile } from "@/lib/demo-profile";
 import { currency, dateText } from "@/lib/wallet-format";
+import type { Transaction, Wallet } from "@/lib/demo-wallet";
 
-export type { Transaction, Wallet } from "@/hooks/wallet-context";
+export type { Transaction, Wallet };
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 export function Icon({
   icon,
@@ -139,8 +143,10 @@ const searchPageRank: NavHref[] = [
   "/transfer",
   "/wallet",
   "/history",
+  "/mining",
   "/security",
   "/custom-address",
+  "/leaderboard",
   "/profile",
   "/settings",
 ];
@@ -178,24 +184,26 @@ function RailLink({ section, current }: { section: NavSection; current: boolean 
   );
 }
 
-/**
- * Every wallet page renders inside this shell. The provider loads the account, the wallet, the
- * first page of transactions, and the security overview from the API; the shell then gates the
- * content on that state, so no page ever renders a number the server has not confirmed.
- */
 export function WalletPage({ children, title }: { children: ReactNode; title: string }) {
-  return (
-    <WalletProvider>
-      <WalletShell title={title}>{children}</WalletShell>
-    </WalletProvider>
-  );
-}
-
-function WalletShell({ children, title }: { children: ReactNode; title: string }) {
-  const { user, wallet, transactions, security, loading, error, refresh, signOut } = useWallet();
+  const [userId, setUserId] = useState<string | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
+  /**
+   * Demo auth gate: every wallet page waits for this check, so an unauthenticated visitor
+   * never sees dashboard content. The check runs in an effect (never during render) to keep
+   * server and client rendering identical, since the session lives in localStorage.
+   * Initialized synchronously from the remembered session, so moving between pages never
+   * flashes the splash: an authenticated visitor paints the dashboard on the first frame.
+   */
+  const [authChecked, setAuthChecked] = useState(() => isAuthed());
+  /** The account menu shows the profile name, so it reads the store on every render. */
+  const profile = readProfile();
   const navigate = useNavigate();
   const location = useLocation();
   const mainRef = useRef<HTMLElement | null>(null);
@@ -204,6 +212,24 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [location.pathname]);
+  const refresh = async () => {
+    setUserId(DEMO_USER_ID);
+    setEmail(DEMO_USER_EMAIL);
+    setWallet(readWallet());
+    setTransactions(readTransactions());
+    setError("");
+    setLoading(false);
+  };
+  useEffect(() => {
+    void refresh();
+  }, []);
+  useEffect(() => {
+    if (isAuthed()) {
+      setAuthChecked(true);
+    } else {
+      void navigate({ to: "/login" });
+    }
+  }, [navigate]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -214,12 +240,18 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
+  const value = useMemo(
+    () => ({ userId, email, wallet, transactions, loading, error, refresh }),
+    [userId, email, wallet, transactions, loading, error],
+  );
   const activeSection = findActiveSection(location.pathname);
   /**
-   * Read from the security overview rather than kept in the frontend: the backend refuses transfers
-   * on a frozen wallet, and the UI follows the same flag so the two can never disagree.
+   * Subscribed rather than read on render: a freeze switched on from a Security page has to lock
+   * the pages around it right away, not on the next route change. The security pages themselves
+   * stay reachable, so the owner can always undo the lock.
    */
-  const walletFrozen = security?.wallet.status === "frozen";
+  const security = useSyncExternalStore(subscribeSecurity, readSecurity, readSecurity);
+  const walletFrozen = security.frozen;
   /**
    * Security pages stay reachable while the wallet is frozen: whoever froze it has to be able to
    * unfreeze it from the same device. Everything else waits.
@@ -245,13 +277,13 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
     ? []
     : transactions
         .filter((tx) =>
-          `${tx.counterpartyAddress} ${tx.note} ${tx.transferId}`.toLowerCase().includes(query),
+          `${tx.counterparty_address} ${tx.note} ${tx.transfer_id}`.toLowerCase().includes(query),
         )
         .slice(0, searchTransactionLimit)
         .map((tx) => ({
           id: `tx:${tx.id}`,
-          title: tx.counterpartyAddress,
-          subtitle: `${tx.direction === "sent" ? "Sent" : "Received"} · ${currency(tx.amount)} · ${dateText(tx.createdAt)}`,
+          title: tx.counterparty_address,
+          subtitle: `${tx.direction === "sent" ? "Sent" : "Received"} · ${currency(tx.amount)} · ${dateText(tx.created_at)}`,
           icon: tx.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon,
           href: "/history" as const,
         }));
@@ -261,7 +293,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
   const openResult = (href: NavHref) => {
     setSearchOpen(false);
     setSearch("");
-    void navigate({ to: href });
+    navigate({ to: href });
   };
   const panelLink = ({ title: label, href, icon }: NavItem) => {
     const current = location.pathname === href;
@@ -304,10 +336,10 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
     </aside>
   );
   /**
-   * Until the account is loaded (or while the gate redirects to the sign-in page), show only the
-   * brand mark: dashboard content must never flash before the API has answered.
+   * While the gate redirects, show only the brand mark on the shell background —
+   * dashboard content must never flash for an unauthenticated visitor.
    */
-  if (loading) {
+  if (!authChecked) {
     return (
       <div className="grid min-h-dvh place-items-center bg-shell">
         <img
@@ -322,267 +354,281 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
     );
   }
   return (
-    <div className="min-h-dvh bg-shell text-foreground">
-      <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground">
-        <div className="flex w-[330px] items-center gap-3">
-          <img
-            src="/Louma_Brand_logos/png/louma-logo-256x256.png"
-            alt="Louma logo"
-            width={64}
-            height={64}
-            draggable={false}
-            className="size-16 shrink-0 border-0 bg-transparent object-contain shadow-none outline-none"
-          />
-          <span className="font-display text-xl font-semibold tracking-tight">Louma</span>
-        </div>
-        <div className="ms-auto flex items-center gap-3">
-          <Button
-            variant="ghost"
-            className="h-9 rounded-full border border-magenta px-4 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
-            onClick={() => void navigate({ to: "/transfer" })}
-          >
-            <Icon icon={ArrowUpRight01Icon} size={18} />
-            Transfer
-          </Button>
-          <Popover
-            open={searchOpen}
-            onOpenChange={(open) => {
-              setSearchOpen(open);
-              if (!open) {
-                setSearch("");
-              }
-            }}
-          >
-            <PopoverTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Search"
-                aria-expanded={searchOpen}
-                className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
-              >
-                <Icon icon={Search01Icon} />
-              </Button>
-            </PopoverTrigger>
-            {/*
-             * Anchored dropdown under the search button (align="end"):
-             * non-modal, so there is no dimmed overlay behind it.
-             */}
-            <PopoverContent
-              align="end"
-              sideOffset={12}
-              aria-label="Search Louma"
-              className="w-[min(880px,calc(100vw-2rem))] gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl"
+    <WalletContext.Provider value={value}>
+      <div className="min-h-dvh bg-shell text-foreground">
+        <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground">
+          <div className="flex w-[330px] items-center gap-3">
+            <img
+              src="/Louma_Brand_logos/png/louma-logo-256x256.png"
+              alt="Louma logo"
+              width={64}
+              height={64}
+              draggable={false}
+              className="size-16 shrink-0 border-0 bg-transparent object-contain shadow-none outline-none"
+            />
+            <span className="font-display text-xl font-semibold tracking-tight">Louma</span>
+          </div>
+          <div className="ms-auto flex items-center gap-3">
+            <Button
+              variant="ghost"
+              className="h-9 rounded-full border border-magenta px-4 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+              onClick={() => navigate({ to: "/transfer" })}
             >
-              <div className="p-3">
-                <div className="flex h-14 items-center gap-3 rounded-2xl border bg-card px-4 shadow-sm">
-                  <Icon icon={Search01Icon} size={20} className="shrink-0 text-muted-foreground" />
-                  <Input
-                    autoFocus
-                    aria-label="Search"
-                    maxLength={LIMITS.maxSearchLength}
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search pages, transfers, and settings"
-                    className="h-auto flex-1 border-0 bg-transparent p-0 ps-2 text-[15px] shadow-none focus-visible:ring-0"
-                  />
-                  <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
-                    <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                      Ctrl
-                    </kbd>
-                    <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                      K
-                    </kbd>
-                  </span>
-                </div>
-              </div>
-              <div className="max-h-[48vh] min-h-[286px] overflow-y-auto px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <p className="px-2 py-3 text-[13px] font-semibold">{resultsHeading}</p>
-                {results.length ? (
-                  results.map((entry) => (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onClick={() => openResult(entry.href)}
-                      className="flex w-full cursor-pointer items-center gap-3.5 rounded-2xl px-3 py-2.5 text-start transition-colors hover:bg-secondary"
-                    >
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
-                        <Icon icon={entry.icon} size={20} />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[15px] font-semibold">
-                          {entry.title}
-                        </span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {entry.subtitle}
-                        </span>
-                      </span>
-                      <Icon
-                        icon={ArrowRight01Icon}
-                        size={16}
-                        className="shrink-0 text-muted-foreground"
-                      />
-                    </button>
-                  ))
-                ) : (
-                  <p className="px-3 py-10 text-center text-sm text-muted-foreground">
-                    No matches for “{search.trim()}”.
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center justify-between gap-3 border-t bg-secondary/40 px-4 py-3">
-                <p className="text-sm text-muted-foreground">Can't find what you need?</p>
-                <Button className="h-10 rounded-full px-5" onClick={() => openResult("/transfer")}>
-                  <Icon icon={ArrowUpRight01Icon} size={18} />
-                  New transfer
-                </Button>
-              </div>
-            </PopoverContent>
-          </Popover>
-          <WalletNotifications />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Account menu"
-                className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
-              >
-                <Icon icon={UserCircleIcon} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72 rounded-[20px] p-3">
-              <DropdownMenuLabel>
-                <strong className="block font-display">
-                  {user?.displayName ?? "Louma wallet"}
-                </strong>
-                <span className="text-xs font-normal text-muted-foreground">
-                  {user?.email ?? "Not signed in"}
-                </span>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => void navigate({ to: "/profile" })}>
-                <Icon icon={UserCircleIcon} />
-                Profile
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void navigate({ to: "/security" })}>
-                <Icon icon={SecurityCheckIcon} />
-                Security
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void navigate({ to: "/settings" })}>
-                <Icon icon={Settings01Icon} />
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => void signOut()}>
-                <Icon icon={Logout01Icon} />
-                Log out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Open navigation"
-            onClick={() => setMobileNavOpen((v) => !v)}
-            className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground lg:hidden"
-          >
-            <Icon icon={Menu01Icon} />
-          </Button>
-        </div>
-      </header>
-      {/*
-       * The shell is exactly one viewport tall, so the page itself never scrolls and the
-       * rounded top corners of the surface stay put. Only <main> scrolls (see below).
-       * `bg-shell` (not `bg-panel`): the surface background is only visible through those
-       * corners, and it must match the dark shell for the arcs to read as curves.
-       */}
-      <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
-        <aside className="hidden h-full w-[72px] shrink-0 overflow-x-hidden overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
-          {/* Account-level sections stay out of the rail: the account menu owns them. */}
-          {navSections
-            .filter((section) => !section.accountLevel)
-            .map((section) => (
-              <RailLink
-                key={section.title}
-                section={section}
-                current={section.title === activeSection?.title}
-              />
-            ))}
-        </aside>
-        <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex">{sidebar(false)}</div>
-        <div
-          className={cn(
-            "fixed inset-x-0 top-[68px] z-40 grid bg-shell/30 transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] lg:hidden",
-            mobileNavOpen
-              ? "grid-rows-[1fr] opacity-100"
-              : "pointer-events-none grid-rows-[0fr] opacity-0",
-          )}
-        >
-          <div className="overflow-hidden">
-            <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-x-hidden overflow-y-auto bg-[#E9E9EC] shadow-xl">
-              {sidebar(true)}
-            </div>
-          </div>
-        </div>
-        {/*
-         * The only scroll container in the app shell: its rounded top corner is fixed, so the
-         * shell keeps its curve while the content scrolls under it. `tabIndex={0}` keeps the
-         * region keyboard-scrollable (wheel, PageDown, arrows) even when focus is on the page.
-         */}
-        <main
-          ref={mainRef}
-          tabIndex={0}
-          className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-[#F5F5F6] [scrollbar-width:none] rounded-se-(--app-corner-size) max-md:rounded-ss-(--app-corner-size) [&::-webkit-scrollbar]:hidden"
-        >
-          <div className="dotted-canvas pointer-events-none absolute end-0 top-0 h-48 w-[38%] [mask-image:linear-gradient(to_bottom_left,black,transparent)]" />
-          <div className="dotted-canvas pointer-events-none absolute bottom-0 start-0 h-32 w-[28%] [mask-image:linear-gradient(to_top_right,black,transparent)]" />
-          <div className="relative mx-auto max-w-[1380px] p-5 lg:p-8">
-            <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
-              <Icon icon={Home04Icon} size={17} />
-              {activeSection && activeSection.title !== title && (
-                <>
-                  <Icon icon={ArrowRight01Icon} size={15} />
-                  <span>{activeSection.title}</span>
-                </>
-              )}
-              <Icon icon={ArrowRight01Icon} size={15} />
-              <strong className="text-foreground">{title}</strong>
-            </div>
-            {walletFrozen && securitySectionOpen && (
-              <p
-                role="status"
-                className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-warning bg-warning/10 px-4 py-3 text-sm"
-              >
-                <Icon icon={SnowIcon} size={18} />
-                The wallet is frozen, so every transfer is refused until you unfreeze it.
-              </p>
-            )}
-            {error ? (
-              <EmptyState
-                title="Wallet unavailable"
-                detail={error}
-                action={<Button onClick={() => void refresh()}>Try again</Button>}
-              />
-            ) : accessClosed ? (
-              <EmptyState
-                title="Wallet frozen"
-                detail="Every transfer is refused while the wallet is frozen. Nothing was taken: unfreeze it and the wallet works as before."
-                action={
-                  <Link to="/security/freeze">
-                    <Button variant="outline">
-                      <Icon icon={SnowIcon} size={17} />
-                      Open Freeze Wallet
-                    </Button>
-                  </Link>
+              <Icon icon={ArrowUpRight01Icon} size={18} />
+              Transfer
+            </Button>
+            <Popover
+              open={searchOpen}
+              onOpenChange={(open) => {
+                setSearchOpen(open);
+                if (!open) {
+                  setSearch("");
                 }
-              />
-            ) : (
-              children
-            )}
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Search"
+                  aria-expanded={searchOpen}
+                  className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+                >
+                  <Icon icon={Search01Icon} />
+                </Button>
+              </PopoverTrigger>
+              {/*
+               * Anchored dropdown under the search button (align="end"):
+               * non-modal, so there is no dimmed overlay behind it.
+               */}
+              <PopoverContent
+                align="end"
+                sideOffset={12}
+                aria-label="Search Louma"
+                className="w-[min(880px,calc(100vw-2rem))] gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl"
+              >
+                <div className="p-3">
+                  <div className="flex h-14 items-center gap-3 rounded-2xl border bg-card px-4 shadow-sm">
+                    <Icon
+                      icon={Search01Icon}
+                      size={20}
+                      className="shrink-0 text-muted-foreground"
+                    />
+                    <Input
+                      autoFocus
+                      aria-label="Search"
+                      maxLength={LIMITS.maxSearchLength}
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search pages, transfers, and settings"
+                      className="h-auto flex-1 border-0 bg-transparent p-0 ps-2 text-[15px] shadow-none focus-visible:ring-0"
+                    />
+                    <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
+                      <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                        Ctrl
+                      </kbd>
+                      <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                        K
+                      </kbd>
+                    </span>
+                  </div>
+                </div>
+                <div className="max-h-[48vh] min-h-[286px] overflow-y-auto px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <p className="px-2 py-3 text-[13px] font-semibold">{resultsHeading}</p>
+                  {results.length ? (
+                    results.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => openResult(entry.href)}
+                        className="flex w-full cursor-pointer items-center gap-3.5 rounded-2xl px-3 py-2.5 text-start transition-colors hover:bg-secondary"
+                      >
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
+                          <Icon icon={entry.icon} size={20} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[15px] font-semibold">
+                            {entry.title}
+                          </span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {entry.subtitle}
+                          </span>
+                        </span>
+                        <Icon
+                          icon={ArrowRight01Icon}
+                          size={16}
+                          className="shrink-0 text-muted-foreground"
+                        />
+                      </button>
+                    ))
+                  ) : (
+                    <p className="px-3 py-10 text-center text-sm text-muted-foreground">
+                      No matches for “{search.trim()}”.
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t bg-secondary/40 px-4 py-3">
+                  <p className="text-sm text-muted-foreground">Can't find what you need?</p>
+                  <Button
+                    className="h-10 rounded-full px-5"
+                    onClick={() => openResult("/transfer")}
+                  >
+                    <Icon icon={ArrowUpRight01Icon} size={18} />
+                    New transfer
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+            <WalletNotifications />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Account menu"
+                  className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+                >
+                  <Icon icon={UserCircleIcon} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72 rounded-[20px] p-3">
+                <DropdownMenuLabel>
+                  <strong className="block font-display">{profile.displayName}</strong>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {email ?? "Not signed in"}
+                  </span>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate({ to: "/profile" })}>
+                  <Icon icon={UserCircleIcon} />
+                  Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate({ to: "/security" })}>
+                  <Icon icon={SecurityCheckIcon} />
+                  Security
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate({ to: "/settings" })}>
+                  <Icon icon={Settings01Icon} />
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => {
+                    demoLogout();
+                    navigate({ to: "/login" });
+                  }}
+                >
+                  <Icon icon={Logout01Icon} />
+                  Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Open navigation"
+              onClick={() => setMobileNavOpen((v) => !v)}
+              className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground lg:hidden"
+            >
+              <Icon icon={Menu01Icon} />
+            </Button>
           </div>
-        </main>
+        </header>
+        {/*
+         * The shell is exactly one viewport tall, so the page itself never scrolls and the
+         * rounded top corners of the surface stay put. Only <main> scrolls (see below).
+         * `bg-shell` (not `bg-panel`): the surface background is only visible through those
+         * corners, and it must match the dark shell for the arcs to read as curves.
+         */}
+        <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
+          <aside className="hidden h-full w-[72px] shrink-0 overflow-x-hidden overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
+            {/* Account-level sections stay out of the rail: the account menu owns them. */}
+            {navSections
+              .filter((section) => !section.accountLevel)
+              .map((section) => (
+                <RailLink
+                  key={section.title}
+                  section={section}
+                  current={section.title === activeSection?.title}
+                />
+              ))}
+          </aside>
+          <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex">{sidebar(false)}</div>
+          <div
+            className={cn(
+              "fixed inset-x-0 top-[68px] z-40 grid bg-shell/30 transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] lg:hidden",
+              mobileNavOpen
+                ? "grid-rows-[1fr] opacity-100"
+                : "pointer-events-none grid-rows-[0fr] opacity-0",
+            )}
+          >
+            <div className="overflow-hidden">
+              <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-x-hidden overflow-y-auto bg-[#E9E9EC] shadow-xl">
+                {sidebar(true)}
+              </div>
+            </div>
+          </div>
+          {/*
+           * The only scroll container in the app shell: its rounded top corner is fixed, so the
+           * shell keeps its curve while the content scrolls under it. `tabIndex={0}` keeps the
+           * region keyboard-scrollable (wheel, PageDown, arrows) even when focus is on the page.
+           */}
+          <main
+            ref={mainRef}
+            tabIndex={0}
+            className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-[#F5F5F6] [scrollbar-width:none] rounded-se-(--app-corner-size) max-md:rounded-ss-(--app-corner-size) [&::-webkit-scrollbar]:hidden"
+          >
+            <div className="dotted-canvas pointer-events-none absolute end-0 top-0 h-48 w-[38%] [mask-image:linear-gradient(to_bottom_left,black,transparent)]" />
+            <div className="dotted-canvas pointer-events-none absolute bottom-0 start-0 h-32 w-[28%] [mask-image:linear-gradient(to_top_right,black,transparent)]" />
+            <div className="relative mx-auto max-w-[1380px] p-5 lg:p-8">
+              <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
+                <Icon icon={Home04Icon} size={17} />
+                {activeSection && activeSection.title !== title && (
+                  <>
+                    <Icon icon={ArrowRight01Icon} size={15} />
+                    <span>{activeSection.title}</span>
+                  </>
+                )}
+                <Icon icon={ArrowRight01Icon} size={15} />
+                <strong className="text-foreground">{title}</strong>
+              </div>
+              {walletFrozen && securitySectionOpen && (
+                <p
+                  role="status"
+                  className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-warning bg-warning/10 px-4 py-3 text-sm"
+                >
+                  <Icon icon={SnowIcon} size={18} />
+                  The wallet is frozen, so every transfer is refused until you unfreeze it.
+                </p>
+              )}
+              {loading ? (
+                <p className="py-20 text-center text-muted-foreground">Loading wallet…</p>
+              ) : error ? (
+                <EmptyState
+                  title="Wallet unavailable"
+                  detail={error}
+                  action={<Button onClick={() => void refresh()}>Try again</Button>}
+                />
+              ) : accessClosed ? (
+                <EmptyState
+                  title="Wallet frozen"
+                  detail="Every transfer is refused while the wallet is frozen. Nothing was taken: unfreeze it and the wallet works as before."
+                  action={
+                    <Link to="/security/freeze">
+                      <Button variant="outline">
+                        <Icon icon={SnowIcon} size={17} />
+                        Open Freeze Wallet
+                      </Button>
+                    </Link>
+                  }
+                />
+              ) : (
+                children
+              )}
+            </div>
+          </main>
+        </div>
       </div>
-    </div>
+    </WalletContext.Provider>
   );
 }
