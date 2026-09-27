@@ -1,18 +1,19 @@
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Wallet01Icon,
-  ArrowDown01Icon,
   ArrowRight01Icon,
-  Home01Icon,
+  ArrowDownLeft01Icon,
+  ArrowUpRight01Icon,
+  Home04Icon,
   Settings01Icon,
-  SparklesIcon,
+  SnowIcon,
   Search01Icon,
   UserCircleIcon,
   Menu01Icon,
   SecurityCheckIcon,
-  ArrowUpRight01Icon,
+  SquareLock02Icon,
   Copy01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -37,8 +38,15 @@ import {
   type NavItem,
   type NavSection,
 } from "@/lib/wallet-nav";
+import {
+  currentSession,
+  isWalletClosed,
+  readSecurity,
+  subscribeSecurity,
+} from "@/lib/demo-security";
 import { DEMO_USER_EMAIL, DEMO_USER_ID, readTransactions, readWallet } from "@/lib/demo-wallet";
-import { currency } from "@/lib/wallet-format";
+import { readProfile } from "@/lib/demo-profile";
+import { currency, dateText } from "@/lib/wallet-format";
 import type { Transaction, Wallet } from "@/lib/demo-wallet";
 
 export type { Transaction, Wallet };
@@ -113,6 +121,52 @@ export function CopyButton({ text }: { text: string }) {
 /** Flat position of every page, so the staggered entrance follows the visible order. */
 const navOrder = new Map<NavHref, number>(navItems.map((item, index) => [item.href, index]));
 
+/** One row of the search dialog: a page, a security control, a setting, or a transaction. */
+type SearchEntry = { id: string; title: string; subtitle: string; icon: IconData; href: NavHref };
+
+/**
+ * Search covers the whole wallet: every navigation section, every page inside it (security
+ * controls and settings included, because they are pages too), and the transactions themselves.
+ * The catalog is derived from the navigation so a new page can never be unreachable by search.
+ */
+type SearchPage = SearchEntry & { category: string; terms: string };
+const searchPages: SearchPage[] = navSections.flatMap((section) =>
+  section.items.map((item) => ({
+    id: `page:${item.href}`,
+    title: item.title,
+    subtitle: item.title === section.title ? `${section.title} section` : section.title,
+    icon: item.icon,
+    href: item.href,
+    category: section.title,
+    terms: item.searchTerms ?? "",
+  })),
+);
+
+/** Category chips: "all" first, then one per section so a search can be narrowed to a section. */
+const searchCategories: { id: string; label: string }[] = [
+  { id: "all", label: "All" },
+  ...navSections.map((section) => ({ id: section.title, label: section.title })),
+];
+
+/** Order of the dialog's default list, so it opens on the pages an owner reaches for most. */
+const searchPageRank: NavHref[] = [
+  "/transfer",
+  "/wallet",
+  "/history",
+  "/mining",
+  "/security",
+  "/custom-address",
+  "/leaderboard",
+  "/profile",
+  "/settings",
+];
+const searchRank = (href: NavHref) => {
+  const index = searchPageRank.indexOf(href);
+  return index === -1 ? searchPageRank.length : index;
+};
+const searchPageLimit = 6;
+const searchTransactionLimit = 3;
+
 /**
  * Compact rail item: the rail lists sections, and the panel below shows the pages of the one
  * the route belongs to. Clicking a section opens its landing page.
@@ -123,13 +177,18 @@ function RailLink({ section, current }: { section: NavSection; current: boolean 
       to={section.items[0].href}
       aria-current={current ? "page" : undefined}
       className={cn(
-        "flex min-h-[68px] flex-col items-center justify-center gap-1 text-[11px] font-semibold",
-        current
-          ? "bg-background text-[#323234]"
-          : "text-[#58585E] hover:bg-background/70 hover:text-[#323234]",
+        "group flex min-h-[68px] flex-col items-center justify-center gap-1.5 text-[11px] font-semibold",
+        current ? "text-[#323234]" : "text-[#58585E] hover:text-[#323234]",
       )}
     >
-      <Icon icon={section.icon} size={21} />
+      <span
+        className={cn(
+          "grid size-10 place-items-center rounded-xl transition-colors",
+          current ? "bg-card text-[#323234] shadow-sm" : "text-[#58585E] group-hover:bg-card/70",
+        )}
+      >
+        <Icon icon={section.icon} size={21} />
+      </span>
       <span className="max-w-[64px] text-center leading-4">{section.title}</span>
     </Link>
   );
@@ -142,13 +201,25 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [workspaceOpen, setWorkspaceOpen] = useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [searchCategory, setSearchCategory] = useState("all");
+  /**
+   * Filled after mount: the server has its own clock, so a time-based access check during the first
+   * render would hydrate a different answer than the browser shows.
+   */
+  const [now, setNow] = useState<Date | null>(null);
+  /** The account menu shows the profile name, so it reads the store on every render. */
+  const profile = readProfile();
   const navigate = useNavigate();
   const location = useLocation();
   const mainRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   // <main> is the app shell's scroll container, so the router's window-based scroll
   // restoration cannot reset it: do it here whenever the route changes.
   useEffect(() => {
@@ -180,6 +251,72 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
     [userId, email, wallet, transactions, loading, error],
   );
   const activeSection = findActiveSection(location.pathname);
+  /**
+   * Subscribed rather than read on render: a freeze or an access window switched on from a
+   * Security page has to lock the pages around it right away, not on the next route change. The
+   * security pages themselves stay reachable, so the owner can always undo the lock.
+   */
+  const security = useSyncExternalStore(subscribeSecurity, readSecurity, readSecurity);
+  const walletFrozen = security.frozen;
+  const walletClosed = now !== null && isWalletClosed(security, now);
+  /** Freezing and the access window both lock the wallet, and both are undone from Security. */
+  const locked = walletFrozen || walletClosed;
+  /**
+   * Security pages stay reachable while the wallet is closed: whoever closes the window has to be
+   * able to open it again from the same device. Everything else waits for the opening time.
+   */
+  const securitySectionOpen = location.pathname.startsWith("/security");
+  const accessClosed = locked && !securitySectionOpen;
+  /**
+   * With no query the dialog is a quick launcher, so it lists the most used pages instead of all of
+   * them. Transactions join the list as soon as the owner types, and make up the list on their own
+   * while the Transactions chip is selected.
+   */
+  const query = search.trim().toLowerCase();
+  const browsing = query.length === 0;
+  const transactionsInScope = searchCategory === "all" || searchCategory === "Transactions";
+  const matchedPages = searchPages
+    .filter((page) => searchCategory === "all" || page.category === searchCategory)
+    .filter(
+      (page) =>
+        !query || `${page.title} ${page.subtitle} ${page.terms}`.toLowerCase().includes(query),
+    );
+  const pageResults = (
+    browsing
+      ? [...matchedPages].sort((a, b) => searchRank(a.href) - searchRank(b.href))
+      : matchedPages
+  ).slice(0, searchPageLimit);
+  const transactionResults: SearchEntry[] = transactionsInScope
+    ? transactions
+        .filter((tx) =>
+          browsing
+            ? searchCategory === "Transactions"
+            : `${tx.counterparty_address} ${tx.note} ${tx.transfer_id}`
+                .toLowerCase()
+                .includes(query),
+        )
+        .slice(0, searchTransactionLimit)
+        .map((tx) => ({
+          id: `tx:${tx.id}`,
+          title: tx.counterparty_address,
+          subtitle: `${tx.direction === "sent" ? "Sent" : "Received"} · ${currency(tx.amount)} · ${dateText(tx.created_at)}`,
+          icon: tx.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon,
+          href: "/history" as const,
+        }))
+    : [];
+  const results: SearchEntry[] = [...pageResults, ...transactionResults];
+  const resultsHeading = browsing
+    ? searchCategory === "all"
+      ? "Most used"
+      : searchCategory
+    : "Results";
+  /** Every row leaves the dialog in the same state, so the next opening starts clean. */
+  const openResult = (href: NavHref) => {
+    setSearchOpen(false);
+    setSearch("");
+    setSearchCategory("all");
+    navigate({ to: href });
+  };
   const panelLink = ({ title: label, href, icon }: NavItem) => {
     const current = location.pathname === href;
     return (
@@ -187,12 +324,11 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
         key={href}
         to={href}
         onClick={() => setMobileNavOpen(false)}
-        tabIndex={workspaceOpen ? 0 : -1}
         aria-current={current ? "page" : undefined}
-        style={{ transitionDelay: workspaceOpen ? `${(navOrder.get(href) ?? 0) * 60}ms` : "0ms" }}
+        style={{ transitionDelay: `${(navOrder.get(href) ?? 0) * 60}ms` }}
         className={cn(
           "mb-1 flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
-          workspaceOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
+          "translate-y-0 opacity-100",
           current
             ? "bg-card text-[#323234] shadow-sm"
             : "text-[#58585E] hover:bg-card/70 hover:text-[#323234]",
@@ -200,23 +336,11 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
       >
         <Icon icon={icon} size={21} />
         <span>{label}</span>
-        {!current && <Icon icon={ArrowRight01Icon} size={15} className="ms-auto" />}
       </Link>
     );
   };
   const sectionNav = (section: NavSection) => (
     <div key={section.title} className="mb-1">
-      {/* A single-page section repeats its own name in the link, so the label is redundant. */}
-      {section.items.length > 1 && (
-        <p
-          className={cn(
-            "px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-[#8A8A93] transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
-            workspaceOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-          )}
-        >
-          {section.title}
-        </p>
-      )}
       {section.items.map((item) => panelLink(item))}
     </div>
   );
@@ -225,46 +349,23 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
    * rendered; the desktop panel stays scoped to the section of the current page.
    */
   const sidebar = (allSections: boolean) => (
-    <aside className="h-full w-[228px] shrink-0 overflow-y-auto bg-[#E9E9EC] px-3 py-4">
-      <Button
-        variant="ghost"
-        onClick={() => setWorkspaceOpen((v) => !v)}
-        aria-expanded={workspaceOpen}
-        className="mb-1 h-10 w-full justify-start gap-2.5 rounded-xl px-3 text-sm font-semibold text-[#58585E] hover:bg-card/70"
-      >
-        <span>WLT WALLET</span>
-        <Icon
-          icon={ArrowDown01Icon}
-          size={17}
-          className={cn(
-            "ms-auto transition-transform duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
-            !workspaceOpen && "-rotate-90",
-          )}
-        />
-      </Button>
-      <div
-        className={cn(
-          "grid transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
-          workspaceOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+    <aside className="h-full w-[228px] shrink-0 overflow-x-hidden overflow-y-auto bg-[#E9E9EC] px-3 py-4">
+      <nav>
+        {(allSections || !activeSection ? navSections : [activeSection]).map((section) =>
+          sectionNav(section),
         )}
-      >
-        <nav className="overflow-hidden">
-          {(allSections || !activeSection ? navSections : [activeSection]).map((section) =>
-            sectionNav(section),
-          )}
-        </nav>
-      </div>
+      </nav>
     </aside>
   );
   return (
     <WalletContext.Provider value={value}>
       <div className="min-h-dvh bg-shell text-foreground">
         <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground">
-          <div className="flex w-[330px] items-center gap-5">
-            <div className="grid size-10 place-items-center font-display text-xl font-bold">WL</div>
-            <div className="hidden rounded-full border border-primary/70 bg-primary/35 px-4 py-2 text-xs font-semibold lg:block">
-              WLT wallet
-            </div>
+          <div className="flex w-[330px] items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-2xl border border-primary/70 bg-primary/35 font-display text-lg font-bold">
+              L
+            </span>
+            <span className="font-display text-lg font-semibold tracking-tight">Louma</span>
           </div>
           <div className="ms-auto flex items-center gap-3">
             <Button
@@ -275,13 +376,6 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
               <Icon icon={ArrowUpRight01Icon} size={18} />
               Transfer
             </Button>
-            <div
-              aria-label="Agent"
-              className="flex h-9 items-center gap-2 rounded-full border border-violet-400/60 bg-white/5 px-4 text-sm font-semibold text-primary-foreground"
-            >
-              <Icon icon={SparklesIcon} size={18} />
-              Agent
-            </div>
             <Button
               variant="ghost"
               size="icon"
@@ -305,12 +399,16 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-72 rounded-[20px] p-3">
                 <DropdownMenuLabel>
-                  <strong className="block font-display">Wallet account</strong>
+                  <strong className="block font-display">{profile.displayName}</strong>
                   <span className="text-xs font-normal text-muted-foreground">
                     {email ?? "Not signed in"}
                   </span>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate({ to: "/profile" })}>
+                  <Icon icon={UserCircleIcon} />
+                  Profile
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => navigate({ to: "/wallet" })}>
                   <Icon icon={Wallet01Icon} />
                   Wallet
@@ -343,14 +441,17 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
          * corners, and it must match the dark shell for the arcs to read as curves.
          */}
         <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
-          <aside className="hidden h-full w-[72px] shrink-0 overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
-            {navSections.map((section) => (
-              <RailLink
-                key={section.title}
-                section={section}
-                current={section.title === activeSection?.title}
-              />
-            ))}
+          <aside className="hidden h-full w-[72px] shrink-0 overflow-x-hidden overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
+            {/* Account-level sections stay out of the rail: the account menu owns them. */}
+            {navSections
+              .filter((section) => !section.accountLevel)
+              .map((section) => (
+                <RailLink
+                  key={section.title}
+                  section={section}
+                  current={section.title === activeSection?.title}
+                />
+              ))}
           </aside>
           <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex">{sidebar(false)}</div>
           <div
@@ -362,7 +463,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
             )}
           >
             <div className="overflow-hidden">
-              <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-y-auto bg-[#E9E9EC] shadow-xl">
+              <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-x-hidden overflow-y-auto bg-[#E9E9EC] shadow-xl">
                 {sidebar(true)}
               </div>
             </div>
@@ -381,7 +482,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
             <div className="dotted-canvas pointer-events-none absolute bottom-0 start-0 h-32 w-[28%] [mask-image:linear-gradient(to_top_right,black,transparent)]" />
             <div className="relative mx-auto max-w-[1380px] p-5 lg:p-8">
               <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
-                <Icon icon={Home01Icon} size={17} />
+                <Icon icon={Home04Icon} size={17} />
                 {activeSection && activeSection.title !== title && (
                   <>
                     <Icon icon={ArrowRight01Icon} size={15} />
@@ -391,6 +492,17 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                 <Icon icon={ArrowRight01Icon} size={15} />
                 <strong className="text-foreground">{title}</strong>
               </div>
+              {locked && securitySectionOpen && (
+                <p
+                  role="status"
+                  className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-warning bg-warning/10 px-4 py-3 text-sm"
+                >
+                  <Icon icon={walletFrozen ? SnowIcon : SquareLock02Icon} size={18} />
+                  {walletFrozen
+                    ? "The wallet is frozen, so every transfer is refused until you unfreeze it."
+                    : `The wallet is closed until ${security.timeAccess.start} (time-based access). Only these security pages stay reachable.`}
+                </p>
+              )}
               {loading ? (
                 <p className="py-20 text-center text-muted-foreground">Loading wallet…</p>
               ) : error ? (
@@ -399,6 +511,32 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                   detail={error}
                   action={<Button onClick={() => void refresh()}>Try again</Button>}
                 />
+              ) : accessClosed ? (
+                <EmptyState
+                  title={walletFrozen ? "Wallet frozen" : "Wallet closed right now"}
+                  detail={
+                    walletFrozen
+                      ? "Every transfer is refused while the wallet is frozen. Nothing was taken: unfreeze it and the wallet works as before."
+                      : `Time-based access is on, so the wallet opens again at ${security.timeAccess.start} (${currentSession.city} time). Transfers and new sign-ins wait until then.`
+                  }
+                  action={
+                    walletFrozen ? (
+                      <Link to="/security/freeze">
+                        <Button variant="outline">
+                          <Icon icon={SnowIcon} size={17} />
+                          Open Freeze Wallet
+                        </Button>
+                      </Link>
+                    ) : (
+                      <Link to="/security/time-access">
+                        <Button variant="outline">
+                          <Icon icon={SquareLock02Icon} size={17} />
+                          Manage access window
+                        </Button>
+                      </Link>
+                    )
+                  }
+                />
               ) : (
                 children
               )}
@@ -406,63 +544,105 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
           </main>
         </div>
       </div>
-      <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <DialogContent className="top-[10%] max-w-3xl translate-y-0 rounded-[22px] p-5">
-          <DialogTitle className="sr-only">Search wallet</DialogTitle>
+      <Dialog
+        open={searchOpen}
+        onOpenChange={(open) => {
+          setSearchOpen(open);
+          if (!open) {
+            setSearch("");
+            setSearchCategory("all");
+          }
+        }}
+      >
+        {/*
+         * `[&>button]:hidden` drops the dialog's built-in close button (Escape still closes it), and
+         * `sm:rounded-[26px]` overrides the base dialog's `sm:rounded-lg` so the card stays a card.
+         */}
+        <DialogContent className="top-[10%] max-w-[880px] translate-y-0 gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl sm:rounded-[26px] [&>button]:hidden">
+          <DialogTitle className="sr-only">Search Louma</DialogTitle>
           <DialogDescription className="sr-only">
-            Find wallet pages and transactions
+            Search every page, security control, setting, and transaction in this wallet
           </DialogDescription>
-          <div className="flex h-14 items-center gap-3 rounded-xl border-2 border-primary px-4">
-            <Icon icon={Search01Icon} />
-            <Input
-              autoFocus
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="flex-1 border-0 shadow-none"
-              placeholder="Search pages and transactions"
-            />
-            <kbd className="rounded-md bg-secondary px-2 py-1 text-xs">Ctrl K</kbd>
+          <div className="p-3">
+            <div className="flex h-14 items-center gap-3 rounded-2xl border bg-card px-4 shadow-sm">
+              <Icon icon={Search01Icon} size={20} className="shrink-0 text-muted-foreground" />
+              <Input
+                autoFocus
+                aria-label="Search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search pages, transfers, and settings"
+                className="h-auto flex-1 border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:ring-0"
+              />
+              <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
+                <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                  Ctrl
+                </kbd>
+                <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                  K
+                </kbd>
+              </span>
+            </div>
           </div>
-          <div className="py-4">
-            <p className="mb-2 text-sm font-semibold">Pages</p>
-            {navItems
-              .filter((item) => item.title.toLowerCase().includes(search.toLowerCase()))
-              .map((item) => (
-                <Button
-                  key={item.href}
-                  variant="ghost"
-                  className="h-12 w-full justify-start gap-4 rounded-xl"
-                  onClick={() => {
-                    setSearchOpen(false);
-                    navigate({ to: item.href });
-                  }}
+          <div className="flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {searchCategories.map((category) => {
+              const active = category.id === searchCategory;
+              return (
+                <button
+                  key={category.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setSearchCategory(category.id)}
+                  className={cn(
+                    "h-9 shrink-0 cursor-pointer rounded-full px-4 text-[13px] font-semibold transition-colors",
+                    active
+                      ? "bg-[#323234] text-white"
+                      : "bg-secondary text-[#58585E] hover:bg-secondary/70 hover:text-[#323234]",
+                  )}
                 >
-                  <Icon icon={item.icon} />
-                  {item.title}
-                  <Icon icon={ArrowRight01Icon} size={16} className="ms-auto" />
-                </Button>
-              ))}
-            {search &&
-              transactions
-                .filter((tx) =>
-                  `${tx.counterparty_address} ${tx.note}`
-                    .toLowerCase()
-                    .includes(search.toLowerCase()),
-                )
-                .slice(0, 4)
-                .map((tx) => (
-                  <Button
-                    key={tx.id}
-                    variant="ghost"
-                    className="w-full justify-start"
-                    onClick={() => {
-                      setSearchOpen(false);
-                      navigate({ to: "/history" });
-                    }}
-                  >
-                    {tx.counterparty_address} · {currency(tx.amount)}
-                  </Button>
-                ))}
+                  {category.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="max-h-[48vh] min-h-[286px] overflow-y-auto px-3 pb-2">
+            <p className="px-2 py-3 text-[13px] font-semibold">{resultsHeading}</p>
+            {results.length ? (
+              results.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => openResult(entry.href)}
+                  className="flex w-full cursor-pointer items-center gap-3.5 rounded-2xl px-3 py-2.5 text-start transition-colors hover:bg-secondary"
+                >
+                  <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
+                    <Icon icon={entry.icon} size={20} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] font-semibold">{entry.title}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {entry.subtitle}
+                    </span>
+                  </span>
+                  <Icon
+                    icon={ArrowRight01Icon}
+                    size={16}
+                    className="shrink-0 text-muted-foreground"
+                  />
+                </button>
+              ))
+            ) : (
+              <p className="px-3 py-10 text-center text-sm text-muted-foreground">
+                No matches for “{search.trim()}”.
+              </p>
+            )}
+          </div>
+          <div className="flex items-center justify-between gap-3 border-t bg-secondary/40 px-4 py-3">
+            <p className="text-sm text-muted-foreground">Can't find what you need?</p>
+            <Button className="h-10 rounded-full px-5" onClick={() => openResult("/transfer")}>
+              <Icon icon={ArrowUpRight01Icon} size={18} />
+              New transfer
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

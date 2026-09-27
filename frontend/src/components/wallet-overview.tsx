@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -20,7 +20,8 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/use-wallet";
-import { currency, dateText } from "@/lib/wallet-format";
+import { readSecurity, securityScore } from "@/lib/demo-security";
+import { CURRENCY, currency, dateText, hiddenAmount } from "@/lib/wallet-format";
 import { navSections } from "@/lib/wallet-nav";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
 type OverviewMetric = {
@@ -30,38 +31,44 @@ type OverviewMetric = {
   suffix: string;
   hint: string;
   href: "/wallet" | "/history" | "/custom-address" | "/security";
+  /** Amounts are masked on the card while the balance privacy preference is on. */
+  sensitive?: boolean;
 };
 
 function Count({ value, suffix = "" }: { value: number; suffix?: string }) {
-  const [display, setDisplay] = useState(0);
-  useEffect(() => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
-      setDisplay(value);
-      return;
-    }
-    const start = performance.now();
-    let frame = 0;
-    const tick = (time: number) => {
-      const progress = Math.min((time - start) / 1100, 1);
-      setDisplay(value * (1 - Math.pow(1 - progress, 3)));
-      if (progress < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [value]);
+  const formatted = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: suffix ? 2 : 0,
+    maximumFractionDigits: suffix ? 2 : 0,
+  }).format(value);
+  const chars = formatted.split("");
   return (
     <>
-      {new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: suffix ? 2 : 0,
-        maximumFractionDigits: suffix ? 2 : 0,
-      }).format(display)}
+      {/*
+       * Number pop-in transition (transitions.dev "Number pop-in"):
+       * every character rises with blur and the last two ride in with
+       * stagger. `key` remounts the group whenever the value changes, which
+       * replays the enter animation — the declarative equivalent of the
+       * snippet's remove-class → swap digits → reflow → re-add-class replay.
+       * The suffix (" LMA") stays static outside the digit group.
+       */}
+      <span key={formatted} className="t-digit-group is-animating">
+        {chars.map((ch, i) => (
+          <span
+            key={i}
+            className="t-digit"
+            data-stagger={i === chars.length - 2 ? "1" : i === chars.length - 1 ? "2" : undefined}
+          >
+            {ch}
+          </span>
+        ))}
+      </span>
       {suffix}
     </>
   );
 }
 export function OverviewContent() {
   const { wallet, transactions } = useWallet();
+  const security = securityScore(readSecurity());
   const received = transactions.filter((t) => t.direction === "received");
   const sent = transactions.filter((t) => t.direction === "sent");
   const totalIn = received.reduce((sum, t) => sum + t.amount, 0);
@@ -89,15 +96,16 @@ export function OverviewContent() {
       icon: Wallet01Icon,
       label: "Available Balance",
       value: wallet?.balance ?? 0,
-      suffix: " WLT",
+      suffix: ` ${CURRENCY}`,
       hint: "Current wallet",
       href: "/wallet",
+      sensitive: true,
     },
     {
       icon: ArrowDownLeft01Icon,
       label: "Total Received",
       value: totalIn,
-      suffix: " WLT",
+      suffix: ` ${CURRENCY}`,
       hint: "All incoming transfers",
       href: "/history",
     },
@@ -105,7 +113,7 @@ export function OverviewContent() {
       icon: ArrowUpRight01Icon,
       label: "Total Sent",
       value: totalOut,
-      suffix: " WLT",
+      suffix: ` ${CURRENCY}`,
       hint: "All outgoing transfers",
       href: "/history",
     },
@@ -114,7 +122,7 @@ export function OverviewContent() {
       label: "Transactions",
       value: transactions.length,
       suffix: "",
-      hint: "Search and export history",
+      hint: "Search and export transactions",
       href: "/history",
     },
     {
@@ -127,10 +135,10 @@ export function OverviewContent() {
     },
     {
       icon: SecurityCheckIcon,
-      label: "Security Status",
-      value: wallet?.backup_confirmed ? 1 : 0,
-      suffix: " / 1",
-      hint: wallet?.backup_confirmed ? "Backup confirmed" : "Backup not confirmed",
+      label: "Security score",
+      value: security.score,
+      suffix: "",
+      hint: `${security.enabledCount} of ${security.total} protections are on, scored out of ${security.max}`,
       href: "/security",
     },
   ];
@@ -166,7 +174,11 @@ export function OverviewContent() {
               <Icon icon={ArrowRight01Icon} size={15} className="ms-auto text-muted-foreground" />
             </div>
             <strong className="mt-5 block font-display text-2xl">
-              <Count value={metric.value} suffix={metric.suffix} />
+              {metric.sensitive && wallet?.privacy_mode ? (
+                `${hiddenAmount} ${CURRENCY}`
+              ) : (
+                <Count value={metric.value} suffix={metric.suffix} />
+              )}
             </strong>
             <p className="mt-1 text-xs text-muted-foreground">{metric.hint}</p>
           </Link>
@@ -237,25 +249,25 @@ export function OverviewContent() {
             </p>
           </div>
           <div className="space-y-5 p-5">
-            {navSections.map((section) => (
-              <div key={section.title}>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  {section.title}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {section.items.map((item) => (
-                    <Link
-                      key={item.href}
-                      to={item.href}
-                      className="inline-flex items-center gap-2 rounded-full border bg-secondary/60 px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-card"
-                    >
-                      <Icon icon={item.icon} size={15} />
-                      {item.title}
-                    </Link>
-                  ))}
+            {/* Account-level sections are reached from the account menu, not listed here. */}
+            {navSections
+              .filter((section) => !section.accountLevel)
+              .map((section) => (
+                <div key={section.title}>
+                  <div className="flex flex-wrap gap-2">
+                    {section.items.map((item) => (
+                      <Link
+                        key={item.href}
+                        to={item.href}
+                        className="inline-flex items-center gap-2 rounded-full border bg-secondary/60 px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-card"
+                      >
+                        <Icon icon={item.icon} size={15} />
+                        {item.title}
+                      </Link>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           </div>
         </section>
       </div>
@@ -268,7 +280,12 @@ export function OverviewContent() {
         </div>
         {transactions.length ? (
           transactions.slice(0, 4).map((t) => (
-            <div key={t.id} className="flex items-center gap-3 border-b px-5 py-4 last:border-0">
+            <Link
+              key={t.id}
+              to="/history/$transferId"
+              params={{ transferId: t.transfer_id }}
+              className="flex items-center gap-3 border-b px-5 py-4 transition-colors last:border-0 hover:bg-secondary/40"
+            >
               <Icon
                 icon={t.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
                 className={t.direction === "sent" ? "text-primary" : "text-success"}
@@ -281,7 +298,7 @@ export function OverviewContent() {
                 {t.direction === "sent" ? "-" : "+"}
                 {currency(t.amount)}
               </strong>
-            </div>
+            </Link>
           ))
         ) : (
           <EmptyState

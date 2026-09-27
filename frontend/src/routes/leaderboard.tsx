@@ -1,15 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/components/wallet-shell";
-import { LeaderboardContent } from "@/components/wallet-pages";
+import { LeaderboardContent } from "@/components/leaderboard-page";
 export const Route = createFileRoute("/leaderboard")({
   head: () => ({
     meta: [
-      { title: "Wallet Leaderboard — WLT" },
-      { name: "description", content: "View opt-in WLT wallet balance and activity rankings." },
-      { property: "og:title", content: "Wallet Leaderboard — WLT" },
+      { title: "Wallet Leaderboard — Louma" },
+      {
+        name: "description",
+        content: "Compare wallet balances, transfers, and mining rewards on the Louma leaderboard.",
+      },
+      { property: "og:title", content: "Wallet Leaderboard — Louma" },
       {
         property: "og:description",
-        content: "View opt-in WLT wallet balance and activity rankings.",
+        content: "Compare wallet balances, transfers, and mining rewards on the Louma leaderboard.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

@@ -11,13 +11,31 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
-import { Route as HistoryRouteImport } from './routes/history'
+import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
 import { Route as MiningRouteImport } from './routes/mining'
-import { Route as SecurityRouteImport } from './routes/security'
-import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TransferRouteImport } from './routes/transfer'
 import { Route as WalletRouteImport } from './routes/wallet'
+import { Route as HistoryIndexRouteImport } from './routes/history/index'
+import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
+import { Route as ProfileIndexRouteImport } from './routes/profile/index'
+import { Route as ProfileUsernameRouteImport } from './routes/profile/$username'
+import { Route as ProfileRatingsRouteImport } from './routes/profile/ratings'
+import { Route as SecurityIndexRouteImport } from './routes/security/index'
+import { Route as SecurityAutoSignInRouteImport } from './routes/security/auto-sign-in'
+import { Route as SecurityDailyLimitRouteImport } from './routes/security/daily-limit'
+import { Route as SecurityDevicesRouteImport } from './routes/security/devices'
+import { Route as SecurityFreezeRouteImport } from './routes/security/freeze'
+import { Route as SecurityGeoLockRouteImport } from './routes/security/geo-lock'
+import { Route as SecurityIpWhitelistRouteImport } from './routes/security/ip-whitelist'
+import { Route as SecurityPasswordRouteImport } from './routes/security/password'
+import { Route as SecurityTimeAccessRouteImport } from './routes/security/time-access'
+import { Route as SecurityTransferApprovalRouteImport } from './routes/security/transfer-approval'
+import { Route as SecurityTransferPasswordRouteImport } from './routes/security/transfer-password'
+import { Route as SecurityTwoFactorRouteImport } from './routes/security/two-factor'
+import { Route as SettingsIndexRouteImport } from './routes/settings/index'
+import { Route as SettingsBackupRouteImport } from './routes/settings/backup'
+import { Route as SettingsPrivacyRouteImport } from './routes/settings/privacy'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -29,7 +47,7 @@ const CustomAddressRoute = CustomAddressRouteImport.update({
   path: '/custom-address',
   getParentRoute: () => rootRouteImport,
 } as any)
-const HistoryRoute = HistoryRouteImport.update({
+const HistoryRouteRoute = HistoryRouteRouteImport.update({
   id: '/history',
   path: '/history',
   getParentRoute: () => rootRouteImport,
@@ -44,16 +62,6 @@ const MiningRoute = MiningRouteImport.update({
   path: '/mining',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SecurityRoute = SecurityRouteImport.update({
-  id: '/security',
-  path: '/security',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const TransferRoute = TransferRouteImport.update({
   id: '/transfer',
   path: '/transfer',
@@ -64,87 +72,311 @@ const WalletRoute = WalletRouteImport.update({
   path: '/wallet',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HistoryIndexRoute = HistoryIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => HistoryRouteRoute,
+} as any)
+const HistoryTransferIdRoute = HistoryTransferIdRouteImport.update({
+  id: '/$transferId',
+  path: '/$transferId',
+  getParentRoute: () => HistoryRouteRoute,
+} as any)
+const ProfileIndexRoute = ProfileIndexRouteImport.update({
+  id: '/profile/',
+  path: '/profile/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileUsernameRoute = ProfileUsernameRouteImport.update({
+  id: '/profile/$username',
+  path: '/profile/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileRatingsRoute = ProfileRatingsRouteImport.update({
+  id: '/profile/ratings',
+  path: '/profile/ratings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityIndexRoute = SecurityIndexRouteImport.update({
+  id: '/security/',
+  path: '/security/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityAutoSignInRoute = SecurityAutoSignInRouteImport.update({
+  id: '/security/auto-sign-in',
+  path: '/security/auto-sign-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityDailyLimitRoute = SecurityDailyLimitRouteImport.update({
+  id: '/security/daily-limit',
+  path: '/security/daily-limit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityDevicesRoute = SecurityDevicesRouteImport.update({
+  id: '/security/devices',
+  path: '/security/devices',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityFreezeRoute = SecurityFreezeRouteImport.update({
+  id: '/security/freeze',
+  path: '/security/freeze',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityGeoLockRoute = SecurityGeoLockRouteImport.update({
+  id: '/security/geo-lock',
+  path: '/security/geo-lock',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityIpWhitelistRoute = SecurityIpWhitelistRouteImport.update({
+  id: '/security/ip-whitelist',
+  path: '/security/ip-whitelist',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityPasswordRoute = SecurityPasswordRouteImport.update({
+  id: '/security/password',
+  path: '/security/password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityTimeAccessRoute = SecurityTimeAccessRouteImport.update({
+  id: '/security/time-access',
+  path: '/security/time-access',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityTransferApprovalRoute =
+  SecurityTransferApprovalRouteImport.update({
+    id: '/security/transfer-approval',
+    path: '/security/transfer-approval',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const SecurityTransferPasswordRoute =
+  SecurityTransferPasswordRouteImport.update({
+    id: '/security/transfer-password',
+    path: '/security/transfer-password',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const SecurityTwoFactorRoute = SecurityTwoFactorRouteImport.update({
+  id: '/security/two-factor',
+  path: '/security/two-factor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsBackupRoute = SettingsBackupRouteImport.update({
+  id: '/settings/backup',
+  path: '/settings/backup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsPrivacyRoute = SettingsPrivacyRouteImport.update({
+  id: '/settings/privacy',
+  path: '/settings/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/history': typeof HistoryRouteRouteWithChildren
   '/custom-address': typeof CustomAddressRoute
-  '/history': typeof HistoryRoute
   '/leaderboard': typeof LeaderboardRoute
   '/mining': typeof MiningRoute
-  '/security': typeof SecurityRoute
-  '/settings': typeof SettingsRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
+  '/profile/$username': typeof ProfileUsernameRoute
+  '/profile/ratings': typeof ProfileRatingsRoute
+  '/security/auto-sign-in': typeof SecurityAutoSignInRoute
+  '/security/daily-limit': typeof SecurityDailyLimitRoute
+  '/security/devices': typeof SecurityDevicesRoute
+  '/security/freeze': typeof SecurityFreezeRoute
+  '/security/geo-lock': typeof SecurityGeoLockRoute
+  '/security/ip-whitelist': typeof SecurityIpWhitelistRoute
+  '/security/password': typeof SecurityPasswordRoute
+  '/security/time-access': typeof SecurityTimeAccessRoute
+  '/security/transfer-approval': typeof SecurityTransferApprovalRoute
+  '/security/transfer-password': typeof SecurityTransferPasswordRoute
+  '/security/two-factor': typeof SecurityTwoFactorRoute
+  '/settings/backup': typeof SettingsBackupRoute
+  '/settings/privacy': typeof SettingsPrivacyRoute
+  '/history/': typeof HistoryIndexRoute
+  '/profile/': typeof ProfileIndexRoute
+  '/security/': typeof SecurityIndexRoute
+  '/settings/': typeof SettingsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/custom-address': typeof CustomAddressRoute
-  '/history': typeof HistoryRoute
   '/leaderboard': typeof LeaderboardRoute
   '/mining': typeof MiningRoute
-  '/security': typeof SecurityRoute
-  '/settings': typeof SettingsRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
+  '/profile/$username': typeof ProfileUsernameRoute
+  '/profile/ratings': typeof ProfileRatingsRoute
+  '/security/auto-sign-in': typeof SecurityAutoSignInRoute
+  '/security/daily-limit': typeof SecurityDailyLimitRoute
+  '/security/devices': typeof SecurityDevicesRoute
+  '/security/freeze': typeof SecurityFreezeRoute
+  '/security/geo-lock': typeof SecurityGeoLockRoute
+  '/security/ip-whitelist': typeof SecurityIpWhitelistRoute
+  '/security/password': typeof SecurityPasswordRoute
+  '/security/time-access': typeof SecurityTimeAccessRoute
+  '/security/transfer-approval': typeof SecurityTransferApprovalRoute
+  '/security/transfer-password': typeof SecurityTransferPasswordRoute
+  '/security/two-factor': typeof SecurityTwoFactorRoute
+  '/settings/backup': typeof SettingsBackupRoute
+  '/settings/privacy': typeof SettingsPrivacyRoute
+  '/history': typeof HistoryIndexRoute
+  '/profile': typeof ProfileIndexRoute
+  '/security': typeof SecurityIndexRoute
+  '/settings': typeof SettingsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/history': typeof HistoryRouteRouteWithChildren
   '/custom-address': typeof CustomAddressRoute
-  '/history': typeof HistoryRoute
   '/leaderboard': typeof LeaderboardRoute
   '/mining': typeof MiningRoute
-  '/security': typeof SecurityRoute
-  '/settings': typeof SettingsRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
+  '/profile/$username': typeof ProfileUsernameRoute
+  '/profile/ratings': typeof ProfileRatingsRoute
+  '/security/auto-sign-in': typeof SecurityAutoSignInRoute
+  '/security/daily-limit': typeof SecurityDailyLimitRoute
+  '/security/devices': typeof SecurityDevicesRoute
+  '/security/freeze': typeof SecurityFreezeRoute
+  '/security/geo-lock': typeof SecurityGeoLockRoute
+  '/security/ip-whitelist': typeof SecurityIpWhitelistRoute
+  '/security/password': typeof SecurityPasswordRoute
+  '/security/time-access': typeof SecurityTimeAccessRoute
+  '/security/transfer-approval': typeof SecurityTransferApprovalRoute
+  '/security/transfer-password': typeof SecurityTransferPasswordRoute
+  '/security/two-factor': typeof SecurityTwoFactorRoute
+  '/settings/backup': typeof SettingsBackupRoute
+  '/settings/privacy': typeof SettingsPrivacyRoute
+  '/history/': typeof HistoryIndexRoute
+  '/profile/': typeof ProfileIndexRoute
+  '/security/': typeof SecurityIndexRoute
+  '/settings/': typeof SettingsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/custom-address'
     | '/history'
+    | '/custom-address'
     | '/leaderboard'
     | '/mining'
-    | '/security'
-    | '/settings'
     | '/transfer'
     | '/wallet'
+    | '/history/$transferId'
+    | '/profile/$username'
+    | '/profile/ratings'
+    | '/security/auto-sign-in'
+    | '/security/daily-limit'
+    | '/security/devices'
+    | '/security/freeze'
+    | '/security/geo-lock'
+    | '/security/ip-whitelist'
+    | '/security/password'
+    | '/security/time-access'
+    | '/security/transfer-approval'
+    | '/security/transfer-password'
+    | '/security/two-factor'
+    | '/settings/backup'
+    | '/settings/privacy'
+    | '/history/'
+    | '/profile/'
+    | '/security/'
+    | '/settings/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/custom-address'
-    | '/history'
     | '/leaderboard'
     | '/mining'
-    | '/security'
-    | '/settings'
     | '/transfer'
     | '/wallet'
+    | '/history/$transferId'
+    | '/profile/$username'
+    | '/profile/ratings'
+    | '/security/auto-sign-in'
+    | '/security/daily-limit'
+    | '/security/devices'
+    | '/security/freeze'
+    | '/security/geo-lock'
+    | '/security/ip-whitelist'
+    | '/security/password'
+    | '/security/time-access'
+    | '/security/transfer-approval'
+    | '/security/transfer-password'
+    | '/security/two-factor'
+    | '/settings/backup'
+    | '/settings/privacy'
+    | '/history'
+    | '/profile'
+    | '/security'
+    | '/settings'
   id:
     | '__root__'
     | '/'
-    | '/custom-address'
     | '/history'
+    | '/custom-address'
     | '/leaderboard'
     | '/mining'
-    | '/security'
-    | '/settings'
     | '/transfer'
     | '/wallet'
+    | '/history/$transferId'
+    | '/profile/$username'
+    | '/profile/ratings'
+    | '/security/auto-sign-in'
+    | '/security/daily-limit'
+    | '/security/devices'
+    | '/security/freeze'
+    | '/security/geo-lock'
+    | '/security/ip-whitelist'
+    | '/security/password'
+    | '/security/time-access'
+    | '/security/transfer-approval'
+    | '/security/transfer-password'
+    | '/security/two-factor'
+    | '/settings/backup'
+    | '/settings/privacy'
+    | '/history/'
+    | '/profile/'
+    | '/security/'
+    | '/settings/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  HistoryRouteRoute: typeof HistoryRouteRouteWithChildren
   CustomAddressRoute: typeof CustomAddressRoute
-  HistoryRoute: typeof HistoryRoute
   LeaderboardRoute: typeof LeaderboardRoute
   MiningRoute: typeof MiningRoute
-  SecurityRoute: typeof SecurityRoute
-  SettingsRoute: typeof SettingsRoute
   TransferRoute: typeof TransferRoute
   WalletRoute: typeof WalletRoute
+  ProfileUsernameRoute: typeof ProfileUsernameRoute
+  ProfileRatingsRoute: typeof ProfileRatingsRoute
+  SecurityAutoSignInRoute: typeof SecurityAutoSignInRoute
+  SecurityDailyLimitRoute: typeof SecurityDailyLimitRoute
+  SecurityDevicesRoute: typeof SecurityDevicesRoute
+  SecurityFreezeRoute: typeof SecurityFreezeRoute
+  SecurityGeoLockRoute: typeof SecurityGeoLockRoute
+  SecurityIpWhitelistRoute: typeof SecurityIpWhitelistRoute
+  SecurityPasswordRoute: typeof SecurityPasswordRoute
+  SecurityTimeAccessRoute: typeof SecurityTimeAccessRoute
+  SecurityTransferApprovalRoute: typeof SecurityTransferApprovalRoute
+  SecurityTransferPasswordRoute: typeof SecurityTransferPasswordRoute
+  SecurityTwoFactorRoute: typeof SecurityTwoFactorRoute
+  SettingsBackupRoute: typeof SettingsBackupRoute
+  SettingsPrivacyRoute: typeof SettingsPrivacyRoute
+  ProfileIndexRoute: typeof ProfileIndexRoute
+  SecurityIndexRoute: typeof SecurityIndexRoute
+  SettingsIndexRoute: typeof SettingsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -167,7 +399,7 @@ declare module '@tanstack/react-router' {
       id: '/history'
       path: '/history'
       fullPath: '/history'
-      preLoaderRoute: typeof HistoryRouteImport
+      preLoaderRoute: typeof HistoryRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/leaderboard': {
@@ -184,20 +416,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MiningRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/security': {
-      id: '/security'
-      path: '/security'
-      fullPath: '/security'
-      preLoaderRoute: typeof SecurityRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/transfer': {
       id: '/transfer'
       path: '/transfer'
@@ -212,19 +430,189 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WalletRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/history/': {
+      id: '/history/'
+      path: '/'
+      fullPath: '/history/'
+      preLoaderRoute: typeof HistoryIndexRouteImport
+      parentRoute: typeof HistoryRouteRoute
+    }
+    '/history/$transferId': {
+      id: '/history/$transferId'
+      path: '/$transferId'
+      fullPath: '/history/$transferId'
+      preLoaderRoute: typeof HistoryTransferIdRouteImport
+      parentRoute: typeof HistoryRouteRoute
+    }
+    '/profile/': {
+      id: '/profile/'
+      path: '/profile'
+      fullPath: '/profile/'
+      preLoaderRoute: typeof ProfileIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile/$username': {
+      id: '/profile/$username'
+      path: '/profile/$username'
+      fullPath: '/profile/$username'
+      preLoaderRoute: typeof ProfileUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile/ratings': {
+      id: '/profile/ratings'
+      path: '/profile/ratings'
+      fullPath: '/profile/ratings'
+      preLoaderRoute: typeof ProfileRatingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/': {
+      id: '/security/'
+      path: '/security'
+      fullPath: '/security/'
+      preLoaderRoute: typeof SecurityIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/auto-sign-in': {
+      id: '/security/auto-sign-in'
+      path: '/security/auto-sign-in'
+      fullPath: '/security/auto-sign-in'
+      preLoaderRoute: typeof SecurityAutoSignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/daily-limit': {
+      id: '/security/daily-limit'
+      path: '/security/daily-limit'
+      fullPath: '/security/daily-limit'
+      preLoaderRoute: typeof SecurityDailyLimitRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/devices': {
+      id: '/security/devices'
+      path: '/security/devices'
+      fullPath: '/security/devices'
+      preLoaderRoute: typeof SecurityDevicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/freeze': {
+      id: '/security/freeze'
+      path: '/security/freeze'
+      fullPath: '/security/freeze'
+      preLoaderRoute: typeof SecurityFreezeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/geo-lock': {
+      id: '/security/geo-lock'
+      path: '/security/geo-lock'
+      fullPath: '/security/geo-lock'
+      preLoaderRoute: typeof SecurityGeoLockRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/ip-whitelist': {
+      id: '/security/ip-whitelist'
+      path: '/security/ip-whitelist'
+      fullPath: '/security/ip-whitelist'
+      preLoaderRoute: typeof SecurityIpWhitelistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/password': {
+      id: '/security/password'
+      path: '/security/password'
+      fullPath: '/security/password'
+      preLoaderRoute: typeof SecurityPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/time-access': {
+      id: '/security/time-access'
+      path: '/security/time-access'
+      fullPath: '/security/time-access'
+      preLoaderRoute: typeof SecurityTimeAccessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/transfer-approval': {
+      id: '/security/transfer-approval'
+      path: '/security/transfer-approval'
+      fullPath: '/security/transfer-approval'
+      preLoaderRoute: typeof SecurityTransferApprovalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/transfer-password': {
+      id: '/security/transfer-password'
+      path: '/security/transfer-password'
+      fullPath: '/security/transfer-password'
+      preLoaderRoute: typeof SecurityTransferPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security/two-factor': {
+      id: '/security/two-factor'
+      path: '/security/two-factor'
+      fullPath: '/security/two-factor'
+      preLoaderRoute: typeof SecurityTwoFactorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/': {
+      id: '/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/backup': {
+      id: '/settings/backup'
+      path: '/settings/backup'
+      fullPath: '/settings/backup'
+      preLoaderRoute: typeof SettingsBackupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/privacy': {
+      id: '/settings/privacy'
+      path: '/settings/privacy'
+      fullPath: '/settings/privacy'
+      preLoaderRoute: typeof SettingsPrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
+interface HistoryRouteRouteChildren {
+  HistoryTransferIdRoute: typeof HistoryTransferIdRoute
+  HistoryIndexRoute: typeof HistoryIndexRoute
+}
+
+const HistoryRouteRouteChildren: HistoryRouteRouteChildren = {
+  HistoryTransferIdRoute: HistoryTransferIdRoute,
+  HistoryIndexRoute: HistoryIndexRoute,
+}
+
+const HistoryRouteRouteWithChildren = HistoryRouteRoute._addFileChildren(
+  HistoryRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  HistoryRouteRoute: HistoryRouteRouteWithChildren,
   CustomAddressRoute: CustomAddressRoute,
-  HistoryRoute: HistoryRoute,
   LeaderboardRoute: LeaderboardRoute,
   MiningRoute: MiningRoute,
-  SecurityRoute: SecurityRoute,
-  SettingsRoute: SettingsRoute,
   TransferRoute: TransferRoute,
   WalletRoute: WalletRoute,
+  ProfileUsernameRoute: ProfileUsernameRoute,
+  ProfileRatingsRoute: ProfileRatingsRoute,
+  SecurityAutoSignInRoute: SecurityAutoSignInRoute,
+  SecurityDailyLimitRoute: SecurityDailyLimitRoute,
+  SecurityDevicesRoute: SecurityDevicesRoute,
+  SecurityFreezeRoute: SecurityFreezeRoute,
+  SecurityGeoLockRoute: SecurityGeoLockRoute,
+  SecurityIpWhitelistRoute: SecurityIpWhitelistRoute,
+  SecurityPasswordRoute: SecurityPasswordRoute,
+  SecurityTimeAccessRoute: SecurityTimeAccessRoute,
+  SecurityTransferApprovalRoute: SecurityTransferApprovalRoute,
+  SecurityTransferPasswordRoute: SecurityTransferPasswordRoute,
+  SecurityTwoFactorRoute: SecurityTwoFactorRoute,
+  SettingsBackupRoute: SettingsBackupRoute,
+  SettingsPrivacyRoute: SettingsPrivacyRoute,
+  ProfileIndexRoute: ProfileIndexRoute,
+  SecurityIndexRoute: SecurityIndexRoute,
+  SettingsIndexRoute: SettingsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -52,18 +52,16 @@ export function MiningContent() {
   const { wallet } = useWallet();
   const [snapshot, setSnapshot] = useState(readMining);
   const [range, setRange] = useState<"24h" | "7d">("24h");
-  const isPremium = wallet?.is_premium ?? false;
   const series = useMemo(() => hashrateSeries(snapshot, range), [snapshot, range]);
   const refresh = () => setSnapshot(readMining());
 
   const toggleMining = () => {
     if (snapshot.active) stopMining();
-    else startMining(snapshot.boosted && isPremium);
+    else startMining(snapshot.boosted);
     refresh();
   };
 
   const toggleBoost = (value: boolean) => {
-    if (value && !isPremium) return;
     setBoosted(value);
     refresh();
   };
@@ -196,16 +194,13 @@ export function MiningContent() {
             <label className="flex items-start gap-3">
               <Switch
                 checked={snapshot.boosted}
-                disabled={!isPremium}
                 onCheckedChange={toggleBoost}
                 aria-label="Boosted mining"
               />
               <span className="text-sm">
                 <strong className="block font-semibold">Boosted mining</strong>
                 <span className="text-xs text-muted-foreground">
-                  {isPremium
-                    ? "Runs the farm at a higher clock. Expect warmer devices and more power draw."
-                    : "Premium wallets only. Your farm runs at the standard clock."}
+                  Runs the farm at a higher clock. Expect warmer devices and more power draw.
                 </span>
               </span>
             </label>

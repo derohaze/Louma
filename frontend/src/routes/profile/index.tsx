@@ -1,0 +1,27 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { WalletPage } from "@/components/wallet-shell";
+import { ProfileContent } from "@/components/profile-page";
+
+export const Route = createFileRoute("/profile/")({
+  head: () => ({
+    meta: [
+      { title: "Profile — Louma" },
+      {
+        name: "description",
+        content: "Your wallet account details, activity summary, and protection status.",
+      },
+      { property: "og:title", content: "Profile — Louma" },
+      {
+        property: "og:description",
+        content: "Your wallet account details, activity summary, and protection status.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+  }),
+  component: () => (
+    <WalletPage title="Profile">
+      <ProfileContent />
+    </WalletPage>
+  ),
+});

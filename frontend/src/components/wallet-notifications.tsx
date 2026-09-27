@@ -3,7 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   CreditCardAddIcon,
   MoneyReceive01Icon,
-  Notification03Icon,
+  Notification01Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -73,15 +73,23 @@ export function WalletNotifications({
           aria-expanded={open}
           className="relative rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
         >
-          <HugeiconsIcon icon={Notification03Icon} size={20} strokeWidth={1.7} />
-          {unreadCount > 0 && (
-            <span
-              aria-hidden
-              className="absolute -end-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#F5334F] px-1 text-[11px] font-bold leading-none text-white"
-            >
+          <HugeiconsIcon icon={Notification01Icon} size={20} strokeWidth={1.7} />
+          {/*
+           * Notification badge transition (transitions.dev "Notification badge"):
+           * the wrapper slides in diagonally while the dot pops independently,
+           * so the bell button itself never moves. `key` replays the enter
+           * animation whenever the unread count changes (new notification).
+           */}
+          <span
+            aria-hidden
+            data-open={unreadCount > 0 ? "true" : "false"}
+            key={unreadCount > 0 ? unreadCount : "empty"}
+            className="t-badge absolute -end-1 -top-1"
+          >
+            <span className="t-badge-dot grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#F5334F] px-1 text-[11px] font-bold leading-none text-white">
               {unreadCount}
             </span>
-          )}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent
