@@ -137,14 +137,7 @@ function RootShell({ children }: { children: ReactNode }) {
       <head>
         <HeadContent />
       </head>
-      {/*
-       * `suppressHydrationWarning`: browser extensions add attributes to <body> before React
-       * hydrates (Chrome extensions add `cz-shortcut-listen`, Grammarly and others add their own).
-       * React only sees that the attribute list differs, not why, so it warns about a mismatch it
-       * will not patch up — once per page load. Nothing server-rendered depends on <body>'s
-       * attributes, so the attribute-only mismatch is suppressed on this element alone.
-       */}
-      <body suppressHydrationWarning>
+      <body>
         {children}
         <Scripts />
       </body>

@@ -1,57 +1,24 @@
-import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
-import { useWallet, type Transaction } from "@/hooks/wallet-context";
-import { api, messageForError } from "@/lib/api";
+import { useWallet } from "@/hooks/use-wallet";
+import { lookupAddress, transactionStatus } from "@/lib/demo-wallet";
 import { currency, dateText, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, PageHeader } from "./wallet-shell";
-import { FactList, FormMessage, Panel } from "./security-ui";
+import { FactList, Panel, PreviewNote, StatusPill } from "./security-ui";
 
 /**
- * One transfer in full: what it cost, where it went, and whether it is final. The transfer is taken
- * from the loaded history when it is there, and fetched by its transfer id when it is not (a deep
- * link, or a transfer older than the loaded page).
+ * One transfer in full: what it cost, where it went, and whether it is final. The transaction is read
+ * from the wallet context rather than a route loader, so a new transfer is on the page without a
+ * reload.
  */
 export function TransactionDetailContent({ transferId }: { transferId: string }) {
   const { transactions } = useWallet();
-  const known = transactions.find((item) => item.transferId === transferId);
-  const [fetched, setFetched] = useState<Transaction | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(!known);
-
-  useEffect(() => {
-    if (known) {
-      setLoading(false);
-      return;
-    }
-    let active = true;
-    void api
-      .get<{ transfer: Transaction }>(`/api/v1/transfers/${encodeURIComponent(transferId)}`)
-      .then((response) => {
-        if (active) setFetched(response.transfer);
-      })
-      .catch((cause: unknown) => {
-        if (active) setError(messageForError(cause));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [known, transferId]);
-
-  const transaction = known ?? fetched;
-  if (loading) {
-    return <p className="py-20 text-center text-muted-foreground">Loading transaction…</p>;
-  }
+  const transaction = transactions.find((item) => item.transfer_id === transferId);
   if (!transaction) {
     return (
       <EmptyState
         title="Transaction not found"
-        detail={
-          error || "This transfer is not part of this wallet's history, or the link is out of date."
-        }
+        detail="This transfer is not part of this wallet's history, or the link is out of date."
         action={
           <Link to="/history">
             <Button variant="outline">All transactions</Button>
@@ -61,22 +28,22 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
     );
   }
   const sent = transaction.direction === "sent";
-  // The fee and net amount are recorded by the backend; the local rule is only used when the
-  // recorded values are missing (a transfer created before the fee column existed).
-  const tax = transaction.fee || transferTax(transaction.amount);
-  const net =
-    transaction.netAmount || (sent ? transferNet(transaction.amount) : transaction.amount);
+  const tax = transferTax(transaction.amount);
+  const net = sent ? transferNet(transaction.amount) : transaction.amount;
+  const status = transactionStatus(transaction);
+  const book = lookupAddress(transaction.counterparty_address);
   return (
     <>
       <PageHeader
         title={`${sent ? "Sent" : "Received"} ${currency(transaction.amount)}`}
-        subtitle={`${transaction.transferId} · ${dateText(transaction.createdAt)}`}
+        subtitle={`${transaction.transfer_id} · ${dateText(transaction.created_at)}`}
       />
       <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
         <div className="space-y-4">
           <Panel
             title="Breakdown"
             description="The 1% network tax is taken from the amount before the recipient is credited."
+            action={<StatusPill enabled={status === "Final"} on="Final" off={status} />}
           >
             <FactList
               items={[
@@ -86,41 +53,29 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
                   sent ? currency(tax) : `${currency(tax)} — paid by the sender`,
                 ],
                 [sent ? "Recipient received" : "Kept by this wallet", currency(net)],
-                [
-                  "Balance after",
-                  transaction.balanceAfter ? currency(transaction.balanceAfter) : "—",
-                ],
-                ["Status", "Completed"],
                 ["Note", transaction.note || "—"],
                 [
                   "Transfer ID",
                   <code key="id" className="break-all">
-                    {transaction.transferId}
+                    {transaction.transfer_id}
                   </code>,
                 ],
-                ["Recorded", dateText(transaction.createdAt)],
+                ["Recorded", dateText(transaction.created_at)],
               ]}
             />
           </Panel>
-          <Panel title="Counterparty" description="The wallet on the other side of the transfer.">
+          <Panel title="Counterparty" description="Who is on the other side of the transfer.">
             <div className="flex items-center gap-2 rounded-xl bg-secondary p-3">
               <code className="min-w-0 flex-1 break-all text-sm">
-                {transaction.counterpartyAddress}
+                {transaction.counterparty_address}
               </code>
-              <CopyButton text={transaction.counterpartyAddress} />
+              <CopyButton text={transaction.counterparty_address} />
             </div>
-            <p className="mt-4 text-sm text-muted-foreground">
-              {sent
-                ? "This is the address the LMA was sent to."
-                : "This is the address the LMA was sent from."}
+            <p className="mt-4 text-sm">
+              {book.status === "unknown"
+                ? "This address was not in your address book when the transfer was sent."
+                : book.detail}
             </p>
-            {transaction.correlationId && (
-              <div className="mt-4">
-                <FormMessage tone="ok">
-                  Reference for support: {transaction.correlationId}
-                </FormMessage>
-              </div>
-            )}
           </Panel>
         </div>
         <div className="space-y-4">
@@ -134,6 +89,10 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
               </Link>
             </div>
           </Panel>
+          <PreviewNote>
+            Preview build: the status is derived from the transfer date, and the tax is the flat 1%
+            that applies to every wallet.
+          </PreviewNote>
         </div>
       </div>
     </>

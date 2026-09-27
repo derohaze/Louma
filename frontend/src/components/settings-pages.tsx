@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CrownIcon } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,15 +12,15 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { useWallet } from "@/hooks/wallet-context";
-import { settingsPage } from "@/lib/settings-pages";
+import { useWallet } from "@/hooks/use-wallet";
+import { settingsPage } from "@/lib/demo-settings";
 import { dateText } from "@/lib/wallet-format";
 import { CopyButton, PageHeader } from "./wallet-shell";
 import { FactList, FormMessage, Panel } from "./security-ui";
 
 export function AccountContent() {
   const page = settingsPage("/settings");
-  const { user, wallet } = useWallet();
+  const { wallet, email, userId } = useWallet();
   const [message, setMessage] = useState("");
   return (
     <>
@@ -28,11 +29,11 @@ export function AccountContent() {
         <Panel title="Wallet identity" description="Details tied to this wallet account.">
           <FactList
             items={[
-              ["Sign-in email", user?.email ?? "—"],
+              ["Sign-in email", email ?? "—"],
               [
                 "Account ID",
                 <code key="id" className="break-all">
-                  {user?.id ?? "—"}
+                  {userId ?? "—"}
                 </code>,
               ],
               [
@@ -42,14 +43,13 @@ export function AccountContent() {
                   {wallet?.address && <CopyButton text={wallet.address} />}
                 </span>,
               ],
-              ["Wallet status", wallet?.status === "frozen" ? "Frozen" : "Active"],
-              ["Created", wallet?.createdAt ? dateText(wallet.createdAt) : "—"],
+              ["Created", wallet?.created_at ? dateText(wallet.created_at) : "—"],
             ]}
           />
         </Panel>
         <Panel
           title="Delete wallet account"
-          description="Permanently removes the wallet, its ledger accounts, and its history."
+          description="Permanently removes the wallet, its balance, and its history."
           tone="danger"
           action={
             <AlertDialog>
@@ -71,7 +71,7 @@ export function AccountContent() {
                   <AlertDialogAction
                     onClick={() =>
                       setMessage(
-                        "Account deletion is not available yet. Nothing was deleted; ask support to close an account with a balance.",
+                        "Account deletion is disabled in this preview. Nothing was deleted.",
                       )
                     }
                   >

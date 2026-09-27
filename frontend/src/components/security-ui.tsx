@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { Icon } from "./wallet-shell";
 
 /**
- * Shared building blocks for the Security and Settings pages. Both sections are lists of cards, so
- * the card, the status pill, and the key/value list are defined once here and reused everywhere
- * instead of being re-styled page by page.
+ * Shared building blocks for the Security and Settings pages. Both sections are lists of cards with
+ * one control each, so the card, the status pill, and the enable switch are defined once here and
+ * reused everywhere instead of being re-styled page by page.
  */
 export function Panel({
   title,
@@ -70,6 +72,28 @@ export function StatusPill({
   );
 }
 
+/** The switch every protection shares, paired with the word that describes its state. */
+export function FeatureToggle({
+  enabled,
+  label,
+  detail,
+  disabled,
+  onChange,
+}: {
+  enabled: boolean;
+  label: string;
+  detail?: string;
+  disabled?: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      {detail && <span className="text-sm text-muted-foreground">{detail}</span>}
+      <Switch checked={enabled} disabled={disabled} onCheckedChange={onChange} aria-label={label} />
+    </div>
+  );
+}
+
 /** Key/value facts, e.g. the current session or the wallet identity. */
 export function FactList({ items }: { items: [string, ReactNode][] }) {
   return (
@@ -91,6 +115,15 @@ export function FormMessage({ tone, children }: { tone: "ok" | "error"; children
       role="status"
       className={cn("text-sm", tone === "ok" ? "text-muted-foreground" : "text-destructive")}
     >
+      {children}
+    </p>
+  );
+}
+
+/** Reminder that the section is a frontend preview until the backend exists. */
+export function PreviewNote({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-xl border border-dashed px-4 py-3 text-xs text-muted-foreground">
       {children}
     </p>
   );

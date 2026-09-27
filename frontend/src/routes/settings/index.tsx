@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/components/wallet-shell";
 import { AccountContent } from "@/components/settings-pages";
-import { settingsPage } from "@/lib/settings-pages";
+import { settingsPage } from "@/lib/demo-settings";
 import { pageHead } from "@/lib/page-head";
 
 const page = settingsPage("/settings");

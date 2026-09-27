@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   ArrowDownLeft01Icon,
@@ -19,22 +19,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useWallet, type Transaction } from "@/hooks/wallet-context";
-import { api, messageForError } from "@/lib/api";
-import { LIMITS, isTransferTarget, parseAmount, sanitizeText } from "@/lib/validation";
-import {
-  currency,
-  dateText,
-  moneyToMinorUnits,
-  sumMoney,
-  transferNet,
-  transferTax,
-} from "@/lib/wallet-format";
+import { useWallet } from "@/hooks/use-wallet";
+import { readSecurity, transferBlockedReason } from "@/lib/demo-security";
+import { LIMITS, parseAmount, sanitizeText } from "@/lib/validation";
+import { lookupAddress, sendDemoTransfer, setDemoCustomAddress } from "@/lib/demo-wallet";
+import { currency, dateText, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
-import { FactList, FormMessage, Panel } from "./security-ui";
+import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
 
 export function TransferContent() {
-  const { wallet, security, refresh, refreshNotifications } = useWallet();
+  const { wallet, refresh } = useWallet();
   const [tab, setTab] = useState<"send" | "receive">("send");
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState("");
@@ -42,94 +36,59 @@ export function TransferContent() {
   const [transferPassword, setTransferPasswordInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  /**
-   * One idempotency key per transfer attempt. A retry of a request the API may already have applied
-   * carries the same key, so the backend replays the original result instead of moving funds twice.
-   */
-  const idempotencyKey = useRef<string | null>(null);
-  const frozen = security?.wallet.status === "frozen";
-  const needsPassword = security?.transferPassword.enabled ?? false;
-  const balanceMinor = wallet ? moneyToMinorUnits(wallet.balance) : 0;
-  const amountCheck = parseAmount(amount, { maxMinor: balanceMinor });
+  // Read on render rather than on mount so a security change made on another page applies to the
+  // next transfer.
+  const [security] = useState(readSecurity);
+  /** The transfer password is asked for on every transfer while its protection is on. */
+  const needsPassword = security.enabled["transfer-password"];
+  const recipient = address.trim() ? lookupAddress(address) : null;
+  /** The balance is the cap, so an amount over it is rejected here instead of at the store. */
+  const amountCheck = parseAmount(amount, { max: Number(wallet?.balance ?? LIMITS.maxAmount) });
   const amountValid = amountCheck.ok;
-  const decimalAmount = amountCheck.value;
-  const tax = amountValid ? transferTax(decimalAmount) : "0.0000";
-  const net = amountValid ? transferNet(decimalAmount) : "0.0000";
-  /** The address field is checked against the wallet on every keystroke, before the submit. */
-  const looksLikeOwnAddress =
-    address.trim().length > 0 && address.trim().toLowerCase() === wallet?.address.toLowerCase();
-
+  const numericAmount = amountCheck.value;
+  const tax = amountValid ? transferTax(numericAmount) : 0;
+  const net = amountValid ? transferNet(numericAmount) : 0;
   /** The transfer itself, split out so the confirmation dialog can run the same path. */
   const completeTransfer = async () => {
     setBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const key = idempotencyKey.current ?? crypto.randomUUID();
-      idempotencyKey.current = key;
-      await api.post<{ transaction: Transaction }>(
-        "/api/v1/transfers",
-        {
-          recipientAddress: address.trim(),
-          amount: decimalAmount,
-          note: sanitizeText(note, LIMITS.maxNoteLength),
-          ...(transferPassword ? { transferPassword } : {}),
-        },
-        { idempotencyKey: key },
-      );
-      idempotencyKey.current = null;
-      setConfirmOpen(false);
-      setMessage("Transfer completed.");
-      setAddress("");
-      setAmount("");
-      setNote("");
-      setTransferPasswordInput("");
-      await refresh();
-      // This transfer notified both sides: let the bell pick its notice up.
-      refreshNotifications();
-    } catch (cause) {
-      setError(messageForError(cause));
-    } finally {
-      setBusy(false);
-    }
+    sendDemoTransfer({
+      recipientAddress: address.trim(),
+      amount: numericAmount,
+      note: sanitizeText(note, LIMITS.maxNoteLength),
+    });
+    setBusy(false);
+    setConfirmOpen(false);
+    setMessage("Transfer completed.");
+    setAddress("");
+    setAmount("");
+    setNote("");
+    setTransferPasswordInput("");
+    await refresh();
   };
-
-  const send = (event: React.FormEvent) => {
+  const send = async (event: React.FormEvent) => {
     event.preventDefault();
-    setError("");
     setMessage("");
-    const recipient = address.trim();
-    if (!isTransferTarget(recipient)) {
-      setError("Enter a Louma wallet address (LMA-XXXX-XXXX-XXXX) or a @handle.");
+    if (!recipient || recipient.status === "invalid") {
+      setMessage(recipient?.detail ?? "Enter a wallet address or a @handle.");
       return;
     }
-    if (recipient.toLowerCase() === wallet?.address.toLowerCase()) {
-      setError("Use another wallet address.");
-      return;
-    }
-    if (!wallet) {
-      setError("The wallet is still loading. Try again in a moment.");
-      return;
-    }
-    if (frozen) {
-      setError("The wallet is frozen, so transfers are refused.");
-      return;
-    }
-    if (needsPassword && !transferPassword) {
-      setError("Enter your transfer password.");
+    if (recipient.status === "own") {
+      setMessage("Use another wallet address.");
       return;
     }
     if (!amountValid) {
-      setError(amountCheck.error);
+      setMessage(amountCheck.error);
       return;
     }
-    // A fresh attempt gets a fresh key; confirming the dialog reuses it.
-    idempotencyKey.current = crypto.randomUUID();
+    // Every switch on the Security pages is enforced here, in one place.
+    const blocked = transferBlockedReason(readSecurity(), { transferPassword });
+    if (blocked) {
+      setMessage(blocked);
+      return;
+    }
     setConfirmOpen(true);
   };
-
   return (
     <>
       <PageHeader title="Transfer" subtitle="Send or receive LMA between wallet addresses." />
@@ -158,19 +117,31 @@ export function TransferContent() {
                 onChange={(event) => setAddress(event.target.value)}
               />
             </label>
-            {looksLikeOwnAddress && (
-              <p className="text-xs text-destructive">This is your own address.</p>
+            {recipient && (
+              <p
+                className={`flex items-start gap-2 text-xs ${
+                  recipient.status === "known"
+                    ? "text-muted-foreground"
+                    : recipient.status === "unknown"
+                      ? "text-[#9A6B12]"
+                      : "text-destructive"
+                }`}
+              >
+                {recipient.detail}
+              </p>
             )}
             <label className="block text-sm font-semibold">
               Amount (LMA)
               <Input
                 className="mt-2"
                 required
-                type="text"
-                inputMode="decimal"
+                type="number"
+                min="0.0001"
+                max={wallet?.balance ?? 0}
+                step="0.0001"
                 value={amount}
                 onChange={(event) => setAmount(event.target.value)}
-                placeholder="0.0000"
+                placeholder="0.00"
               />
             </label>
             {amountValid && (
@@ -181,7 +152,7 @@ export function TransferContent() {
                     Network tax (1%): <strong>{currency(tax)}</strong>
                   </p>
                   <p className="mt-1 text-muted-foreground">
-                    {currency(decimalAmount)} leaves your wallet and {currency(net)} reaches the
+                    {currency(numericAmount)} leaves your wallet and {currency(net)} reaches the
                     recipient.
                   </p>
                 </div>
@@ -211,11 +182,11 @@ export function TransferContent() {
                 placeholder="What is this transfer for?"
               />
             </label>
-            <Button type="submit" disabled={busy || balanceMinor <= 0 || frozen}>
+            <Button type="submit" disabled={busy || !wallet?.balance || security.frozen}>
               <Icon icon={ArrowUpRight01Icon} size={17} />
               {busy ? "Sending…" : "Send LMA"}
             </Button>
-            {frozen && (
+            {security.frozen && (
               <p className="text-sm text-muted-foreground">
                 The wallet is frozen, so transfers are refused.{" "}
                 <Link to="/security/freeze" className="font-semibold text-primary">
@@ -224,19 +195,20 @@ export function TransferContent() {
                 .
               </p>
             )}
-            {balanceMinor <= 0 && (
+            {!wallet?.balance && (
               <p className="text-sm text-muted-foreground">
                 No funds available. Share your receiving address to receive LMA first.
               </p>
             )}
-            {error && <FormMessage tone="error">{error}</FormMessage>}
-            {message && <FormMessage tone="ok">{message}</FormMessage>}
+            {message && (
+              <p role="status" className="text-sm text-muted-foreground">
+                {message}
+              </p>
+            )}
           </form>
           <section className="h-fit rounded-[22px] border bg-card p-5 shadow-sm">
             <p className="text-sm text-muted-foreground">Available balance</p>
-            <p className="mt-3 font-display text-2xl font-bold">
-              {currency(wallet?.balance ?? "0")}
-            </p>
+            <p className="mt-3 font-display text-2xl font-bold">{currency(wallet?.balance ?? 0)}</p>
             <p className="mt-5 text-sm text-muted-foreground">
               Transfers are final after submission. Check the address before sending.
             </p>
@@ -277,19 +249,14 @@ export function TransferContent() {
           </div>
         </section>
       )}
-      <AlertDialog
-        open={confirmOpen}
-        onOpenChange={(open) => {
-          setConfirmOpen(open);
-          if (!open) idempotencyKey.current = null;
-        }}
-      >
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Send {currency(decimalAmount || "0")}?</AlertDialogTitle>
+            <AlertDialogTitle>Send {currency(numericAmount || 0)}?</AlertDialogTitle>
             <AlertDialogDescription>
-              {currency(decimalAmount || "0")} leaves your wallet for {address.trim()}. The 1%
-              network tax is {currency(tax)}, so the recipient receives {currency(net)}.
+              {currency(numericAmount || 0)} leaves your wallet for {address.trim()}
+              {recipient?.status === "unknown" ? ", which you have never transacted with" : ""}. The
+              1% network tax is {currency(tax)}, so the recipient receives {currency(net)}.
               {note.trim() ? ` Note: ${note.trim()}.` : ""} Transfers cannot be reversed.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -324,7 +291,7 @@ export function WalletContent() {
       <div className="grid gap-4 sm:grid-cols-2">
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
           <p className="text-sm text-muted-foreground">Available balance</p>
-          <p className="mt-4 font-display text-3xl font-bold">{currency(wallet?.balance ?? "0")}</p>
+          <p className="mt-4 font-display text-3xl font-bold">{currency(wallet?.balance ?? 0)}</p>
           <p className="mt-4 text-xs text-muted-foreground">
             {transactions.length} recorded transactions
           </p>
@@ -343,8 +310,7 @@ export function WalletContent() {
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           {[
             ["Receiving address", wallet?.address ?? "—"],
-            ["Status", wallet?.status === "frozen" ? "Frozen" : "Active"],
-            ["Created", wallet?.createdAt ? dateText(wallet.createdAt) : "—"],
+            ["Created", wallet?.created_at ? dateText(wallet.created_at) : "—"],
           ].map(([label, value]) => (
             <div key={label}>
               <p className="text-xs text-muted-foreground">{label}</p>
@@ -358,22 +324,20 @@ export function WalletContent() {
 }
 
 export function HistoryContent() {
-  const { transactions, nextCursor, loadMore } = useWallet();
+  const { transactions } = useWallet();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "sent" | "received">("all");
   const [page, setPage] = useState(1);
-  const [loadingMore, setLoadingMore] = useState(false);
   const pageSize = 8;
   const filtered = transactions.filter(
     (transaction) =>
       (filter === "all" || transaction.direction === filter) &&
-      `${transaction.counterpartyAddress} ${transaction.note} ${transaction.transferId}`
+      `${transaction.counterparty_address} ${transaction.note} ${transaction.transfer_id}`
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const shown = filtered.slice((page - 1) * pageSize, page * pageSize);
-  const sent = transactions.filter((item) => item.direction === "sent");
   return (
     <>
       <PageHeader title="Transactions" subtitle="Search and filter your transactions." />
@@ -406,10 +370,17 @@ export function HistoryContent() {
       </div>
       <div className="mb-4 grid gap-4 sm:grid-cols-4">
         {[
-          ["Loaded transactions", String(transactions.length)],
-          ["Sent", String(sent.length)],
-          ["Received", String(transactions.length - sent.length)],
-          ["Network tax paid", currency(sumMoney(sent.map((item) => item.fee)))],
+          ["All transactions", transactions.length],
+          ["Sent", transactions.filter((item) => item.direction === "sent").length],
+          ["Received", transactions.filter((item) => item.direction === "received").length],
+          [
+            "Network tax paid",
+            currency(
+              transactions
+                .filter((item) => item.direction === "sent")
+                .reduce((total, item) => total + transferTax(item.amount), 0),
+            ),
+          ],
         ].map(([label, value]) => (
           <div key={label} className="rounded-2xl border bg-card p-4 shadow-sm">
             <p className="text-sm text-muted-foreground">{label}</p>
@@ -421,31 +392,31 @@ export function HistoryContent() {
         <div className="border-b px-5 py-4 font-display font-semibold">Transactions</div>
         {shown.length ? (
           shown.map((transaction) => {
-            const isSent = transaction.direction === "sent";
+            const sent = transaction.direction === "sent";
             return (
               <div
                 key={transaction.id}
                 className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
               >
                 <Icon
-                  icon={isSent ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
-                  className={isSent ? "text-primary" : "text-success"}
+                  icon={sent ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
+                  className={sent ? "text-primary" : "text-success"}
                 />
                 <Link
                   to="/history/$transferId"
-                  params={{ transferId: transaction.transferId }}
+                  params={{ transferId: transaction.transfer_id }}
                   className="min-w-0 flex-1"
                 >
                   <p className="break-all text-sm font-semibold">
-                    {transaction.counterpartyAddress}
+                    {transaction.counterparty_address}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {dateText(transaction.createdAt)}
+                    {dateText(transaction.created_at)}
                     {transaction.note ? ` · ${transaction.note}` : ""}
                   </p>
                 </Link>
                 <strong className="text-sm">
-                  {isSent ? "-" : "+"}
+                  {sent ? "-" : "+"}
                   {currency(transaction.amount)}
                 </strong>
               </div>
@@ -479,37 +450,19 @@ export function HistoryContent() {
           />
         )}
       </section>
-      <div className="mt-4 flex items-center justify-between gap-3">
-        {nextCursor ? (
-          <Button
-            variant="outline"
-            disabled={loadingMore}
-            onClick={() => {
-              setLoadingMore(true);
-              void loadMore().finally(() => setLoadingMore(false));
-            }}
-          >
-            {loadingMore ? "Loading…" : "Load older transactions"}
+      {pages > 1 && (
+        <div className="mt-4 flex items-center justify-end gap-3">
+          <Button variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+            Previous
           </Button>
-        ) : (
-          <span className="text-xs text-muted-foreground">
-            Every recorded transaction is loaded.
+          <span className="text-sm">
+            {page} / {pages}
           </span>
-        )}
-        {pages > 1 && (
-          <div className="flex items-center gap-3">
-            <Button variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-              Previous
-            </Button>
-            <span className="text-sm">
-              {page} / {pages}
-            </span>
-            <Button variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
-              Next
-            </Button>
-          </div>
-        )}
-      </div>
+          <Button variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
+            Next
+          </Button>
+        </div>
+      )}
       <div className="mt-4">
         <FactList items={[["Tap a row", "Opens the full transfer detail"]]} />
       </div>
@@ -522,28 +475,19 @@ export function CustomAddressContent() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const next = wallet?.customAddressChangedAt
-    ? new Date(new Date(wallet.customAddressChangedAt).getTime() + 30 * 86400000)
+  const next = wallet?.custom_address_changed_at
+    ? new Date(new Date(wallet.custom_address_changed_at).getTime() + 30 * 86400000)
     : null;
   const waiting = next && next.getTime() > Date.now();
-  /** The handle is what the backend stores; the address shown includes the leading "@". */
-  const handle = (wallet?.customAddress ?? "").replace(/^@/, "");
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setMessage("");
-    setError("");
-    try {
-      await api.patch("/api/v1/wallet/custom-address", { address: name.trim().toLowerCase() });
-      setMessage("Address updated.");
-      setName("");
-      await refresh();
-    } catch (cause) {
-      setError(messageForError(cause));
-    } finally {
-      setBusy(false);
-    }
+    setDemoCustomAddress(`@${name.trim().toLowerCase()}`);
+    setBusy(false);
+    setMessage("Address updated.");
+    setName("");
+    await refresh();
   };
   return (
     <>
@@ -563,7 +507,7 @@ export function CustomAddressContent() {
             Next change available on {next.toLocaleDateString()}.
           </p>
         ) : (
-          <form onSubmit={(event) => void submit(event)} className="mt-5 space-y-4">
+          <form onSubmit={submit} className="mt-5 space-y-4">
             <label className="block text-sm font-semibold">
               New address
               <div className="mt-2 flex items-center gap-1 rounded-md border px-3">
@@ -581,20 +525,14 @@ export function CustomAddressContent() {
               </div>
             </label>
             <Button disabled={busy}>{busy ? "Saving…" : "Save address"}</Button>
-            {error && <FormMessage tone="error">{error}</FormMessage>}
             {message && <FormMessage tone="ok">{message}</FormMessage>}
           </form>
         )}
         <div className="mt-5">
-          <Panel title="How it works" description="What the custom address changes.">
-            <FactList
-              items={[
-                ["Handle", handle ? `@${handle}` : "Not set"],
-                ["Used for", "Receiving LMA as an alternative to the wallet address"],
-                ["Changes", "Once every 30 days"],
-              ]}
-            />
-          </Panel>
+          <PreviewNote>
+            Preview build: a custom address is stored for this session only, and it becomes your
+            public handle while it is set.
+          </PreviewNote>
         </div>
       </section>
     </>
