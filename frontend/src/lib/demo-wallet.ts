@@ -27,6 +27,7 @@ const wallet: Wallet = {
   // Still a column on the wallets table, but no screen reads it: the wallet has no account tiers.
   is_premium: true,
   privacy_mode: false,
+  // Still a column on the wallets table, but no screen reads it: the wallet has no backup page.
   backup_confirmed: true,
   custom_address_changed_at: null,
   created_at: isoAt(180, 9),
@@ -40,7 +41,6 @@ interface TransferSeed {
   counterpartyAddress: string;
   amount: number;
   note: string;
-  rating: number | null;
 }
 
 const seedTransfers: TransferSeed[] = [
@@ -51,7 +51,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "LMA-7K2M-5P9R-1X4B",
     amount: 320.5,
     note: "Payout",
-    rating: null,
   },
   {
     daysAgo: 6,
@@ -60,7 +59,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "@nour_store",
     amount: 45.25,
     note: "Order #4821",
-    rating: 5,
   },
   {
     daysAgo: 5,
@@ -69,7 +67,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "LMA-3D8F-6N1Q-0Z7C",
     amount: 128,
     note: "Design work",
-    rating: 4,
   },
   {
     daysAgo: 5,
@@ -78,7 +75,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "@layla_codes",
     amount: 76.4,
     note: "Refund",
-    rating: null,
   },
   {
     daysAgo: 4,
@@ -87,7 +83,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "LMA-9V4S-2B7H-5T1L",
     amount: 210.9,
     note: "Hosting share",
-    rating: 5,
   },
   {
     daysAgo: 4,
@@ -96,7 +91,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "LMA-1Q6N-8R3W-4Y9K",
     amount: 540,
     note: "Client payment",
-    rating: null,
   },
   {
     daysAgo: 3,
@@ -105,7 +99,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "@omar_dev",
     amount: 64.75,
     note: "API credits",
-    rating: 4,
   },
   {
     daysAgo: 3,
@@ -114,7 +107,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "@sara_media",
     amount: 132.25,
     note: "Invoice 1042",
-    rating: null,
   },
   {
     daysAgo: 2,
@@ -123,7 +115,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "LMA-5H1T-7C3M-9A6P",
     amount: 87.6,
     note: "Equipment",
-    rating: 3,
   },
   {
     daysAgo: 1,
@@ -132,7 +123,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "@karim_lma",
     amount: 415.8,
     note: "Monthly retainer",
-    rating: null,
   },
   {
     daysAgo: 1,
@@ -141,7 +131,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "@hala_studio",
     amount: 52.3,
     note: "Print order",
-    rating: 5,
   },
   {
     daysAgo: 0,
@@ -150,7 +139,6 @@ const seedTransfers: TransferSeed[] = [
     counterpartyAddress: "LMA-2B9E-4F6J-8L0N",
     amount: 96.15,
     note: "Team split",
-    rating: 4,
   },
 ];
 
@@ -168,7 +156,8 @@ const transactions: Transaction[] = seedTransfers.map((seed, index) => {
     counterparty_address: seed.counterpartyAddress,
     amount: seed.amount,
     note: seed.note,
-    recipient_rating: seed.rating,
+    // Still a column on the transactions table, but no screen reads it: transfers are not rated.
+    recipient_rating: null,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -202,6 +191,7 @@ export const sendDemoTransfer = (input: {
     counterparty_address: recipient,
     amount: amount.value,
     note: sanitizeText(input.note, LIMITS.maxNoteLength),
+    // Still a column on the transactions table, but no screen reads it: transfers are not rated.
     recipient_rating: null,
     created_at: now,
     updated_at: now,
@@ -211,8 +201,8 @@ export const sendDemoTransfer = (input: {
   return transferId;
 };
 
-/** The handle of a public profile: `@nour_store` belongs to the profile `nour_store`. */
-export const handleOf = (address: string): string | null =>
+/** Strips the leading "@" from a custom address, or returns null for a raw wallet address. */
+const handleOf = (address: string): string | null =>
   address.startsWith("@") ? address.slice(1) : null;
 
 export interface AddressLookup {
@@ -254,17 +244,6 @@ export const transactionStatus = (transaction: Transaction): "Confirming" | "Fin
     ? "Confirming"
     : "Final";
 
-export const findTransaction = (transferId: string): Transaction | undefined =>
-  transactions.find((transaction) => transaction.transfer_id === transferId);
-
-/** Records the recipient rating, which is the only rating field the transactions table owns. */
-export const setTransferRating = (transferId: string, stars: number): void => {
-  const transaction = findTransaction(transferId);
-  if (!transaction) return;
-  transaction.recipient_rating = stars > 0 ? stars : null;
-  transaction.updated_at = new Date().toISOString();
-};
-
 /** The custom address is a handle, so it is normalised and checked before it is stored. */
 export const setDemoCustomAddress = (newAddress: string): void => {
   const handle = sanitizeText(newAddress, LIMITS.maxHandleLength + 1).toLowerCase();
@@ -275,9 +254,7 @@ export const setDemoCustomAddress = (newAddress: string): void => {
   wallet.updated_at = now;
 };
 
-export const updateDemoWallet = (
-  preferences: Partial<Pick<Wallet, "privacy_mode" | "backup_confirmed">>,
-): void => {
+export const updateDemoWallet = (preferences: Partial<Pick<Wallet, "privacy_mode">>): void => {
   Object.assign(wallet, preferences);
   wallet.updated_at = new Date().toISOString();
 };

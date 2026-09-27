@@ -1,23 +1,20 @@
-import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Download01Icon, File01Icon, StarIcon, UserCircleIcon } from "@hugeicons/core-free-icons";
+import { Download01Icon, File01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/use-wallet";
-import { handleOf, lookupAddress, transactionStatus } from "@/lib/demo-wallet";
+import { lookupAddress, transactionStatus } from "@/lib/demo-wallet";
 import { exportTransactions, exportTransactionsCsv } from "@/lib/transaction-statement";
 import { currency, dateText, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
 import { FactList, Panel, PreviewNote, StatusPill } from "./security-ui";
-import { RatingDialog, StarRow } from "./ratings-pages";
 
 /**
  * One transfer in full: what it cost, where it went, whether it is final, and the receipt. The
- * transaction is read from the wallet context rather than a route loader, so rating it updates the
- * page without a reload.
+ * transaction is read from the wallet context rather than a route loader, so a new transfer is on
+ * the page without a reload.
  */
 export function TransactionDetailContent({ transferId }: { transferId: string }) {
   const { transactions } = useWallet();
-  const [ratingOpen, setRatingOpen] = useState(false);
   const transaction = transactions.find((item) => item.transfer_id === transferId);
   if (!transaction) {
     return (
@@ -36,7 +33,6 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
   const tax = transferTax(transaction.amount);
   const net = sent ? transferNet(transaction.amount) : transaction.amount;
   const status = transactionStatus(transaction);
-  const handle = handleOf(transaction.counterparty_address);
   const book = lookupAddress(transaction.counterparty_address);
   const receiptName = `transfer-${transaction.transfer_id.slice(0, 8)}`;
   return (
@@ -101,54 +97,9 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
                 ? "This address was not in your address book when the transfer was sent."
                 : book.detail}
             </p>
-            {handle && (
-              <div className="mt-4">
-                <Link to="/profile/$username" params={{ username: handle }}>
-                  <Button variant="outline" size="sm">
-                    <Icon icon={UserCircleIcon} size={16} />
-                    Open @{handle}'s public profile
-                  </Button>
-                </Link>
-              </div>
-            )}
           </Panel>
         </div>
         <div className="space-y-4">
-          <Panel
-            title="Your rating"
-            description={
-              sent
-                ? "Rate the wallet that received this transfer."
-                : "Ratings are left by the wallet that sent the transfer."
-            }
-          >
-            {sent ? (
-              <>
-                <div className="flex flex-wrap items-center gap-3">
-                  {transaction.recipient_rating ? (
-                    <>
-                      <StarRow stars={transaction.recipient_rating} size={18} />
-                      <span className="text-sm text-muted-foreground">
-                        You rated this transfer {transaction.recipient_rating}/5.
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-sm text-muted-foreground">Not rated yet.</span>
-                  )}
-                </div>
-                <Button className="mt-4" variant="outline" onClick={() => setRatingOpen(true)}>
-                  <Icon icon={StarIcon} size={17} />
-                  {transaction.recipient_rating ? "Update rating" : "Rate this transfer"}
-                </Button>
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {transaction.recipient_rating
-                  ? `The sender rated this transfer ${transaction.recipient_rating}/5.`
-                  : "The sender has not rated this transfer."}
-              </p>
-            )}
-          </Panel>
           <Panel title="What next" description="Where this transfer leads.">
             <div className="flex flex-wrap gap-2">
               <Link to="/history">
@@ -165,13 +116,6 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
           </PreviewNote>
         </div>
       </div>
-      <RatingDialog
-        open={ratingOpen}
-        onOpenChange={setRatingOpen}
-        target={transaction.counterparty_address}
-        transferId={transaction.transfer_id}
-        initialStars={transaction.recipient_rating ?? 0}
-      />
     </>
   );
 }

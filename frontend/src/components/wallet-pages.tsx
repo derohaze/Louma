@@ -9,7 +9,6 @@ import {
   PercentCircleIcon,
   QrCodeIcon,
   SnowIcon,
-  StarIcon,
 } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
@@ -47,7 +46,6 @@ import { exportTransactions, exportTransactionsCsv } from "@/lib/transaction-sta
 import { currency, dateText, hiddenAmount, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
 import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
-import { RatingDialog, StarRow } from "./ratings-pages";
 
 /** Whether the transfer approval needs a password, a one-time code, or both, right now. */
 const approvalNeeds = (security: SecuritySnapshot) => {
@@ -70,8 +68,6 @@ export function TransferContent() {
   const [message, setMessage] = useState("");
   const [lastId, setLastId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [ratingOpen, setRatingOpen] = useState(false);
-  const [ratingTarget, setRatingTarget] = useState("");
   // Read on render rather than on mount so a security change made on another page applies to the
   // next transfer, and switching a control here takes effect straight away.
   const [security, setSecurity] = useState(readSecurity);
@@ -97,9 +93,8 @@ export function TransferContent() {
   /** The transfer itself, split out so the confirmation dialog can run the same path. */
   const completeTransfer = async () => {
     setBusy(true);
-    const sentTo = address.trim();
     const transferId = sendDemoTransfer({
-      recipientAddress: sentTo,
+      recipientAddress: address.trim(),
       amount: numericAmount,
       note: sanitizeText(note, LIMITS.maxNoteLength),
     });
@@ -112,9 +107,6 @@ export function TransferContent() {
     setNote("");
     setTransferPasswordInput("");
     setCode("");
-    // The rating is asked for after the money moved, not before.
-    setRatingTarget(sentTo);
-    setRatingOpen(true);
     await refresh();
   };
   const send = async (event: React.FormEvent) => {
@@ -425,13 +417,6 @@ export function TransferContent() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <RatingDialog
-        open={ratingOpen}
-        onOpenChange={setRatingOpen}
-        target={ratingTarget}
-        transferId={lastId ?? ""}
-        onRated={() => void refresh()}
-      />
     </>
   );
 }
@@ -473,10 +458,9 @@ export function WalletContent() {
       </div>
       <section className="mt-4 rounded-[22px] border bg-card p-5 shadow-sm">
         <h2 className="font-display font-semibold">Wallet details</h2>
-        <div className="mt-5 grid gap-4 sm:grid-cols-3">
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
           {[
             ["Receiving address", wallet?.address ?? "—"],
-            ["Security backup", wallet?.backup_confirmed ? "Confirmed" : "Not confirmed"],
             ["Created", wallet?.created_at ? dateText(wallet.created_at) : "—"],
           ].map(([label, value]) => (
             <div key={label}>
@@ -491,15 +475,10 @@ export function WalletContent() {
 }
 
 export function HistoryContent() {
-  const { transactions, refresh } = useWallet();
+  const { transactions } = useWallet();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "sent" | "received">("all");
   const [page, setPage] = useState(1);
-  const [ratingTarget, setRatingTarget] = useState<{
-    transferId: string;
-    address: string;
-    stars: number;
-  } | null>(null);
   const pageSize = 8;
   const filtered = transactions.filter(
     (transaction) =>
@@ -610,27 +589,10 @@ export function HistoryContent() {
                     {transaction.note ? ` · ${transaction.note}` : ""}
                   </p>
                 </Link>
-                {transaction.recipient_rating && <StarRow stars={transaction.recipient_rating} />}
                 <strong className="text-sm">
                   {sent ? "-" : "+"}
                   {currency(transaction.amount)}
                 </strong>
-                {sent && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      setRatingTarget({
-                        transferId: transaction.transfer_id,
-                        address: transaction.counterparty_address,
-                        stars: transaction.recipient_rating ?? 0,
-                      })
-                    }
-                  >
-                    <Icon icon={StarIcon} size={16} />
-                    {transaction.recipient_rating ? "Rating" : "Rate"}
-                  </Button>
-                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -689,28 +651,8 @@ export function HistoryContent() {
           </Button>
         </div>
       )}
-      <RatingDialog
-        open={ratingTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setRatingTarget(null);
-        }}
-        target={ratingTarget?.address ?? ""}
-        transferId={ratingTarget?.transferId ?? ""}
-        initialStars={ratingTarget?.stars ?? 0}
-        onRated={() => void refresh()}
-      />
       <div className="mt-4">
-        <FactList
-          items={[
-            ["Tap a row", "Opens the full transfer, with its receipt"],
-            [
-              "Ratings",
-              <Link key="ratings" to="/profile/ratings" className="font-semibold text-primary">
-                Manage what your profile publishes
-              </Link>,
-            ],
-          ]}
-        />
+        <FactList items={[["Tap a row", "Opens the full transfer, with its receipt"]]} />
       </div>
     </>
   );

@@ -6,7 +6,6 @@ import {
   RankingIcon,
   Settings01Icon,
   Shield01Icon,
-  StarIcon,
   TransactionHistoryIcon,
   Wallet01Icon,
 } from "@hugeicons/core-free-icons";
@@ -22,7 +21,6 @@ import {
 } from "@/components/ui/select";
 import { useWallet } from "@/hooks/use-wallet";
 import { rankLeaderboard, readLeaderboard } from "@/lib/demo-leaderboard";
-import { ownHandle } from "@/lib/demo-ratings";
 import { readMining } from "@/lib/demo-mining";
 import { countryName, geoCountries, readSecurity, securityScore } from "@/lib/demo-security";
 import {
@@ -195,10 +193,10 @@ export function ProfileContent() {
         </div>
         <Panel
           title="Protection and preferences"
-          description="The two sections also live in the account menu, next to the profile other wallets see."
+          description="The two sections also live in the account menu, next to this page."
           bodyClassName="p-0"
         >
-          <div className="grid sm:grid-cols-3">
+          <div className="grid sm:grid-cols-2">
             <Link
               to="/security"
               className="flex items-center gap-3 border-b px-5 py-4 transition-colors hover:bg-secondary/50 sm:border-b-0 sm:border-e"
@@ -224,22 +222,7 @@ export function ProfileContent() {
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-semibold">Settings</span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Account, privacy, and backup
-                </span>
-              </span>
-            </Link>
-            <Link
-              to="/profile/$username"
-              params={{ username: ownHandle() }}
-              className="flex items-center gap-3 px-5 py-4 transition-colors hover:bg-secondary/50"
-            >
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
-                <Icon icon={StarIcon} size={19} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold">Public profile</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  @{ownHandle()} · ratings and visibility
+                  Account and privacy
                 </span>
               </span>
             </Link>

@@ -5,7 +5,6 @@ import {
   Home04Icon,
   QrCodeIcon,
   Settings01Icon,
-  StarIcon,
   TransactionHistoryIcon,
   TrophyIcon,
   UserCircleIcon,
@@ -25,7 +24,6 @@ export type NavHref =
   | "/custom-address"
   | "/leaderboard"
   | "/profile"
-  | "/profile/ratings"
   | SecurityHref
   | SettingsHref;
 
@@ -144,12 +142,6 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         icon: UserCircleIcon,
         searchTerms: "account details identity",
       },
-      {
-        title: "Ratings",
-        href: "/profile/ratings",
-        icon: StarIcon,
-        searchTerms: "reviews reputation public profile privacy",
-      },
     ],
   },
   {
@@ -185,9 +177,9 @@ export const navItems: NavItem[] = navSections.flatMap((section) => section.item
 /**
  * The section that owns `pathname`, or undefined for pages outside the navigation.
  *
- * Pages that live under a section without being nav entries — a single transaction, another
- * wallet's public profile — resolve through the longest matching prefix, so the panel keeps showing
- * the pages of the section the reader came from.
+ * Pages that live under a section without being nav entries — a single transaction — resolve
+ * through the longest matching prefix, so the panel keeps showing the pages of the section the
+ * reader came from.
  */
 export const findActiveSection = (pathname: string): NavSection | undefined =>
   navSections

@@ -6,7 +6,6 @@ import {
   EyeOffIcon,
   FirewallIcon,
   GlobeLockIcon,
-  Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
@@ -20,10 +19,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { useWallet } from "@/hooks/use-wallet";
-import { readSecurity, securityStateText } from "@/lib/demo-security";
 import {
   readSettings,
   settingsPage,
@@ -33,7 +30,7 @@ import {
 import { updateDemoWallet } from "@/lib/demo-wallet";
 import { dateText } from "@/lib/wallet-format";
 import { CopyButton, Icon, PageHeader } from "./wallet-shell";
-import { FactList, FormMessage, Panel, PreviewNote, StatusPill } from "./security-ui";
+import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
 
 /** Label, hint, and switch — the row shape every preference on these pages shares. */
 function SettingRow({
@@ -237,93 +234,6 @@ export function PrivacyContent() {
         <PreviewNote>
           Preview build: preferences are kept for this session only and reset on reload.
         </PreviewNote>
-      </div>
-    </>
-  );
-}
-
-export function BackupContent() {
-  const page = settingsPage("/settings/backup");
-  const { wallet, refresh } = useWallet();
-  const [security] = useState(readSecurity);
-  const [message, setMessage] = useState("");
-  return (
-    <>
-      <PageHeader title={page.title} subtitle={page.description} />
-      <div className="space-y-4">
-        <Panel
-          title="Receiving address"
-          description="A receiving address is only used to be paid, never to sign in."
-        >
-          <div className="flex items-center gap-2 rounded-xl bg-secondary p-3">
-            <code className="min-w-0 flex-1 break-all">{wallet?.address ?? "—"}</code>
-            {wallet?.address && <CopyButton text={wallet.address} />}
-          </div>
-          <label className="mt-4 flex items-center gap-3 text-sm">
-            <Checkbox
-              checked={wallet?.backup_confirmed ?? false}
-              onCheckedChange={(checked) => {
-                updateDemoWallet({ backup_confirmed: checked === true });
-                setMessage(checked === true ? "Backup confirmed." : "Backup confirmation removed.");
-                void refresh();
-              }}
-            />
-            I saved my receiving address somewhere safe
-          </label>
-          {message && (
-            <div className="mt-4">
-              <FormMessage tone="ok">{message}</FormMessage>
-            </div>
-          )}
-        </Panel>
-        <Panel
-          title="Recovery status"
-          description="What would get you back into the wallet if you lost access."
-        >
-          <FactList
-            items={[
-              [
-                "Address backed up",
-                <StatusPill
-                  key="backup"
-                  enabled={wallet?.backup_confirmed ?? false}
-                  on="Confirmed"
-                  off="Not confirmed"
-                />,
-              ],
-              [
-                "Two-factor authentication",
-                <StatusPill key="2fa" enabled={security.enabled["two-factor"]} on="On" off="Off" />,
-              ],
-              ["Backup codes", `${security.backupCodesRemaining} unused`],
-              ["Transfer password", securityStateText("transfer-password", security)],
-            ]}
-          />
-          {!security.enabled["two-factor"] && (
-            <div className="mt-4">
-              <Link to="/security/two-factor">
-                <Button variant="outline" size="sm">
-                  Set up two-factor authentication
-                </Button>
-              </Link>
-            </div>
-          )}
-        </Panel>
-        <Panel title="How to store your backup" description="Practical rules for a paper backup.">
-          <ul className="space-y-3 text-sm">
-            {[
-              "Write the receiving address on paper and keep it where you keep important documents.",
-              "Never send the address to anyone who asks for it: senders get it from you, not the other way around.",
-              "Keep the address and your backup codes in separate places, so one loss never exposes both.",
-              "Wallet staff never ask for your password or a code from your authenticator app.",
-            ].map((rule) => (
-              <li key={rule} className="flex items-start gap-2">
-                <Icon icon={Tick02Icon} size={17} className="mt-0.5 shrink-0 text-success" />
-                <span className="text-muted-foreground">{rule}</span>
-              </li>
-            ))}
-          </ul>
-        </Panel>
       </div>
     </>
   );

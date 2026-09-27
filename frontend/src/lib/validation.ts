@@ -16,7 +16,6 @@ export const LIMITS = {
   minPasswordLength: 8,
   maxPasswordLength: 128,
   maxNoteLength: 240,
-  maxRatingNoteLength: 200,
   maxSearchLength: 60,
   maxDisplayNameLength: 32,
   maxHandleLength: 24,
@@ -26,22 +25,17 @@ export const LIMITS = {
  * Drops control characters (and DEL), which never belong in text a person types. Written as a
  * filter rather than a regex so the intent is readable and no escape range has to be suppressed.
  */
-const withoutControlCharacters = (value: string, keepLineBreaks: boolean): string =>
+const withoutControlCharacters = (value: string): string =>
   [...value]
     .filter((character) => {
       const code = character.codePointAt(0) ?? 0;
-      if (code >= 0x20 && code !== 0x7f) return true;
-      return keepLineBreaks && (character === "\n" || character === "\t");
+      return code >= 0x20 && code !== 0x7f;
     })
     .join("");
 
 /** One line of text, with control characters removed and repeated spaces collapsed. */
 export const sanitizeText = (value: string, maxLength: number): string =>
-  withoutControlCharacters(value, false).replace(/\s+/g, " ").trim().slice(0, maxLength);
-
-/** Multi-line text keeps its line breaks; only control characters and the length are bounded. */
-export const sanitizeMultiline = (value: string, maxLength: number): string =>
-  withoutControlCharacters(value, true).trim().slice(0, maxLength);
+  withoutControlCharacters(value).replace(/\s+/g, " ").trim().slice(0, maxLength);
 
 /** Wallet address: the ticker plus three groups of four characters. */
 const WALLET_ADDRESS_PATTERN = /^LMA(-[A-Z0-9]{4}){3}$/;

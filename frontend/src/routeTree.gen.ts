@@ -19,8 +19,6 @@ import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as HistoryIndexRouteImport } from './routes/history/index'
 import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
 import { Route as ProfileIndexRouteImport } from './routes/profile/index'
-import { Route as ProfileUsernameRouteImport } from './routes/profile/$username'
-import { Route as ProfileRatingsRouteImport } from './routes/profile/ratings'
 import { Route as SecurityIndexRouteImport } from './routes/security/index'
 import { Route as SecurityAutoSignInRouteImport } from './routes/security/auto-sign-in'
 import { Route as SecurityDailyLimitRouteImport } from './routes/security/daily-limit'
@@ -34,7 +32,6 @@ import { Route as SecurityTransferApprovalRouteImport } from './routes/security/
 import { Route as SecurityTransferPasswordRouteImport } from './routes/security/transfer-password'
 import { Route as SecurityTwoFactorRouteImport } from './routes/security/two-factor'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
-import { Route as SettingsBackupRouteImport } from './routes/settings/backup'
 import { Route as SettingsPrivacyRouteImport } from './routes/settings/privacy'
 
 const IndexRoute = IndexRouteImport.update({
@@ -85,16 +82,6 @@ const HistoryTransferIdRoute = HistoryTransferIdRouteImport.update({
 const ProfileIndexRoute = ProfileIndexRouteImport.update({
   id: '/profile/',
   path: '/profile/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProfileUsernameRoute = ProfileUsernameRouteImport.update({
-  id: '/profile/$username',
-  path: '/profile/$username',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProfileRatingsRoute = ProfileRatingsRouteImport.update({
-  id: '/profile/ratings',
-  path: '/profile/ratings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SecurityIndexRoute = SecurityIndexRouteImport.update({
@@ -164,11 +151,6 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SettingsBackupRoute = SettingsBackupRouteImport.update({
-  id: '/settings/backup',
-  path: '/settings/backup',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SettingsPrivacyRoute = SettingsPrivacyRouteImport.update({
   id: '/settings/privacy',
   path: '/settings/privacy',
@@ -184,8 +166,6 @@ export interface FileRoutesByFullPath {
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
-  '/profile/$username': typeof ProfileUsernameRoute
-  '/profile/ratings': typeof ProfileRatingsRoute
   '/security/auto-sign-in': typeof SecurityAutoSignInRoute
   '/security/daily-limit': typeof SecurityDailyLimitRoute
   '/security/devices': typeof SecurityDevicesRoute
@@ -197,7 +177,6 @@ export interface FileRoutesByFullPath {
   '/security/transfer-approval': typeof SecurityTransferApprovalRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/settings/backup': typeof SettingsBackupRoute
   '/settings/privacy': typeof SettingsPrivacyRoute
   '/history/': typeof HistoryIndexRoute
   '/profile/': typeof ProfileIndexRoute
@@ -212,8 +191,6 @@ export interface FileRoutesByTo {
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
-  '/profile/$username': typeof ProfileUsernameRoute
-  '/profile/ratings': typeof ProfileRatingsRoute
   '/security/auto-sign-in': typeof SecurityAutoSignInRoute
   '/security/daily-limit': typeof SecurityDailyLimitRoute
   '/security/devices': typeof SecurityDevicesRoute
@@ -225,7 +202,6 @@ export interface FileRoutesByTo {
   '/security/transfer-approval': typeof SecurityTransferApprovalRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/settings/backup': typeof SettingsBackupRoute
   '/settings/privacy': typeof SettingsPrivacyRoute
   '/history': typeof HistoryIndexRoute
   '/profile': typeof ProfileIndexRoute
@@ -242,8 +218,6 @@ export interface FileRoutesById {
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
-  '/profile/$username': typeof ProfileUsernameRoute
-  '/profile/ratings': typeof ProfileRatingsRoute
   '/security/auto-sign-in': typeof SecurityAutoSignInRoute
   '/security/daily-limit': typeof SecurityDailyLimitRoute
   '/security/devices': typeof SecurityDevicesRoute
@@ -255,7 +229,6 @@ export interface FileRoutesById {
   '/security/transfer-approval': typeof SecurityTransferApprovalRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/settings/backup': typeof SettingsBackupRoute
   '/settings/privacy': typeof SettingsPrivacyRoute
   '/history/': typeof HistoryIndexRoute
   '/profile/': typeof ProfileIndexRoute
@@ -273,8 +246,6 @@ export interface FileRouteTypes {
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
-    | '/profile/$username'
-    | '/profile/ratings'
     | '/security/auto-sign-in'
     | '/security/daily-limit'
     | '/security/devices'
@@ -286,7 +257,6 @@ export interface FileRouteTypes {
     | '/security/transfer-approval'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/settings/backup'
     | '/settings/privacy'
     | '/history/'
     | '/profile/'
@@ -301,8 +271,6 @@ export interface FileRouteTypes {
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
-    | '/profile/$username'
-    | '/profile/ratings'
     | '/security/auto-sign-in'
     | '/security/daily-limit'
     | '/security/devices'
@@ -314,7 +282,6 @@ export interface FileRouteTypes {
     | '/security/transfer-approval'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/settings/backup'
     | '/settings/privacy'
     | '/history'
     | '/profile'
@@ -330,8 +297,6 @@ export interface FileRouteTypes {
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
-    | '/profile/$username'
-    | '/profile/ratings'
     | '/security/auto-sign-in'
     | '/security/daily-limit'
     | '/security/devices'
@@ -343,7 +308,6 @@ export interface FileRouteTypes {
     | '/security/transfer-approval'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/settings/backup'
     | '/settings/privacy'
     | '/history/'
     | '/profile/'
@@ -359,8 +323,6 @@ export interface RootRouteChildren {
   MiningRoute: typeof MiningRoute
   TransferRoute: typeof TransferRoute
   WalletRoute: typeof WalletRoute
-  ProfileUsernameRoute: typeof ProfileUsernameRoute
-  ProfileRatingsRoute: typeof ProfileRatingsRoute
   SecurityAutoSignInRoute: typeof SecurityAutoSignInRoute
   SecurityDailyLimitRoute: typeof SecurityDailyLimitRoute
   SecurityDevicesRoute: typeof SecurityDevicesRoute
@@ -372,7 +334,6 @@ export interface RootRouteChildren {
   SecurityTransferApprovalRoute: typeof SecurityTransferApprovalRoute
   SecurityTransferPasswordRoute: typeof SecurityTransferPasswordRoute
   SecurityTwoFactorRoute: typeof SecurityTwoFactorRoute
-  SettingsBackupRoute: typeof SettingsBackupRoute
   SettingsPrivacyRoute: typeof SettingsPrivacyRoute
   ProfileIndexRoute: typeof ProfileIndexRoute
   SecurityIndexRoute: typeof SecurityIndexRoute
@@ -449,20 +410,6 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/profile/'
       preLoaderRoute: typeof ProfileIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/profile/$username': {
-      id: '/profile/$username'
-      path: '/profile/$username'
-      fullPath: '/profile/$username'
-      preLoaderRoute: typeof ProfileUsernameRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/profile/ratings': {
-      id: '/profile/ratings'
-      path: '/profile/ratings'
-      fullPath: '/profile/ratings'
-      preLoaderRoute: typeof ProfileRatingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/security/': {
@@ -556,13 +503,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings/backup': {
-      id: '/settings/backup'
-      path: '/settings/backup'
-      fullPath: '/settings/backup'
-      preLoaderRoute: typeof SettingsBackupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/settings/privacy': {
       id: '/settings/privacy'
       path: '/settings/privacy'
@@ -595,8 +535,6 @@ const rootRouteChildren: RootRouteChildren = {
   MiningRoute: MiningRoute,
   TransferRoute: TransferRoute,
   WalletRoute: WalletRoute,
-  ProfileUsernameRoute: ProfileUsernameRoute,
-  ProfileRatingsRoute: ProfileRatingsRoute,
   SecurityAutoSignInRoute: SecurityAutoSignInRoute,
   SecurityDailyLimitRoute: SecurityDailyLimitRoute,
   SecurityDevicesRoute: SecurityDevicesRoute,
@@ -608,7 +546,6 @@ const rootRouteChildren: RootRouteChildren = {
   SecurityTransferApprovalRoute: SecurityTransferApprovalRoute,
   SecurityTransferPasswordRoute: SecurityTransferPasswordRoute,
   SecurityTwoFactorRoute: SecurityTwoFactorRoute,
-  SettingsBackupRoute: SettingsBackupRoute,
   SettingsPrivacyRoute: SettingsPrivacyRoute,
   ProfileIndexRoute: ProfileIndexRoute,
   SecurityIndexRoute: SecurityIndexRoute,

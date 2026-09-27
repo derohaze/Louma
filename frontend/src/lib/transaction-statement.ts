@@ -46,7 +46,7 @@ export function exportTransactions(rows: Transaction[], name = "wallet-history")
       pdf.text(
         `Tax 1% ${currency(facts.tax)} · ${facts.netLabel} ${currency(facts.net)}${
           row.note ? ` · ${row.note.slice(0, 30)}` : ""
-        }${row.recipient_rating ? ` · rated ${row.recipient_rating}/5` : ""}`,
+        }`,
         14,
         y + 10,
       );
@@ -73,7 +73,6 @@ export function exportTransactionsCsv(rows: Transaction[], name = "wallet-histor
     "Tax 1% (LMA)",
     "Net (LMA)",
     "Note",
-    "Recipient rating",
     "Status",
   ];
   const body = rows.map((row) => {
@@ -87,7 +86,6 @@ export function exportTransactionsCsv(rows: Transaction[], name = "wallet-histor
       facts.tax.toFixed(2),
       facts.net.toFixed(2),
       row.note,
-      row.recipient_rating ? `${row.recipient_rating}/5` : "",
       transactionStatus(row),
     ];
   });

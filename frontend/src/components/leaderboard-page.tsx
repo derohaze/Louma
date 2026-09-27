@@ -12,8 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useWallet } from "@/hooks/use-wallet";
-import { handleOf } from "@/lib/demo-wallet";
-import { ownHandle } from "@/lib/demo-ratings";
 import { readSettings } from "@/lib/demo-settings";
 import {
   leaderboardSorts,
@@ -33,25 +31,11 @@ const medalIcons: IconData[] = [MedalFirstPlaceIcon, MedalSecondPlaceIcon, Medal
 
 const changeText = (change: number) => `${change > 0 ? "+" : ""}${change.toFixed(1)}%`;
 
-/**
- * The address cell of a ranking row. A wallet that has a public profile turns into a link to it;
- * raw addresses stay plain text because there is nothing public to open.
- */
+/** The address cell of a ranking row, marked so the reader can find their own wallet. */
 function AddressCell({ entry }: { entry: LeaderboardEntry }) {
-  const handle = entry.isYou ? ownHandle() : handleOf(entry.address);
   return (
     <p className="truncate text-sm font-semibold">
-      {handle ? (
-        <Link
-          to="/profile/$username"
-          params={{ username: handle }}
-          className="transition-colors hover:text-primary"
-        >
-          {entry.address}
-        </Link>
-      ) : (
-        entry.address
-      )}
+      {entry.address}
       {entry.isYou && <span className="ms-2 text-xs text-primary">You</span>}
     </p>
   );

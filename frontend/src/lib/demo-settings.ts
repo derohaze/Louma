@@ -1,5 +1,5 @@
 import type { HugeiconsIcon } from "@hugeicons/react";
-import { DatabaseBackupIcon, EyeOffIcon, UserSettings01Icon } from "@hugeicons/core-free-icons";
+import { EyeOffIcon, UserSettings01Icon } from "@hugeicons/core-free-icons";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
@@ -7,7 +7,7 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
  * Wallet preferences that are not part of the wallet row itself. They live in their own in-memory
  * store for the same reason as the other demo stores: the settings API does not exist yet, and the
  * pages that read them (Privacy, Leaderboard) should keep working unchanged once it does.
- */ export type SettingsHref = "/settings" | "/settings/privacy" | "/settings/backup";
+ */ export type SettingsHref = "/settings" | "/settings/privacy";
 
 export interface SettingsPage {
   /** Page title, e.g. the breadcrumb and the browser tab. */
@@ -34,13 +34,6 @@ export const settingsPages: readonly SettingsPage[] = [
     href: "/settings/privacy",
     icon: EyeOffIcon,
     description: "Choose what the wallet shows and what others can see.",
-  },
-  {
-    title: "Backup",
-    label: "Backup",
-    href: "/settings/backup",
-    icon: DatabaseBackupIcon,
-    description: "Save your receiving address and recovery material.",
   },
 ];
 
