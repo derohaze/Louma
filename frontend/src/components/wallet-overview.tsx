@@ -99,7 +99,7 @@ export function OverviewContent() {
         ].map(([icon, label, value, suffix], index) => (
           <article
             key={label as string}
-            className="min-h-28 rounded-2xl border bg-card p-4 shadow-sm transition-transform duration-300 hover:-translate-y-0.5 animate-fade-in"
+            className="min-h-28 rounded-2xl border bg-card p-4 shadow-sm animate-fade-in"
             style={{ animationDelay: `${index * 75}ms`, animationFillMode: "both" }}
           >
             <div className="flex items-center gap-2 text-sm font-semibold">
