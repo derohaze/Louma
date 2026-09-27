@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import type { HugeiconsIcon } from "@hugeicons/react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   AlertCircleIcon,
   CheckmarkCircle02Icon,
@@ -8,7 +8,6 @@ import {
   LockIcon,
   RefreshIcon,
   SnowIcon,
-  SmartPhone01Icon,
 } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
@@ -23,159 +22,189 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { LIMITS, isStrongPassword, newPasswordError, passwordRules } from "@/lib/validation";
 import {
-  readSecurity,
-  regenerateBackupCodes,
-  securityStateText,
-  setFrozen,
-  setSecurityFeature,
-  setTransferPassword,
-  type SecuritySnapshot,
-} from "@/lib/demo-security";
-import {
-  readSessions,
-  revokeOtherSessions,
-  revokeSession,
-  type WalletSession,
-} from "@/lib/demo-sessions";
-import {
-  securityDevices,
-  securityFeature,
-  securityFreezeWallet,
-  type SecurityFeatureId,
-} from "@/lib/security-catalog";
+  LIMITS,
+  isOneTimeCode,
+  newPasswordError,
+  oneTimeCodeDigits,
+  passwordRules,
+} from "@/lib/validation";
+import { useWallet, type Session } from "@/hooks/wallet-context";
+import { api, messageForError } from "@/lib/api";
+import { securityDevices, securityFeature, securityFreezeWallet } from "@/lib/security-catalog";
 import { dateText } from "@/lib/wallet-format";
 import { CopyButton, Icon, PageHeader } from "./wallet-shell";
-import {
-  FactList,
-  FeatureToggle,
-  FormMessage,
-  Panel,
-  PreviewNote,
-  StatusPill,
-} from "./security-ui";
-
-type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
+import { FactList, FormMessage, Panel, StatusPill } from "./security-ui";
 
 /**
- * One page per control on the Security Center. Each page owns the settings for exactly one feature
- * and reads its wording from the catalog, so a name change lands in the sidebar, the page title,
- * and the browser tab at once.
+ * One page per control on the Security Center. Every action here hits the security API, and the
+ * result is re-read from `/api/v1/security`, so the switch on the Security Center can never show a
+ * state the backend has not stored.
  */
-function useSecurity() {
-  const [snapshot, setSnapshot] = useState(readSecurity);
-  const refresh = () => setSnapshot(readSecurity());
-  const enable = (id: SecurityFeatureId, value: boolean) => {
-    setSecurityFeature(id, value);
-    refresh();
-  };
-  return { snapshot, refresh, enable };
-}
 
-/** Shared header panel: description, switch, and the current state of the control. */
-function FeatureStatus({
-  id,
-  snapshot,
-  onChange,
-  children,
-}: {
-  id: SecurityFeatureId;
-  snapshot: SecuritySnapshot;
-  onChange: (enabled: boolean) => void;
-  children?: ReactNode;
-}) {
-  const feature = securityFeature(id);
-  const enabled = snapshot.enabled[id];
-  return (
-    <Panel
-      title={feature.title}
-      description={feature.description}
-      action={
-        <FeatureToggle enabled={enabled} label={`Enable ${feature.title}`} onChange={onChange} />
-      }
-    >
-      <p className="text-sm text-muted-foreground">{securityStateText(id, snapshot)}</p>
-      {children}
-    </Panel>
-  );
+function ErrorText({ error }: { error: string }) {
+  return error ? <FormMessage tone="error">{error}</FormMessage> : null;
 }
 
 export function TwoFactorContent() {
   const feature = securityFeature("two-factor");
-  const { snapshot, refresh, enable } = useSecurity();
-  const enabled = snapshot.enabled["two-factor"];
+  const { security, refreshSecurity } = useWallet();
+  const enabled = security?.twoFactor.enabled ?? false;
+  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [codes, setCodes] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const run = async (action: () => Promise<string>) => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      setMessage(await action());
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startSetup = () =>
+    run(async () => {
+      const response = await api.post<{ secret: string; otpauthUri: string }>(
+        "/api/v1/security/2fa/enable",
+        { password },
+      );
+      setSetup({ secret: response.secret, otpauthUri: response.otpauthUri });
+      setPassword("");
+      return "Scan the key in your authenticator app, then enter the six-digit code it shows.";
+    });
+
+  const confirmSetup = () =>
+    run(async () => {
+      const response = await api.post<{ recoveryCodes: string[] }>("/api/v1/security/2fa/confirm", {
+        code,
+      });
+      setCodes(response.recoveryCodes);
+      setSetup(null);
+      setCode("");
+      await refreshSecurity();
+      return "Two-factor authentication is on. Store your recovery codes now.";
+    });
+
+  const disable = () =>
+    run(async () => {
+      await api.post("/api/v1/security/2fa/disable", { password, code });
+      setPassword("");
+      setCode("");
+      setCodes([]);
+      await refreshSecurity();
+      return "Two-factor authentication is off.";
+    });
+
+  const regenerate = () =>
+    run(async () => {
+      const response = await api.post<{ recoveryCodes: string[] }>(
+        "/api/v1/security/2fa/recovery-codes",
+        { password, code },
+      );
+      setCodes(response.recoveryCodes);
+      setPassword("");
+      setCode("");
+      await refreshSecurity();
+      return "New recovery codes generated. The old set no longer works.";
+    });
+
   return (
     <>
       <PageHeader title={feature.title} subtitle={feature.description} />
       <div className="space-y-4">
-        <FeatureStatus
-          id="two-factor"
-          snapshot={snapshot}
-          onChange={(v) => enable("two-factor", v)}
+        <Panel
+          title={enabled ? "Two-factor authentication is on" : "Two-factor authentication is off"}
+          description={feature.description}
+          action={<StatusPill enabled={enabled} />}
         >
           {enabled ? (
-            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-secondary p-3">
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground">Authenticator key</p>
-                <code className="mt-1 block break-all text-sm font-semibold">
-                  {snapshot.twoFactorSecret}
-                </code>
+            <p className="text-sm text-muted-foreground">
+              {security?.twoFactor.recoveryCodesRemaining ?? 0} recovery codes remaining
+              {security?.twoFactor.enabledAt
+                ? ` · enabled ${dateText(security.twoFactor.enabledAt)}`
+                : ""}
+              .
+            </p>
+          ) : setup ? (
+            <div className="space-y-4">
+              <div className="flex flex-col items-start gap-4 sm:flex-row">
+                <div className="rounded-2xl border bg-white p-3">
+                  <QRCodeSVG
+                    value={setup.otpauthUri}
+                    size={148}
+                    level="M"
+                    marginSize={1}
+                    fgColor="#20123A"
+                    bgColor="#FFFFFF"
+                    aria-label="Authenticator setup QR code"
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-muted-foreground">Authenticator key</p>
+                  <div className="mt-1 flex items-center gap-2 rounded-xl bg-secondary p-3">
+                    <code className="min-w-0 flex-1 break-all text-sm font-semibold">
+                      {setup.secret}
+                    </code>
+                    <CopyButton text={setup.secret} />
+                  </div>
+                </div>
               </div>
-              <CopyButton text={snapshot.twoFactorSecret} />
+              <label className="block max-w-xs text-sm font-semibold">
+                Six-digit code
+                <Input
+                  className="mt-2"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={LIMITS.oneTimeCodeLength}
+                  value={code}
+                  onChange={(event) => setCode(oneTimeCodeDigits(event.target.value))}
+                  placeholder="123456"
+                />
+              </label>
+              <Button disabled={busy || !isOneTimeCode(code)} onClick={() => void confirmSetup()}>
+                <Icon icon={LockIcon} size={16} />
+                {busy ? "Checking…" : "Turn on two-factor"}
+              </Button>
             </div>
           ) : (
-            <p className="mt-4 flex items-start gap-2 rounded-xl border border-warning bg-warning/10 p-4 text-sm">
-              <Icon icon={AlertCircleIcon} size={18} className="mt-0.5 shrink-0" />
-              Without a second factor, anyone with your wallet password can sign in.
-            </p>
+            <div className="space-y-4">
+              <p className="flex items-start gap-2 rounded-xl border border-warning bg-warning/10 p-4 text-sm">
+                <Icon icon={AlertCircleIcon} size={18} className="mt-0.5 shrink-0" />
+                Without a second factor, anyone with your password can sign in.
+              </p>
+              <label className="block max-w-xs text-sm font-semibold">
+                Account password
+                <Input
+                  className="mt-2"
+                  type="password"
+                  autoComplete="current-password"
+                  maxLength={LIMITS.maxPasswordLength}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="••••••••"
+                />
+              </label>
+              <Button disabled={busy || !password} onClick={() => void startSetup()}>
+                {busy ? "Starting…" : "Start setup"}
+              </Button>
+            </div>
           )}
-        </FeatureStatus>
-        <Panel
-          title="Backup codes"
-          description="Single-use codes for when your authenticator app is unavailable."
-          action={
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm" disabled={!enabled}>
-                  <Icon icon={RefreshIcon} size={16} />
-                  Generate new codes
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Generate new backup codes?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Your current codes stop working immediately. Store the new set somewhere safe.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => {
-                      const next = regenerateBackupCodes();
-                      setCodes(next);
-                      setMessage("New backup codes generated.");
-                      refresh();
-                    }}
-                  >
-                    Generate codes
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          }
-        >
-          <FactList
-            items={[
-              ["Unused codes", `${snapshot.backupCodesRemaining} of 8`],
-              ["Used for", "Sign-in and password reset"],
-            ]}
-          />
-          {codes.length > 0 && (
-            <div className="mt-4 grid gap-2 sm:grid-cols-4">
+        </Panel>
+        {codes.length > 0 && (
+          <Panel
+            title="Recovery codes"
+            description="Each code works once. They are shown only now."
+          >
+            <div className="grid gap-2 sm:grid-cols-4">
               {codes.map((code) => (
                 <code
                   key={code}
@@ -185,16 +214,94 @@ export function TwoFactorContent() {
                 </code>
               ))}
             </div>
-          )}
-          {message && (
             <div className="mt-4">
-              <FormMessage tone="ok">{message}</FormMessage>
+              <CopyButton text={codes.join("\n")} />
+              <FormMessage tone="ok">
+                Copy them somewhere safe before leaving this page.
+              </FormMessage>
             </div>
-          )}
-        </Panel>
-        <PreviewNote>
-          Preview build: codes are generated in the browser and never stored or verified.
-        </PreviewNote>
+          </Panel>
+        )}
+        {enabled && (
+          <>
+            <Panel
+              title="Regenerate recovery codes"
+              description="Your password and a current authenticator or recovery code are required."
+            >
+              <div className="grid max-w-xl gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-semibold">
+                  Account password
+                  <Input
+                    className="mt-2"
+                    type="password"
+                    autoComplete="current-password"
+                    maxLength={LIMITS.maxPasswordLength}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </label>
+                <label className="block text-sm font-semibold">
+                  Authenticator or recovery code
+                  <Input
+                    className="mt-2"
+                    maxLength={64}
+                    value={code}
+                    onChange={(event) => setCode(event.target.value.slice(0, 64))}
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  disabled={busy || !password || code.length < 6}
+                  onClick={() => void regenerate()}
+                >
+                  <Icon icon={RefreshIcon} size={16} />
+                  Generate new codes
+                </Button>
+              </div>
+            </Panel>
+            <Panel
+              title="Turn off two-factor authentication"
+              description="Confirm with your password and a current code."
+              tone="danger"
+            >
+              <div className="grid max-w-xl gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-semibold">
+                  Account password
+                  <Input
+                    className="mt-2"
+                    type="password"
+                    autoComplete="current-password"
+                    maxLength={LIMITS.maxPasswordLength}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </label>
+                <label className="block text-sm font-semibold">
+                  Authenticator or recovery code
+                  <Input
+                    className="mt-2"
+                    maxLength={64}
+                    value={code}
+                    onChange={(event) => setCode(event.target.value.slice(0, 64))}
+                  />
+                </label>
+              </div>
+              <div className="mt-4">
+                <Button
+                  variant="destructive"
+                  disabled={busy || !password || code.length < 6}
+                  onClick={() => void disable()}
+                >
+                  Turn off two-factor
+                </Button>
+              </div>
+            </Panel>
+          </>
+        )}
+        {error && <ErrorText error={error} />}
+        {message && <FormMessage tone="ok">{message}</FormMessage>}
       </div>
     </>
   );
@@ -202,22 +309,22 @@ export function TwoFactorContent() {
 
 export function TransferPasswordContent() {
   const feature = securityFeature("transfer-password");
-  const { snapshot, refresh, enable } = useSecurity();
-  const enabled = snapshot.enabled["transfer-password"];
+  const { security, refreshSecurity } = useWallet();
+  const enabled = security?.transferPassword.enabled ?? false;
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   /** The same strength rules the sign-in credential applies, read from the shared validation module. */
   const rules = passwordRules(next);
-  const strong = isStrongPassword(next);
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setMessage("");
     setError("");
-    if (snapshot.transferPassword && current !== snapshot.transferPassword) {
-      setError("The current transfer password is incorrect.");
+    if (enabled && !current) {
+      setError("Enter your current transfer password.");
       return;
     }
     const problem = newPasswordError(next, confirm);
@@ -225,31 +332,43 @@ export function TransferPasswordContent() {
       setError(problem);
       return;
     }
-    setTransferPassword(next);
-    refresh();
-    setCurrent("");
-    setNext("");
-    setConfirm("");
-    setMessage("Transfer password updated.");
+    setBusy(true);
+    try {
+      await api.post("/api/v1/security/transfer-password", {
+        ...(enabled ? { currentPassword: current } : {}),
+        newPassword: next,
+      });
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+      setMessage("Transfer password updated.");
+      await refreshSecurity();
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <>
       <PageHeader title={feature.title} subtitle={feature.description} />
       <div className="space-y-4">
-        <FeatureStatus
-          id="transfer-password"
-          snapshot={snapshot}
-          onChange={(v) => enable("transfer-password", v)}
-        />
         <Panel
-          title={
-            snapshot.transferPasswordChangedAt
-              ? "Change transfer password"
-              : "Set transfer password"
-          }
+          title={enabled ? "Transfer password is set" : "No transfer password is set"}
+          description={feature.description}
+          action={<StatusPill enabled={enabled} />}
+        >
+          <p className="text-sm text-muted-foreground">
+            {enabled
+              ? "Every transfer asks for it before any LMA leaves the wallet."
+              : "Without it, a signed-in session can move funds on its own."}
+          </p>
+        </Panel>
+        <Panel
+          title={enabled ? "Change transfer password" : "Set transfer password"}
           description="Separate from your wallet password, so a leaked sign-in cannot move funds."
         >
-          <form onSubmit={submit} className="max-w-xl space-y-4">
+          <form onSubmit={(event) => void submit(event)} className="max-w-xl space-y-4">
             {enabled && (
               <label className="block text-sm font-semibold">
                 Current transfer password
@@ -294,11 +413,11 @@ export function TransferPasswordContent() {
                 </li>
               ))}
             </ul>
-            <Button type="submit" disabled={!enabled}>
+            <Button type="submit" disabled={busy}>
               <Icon icon={LockIcon} size={16} />
-              {snapshot.transferPasswordChangedAt ? "Update password" : "Set password"}
+              {busy ? "Saving…" : enabled ? "Update password" : "Set password"}
             </Button>
-            {error && <FormMessage tone="error">{error}</FormMessage>}
+            {error && <ErrorText error={error} />}
             {message && <FormMessage tone="ok">{message}</FormMessage>}
           </form>
         </Panel>
@@ -310,10 +429,6 @@ export function TransferPasswordContent() {
             ]}
           />
         </Panel>
-        <PreviewNote>
-          Preview build: the transfer password is kept in this session's memory so the transfer form
-          can check it, and it is never sent anywhere.
-        </PreviewNote>
       </div>
     </>
   );
@@ -322,17 +437,40 @@ export function TransferPasswordContent() {
 /** The emergency stop: one switch that holds every transfer until the owner unfreezes the wallet. */
 export function FreezeWalletContent() {
   const page = securityFreezeWallet;
-  const { snapshot, refresh } = useSecurity();
+  const { security, refresh, refreshSecurity } = useWallet();
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const frozen = snapshot.frozen;
-  const apply = (value: boolean) => {
-    setFrozen(value);
-    refresh();
-    setMessage(
-      value
-        ? "Wallet frozen. Nothing leaves it until you unfreeze."
-        : "Wallet unfrozen. Transfers work again.",
-    );
+  const [error, setError] = useState("");
+  const frozen = security?.wallet.status === "frozen";
+  const requiresCode = security?.twoFactor.enabled ?? false;
+  const apply = async (value: boolean) => {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      if (value) {
+        await api.post("/api/v1/security/freeze");
+      } else {
+        await api.post("/api/v1/security/unfreeze", {
+          password,
+          ...(requiresCode ? { code } : {}),
+        });
+      }
+      setPassword("");
+      setCode("");
+      setMessage(
+        value
+          ? "Wallet frozen. Nothing leaves it until you unfreeze."
+          : "Wallet unfrozen. Transfers work again.",
+      );
+      await Promise.all([refresh(), refreshSecurity()]);
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <>
@@ -347,14 +485,62 @@ export function FreezeWalletContent() {
           }
           action={
             frozen ? (
-              <Button onClick={() => apply(false)}>
-                <Icon icon={CheckmarkCircle02Icon} size={17} />
-                Unfreeze wallet
-              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button disabled={busy}>
+                    <Icon icon={CheckmarkCircle02Icon} size={17} />
+                    Unfreeze wallet
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Unfreeze this wallet?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Confirm with your account password
+                      {requiresCode ? " and a current authenticator code" : ""}. Transfers work
+                      again as soon as the wallet is active.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <div className="space-y-3 px-1">
+                    <label className="block text-sm font-semibold">
+                      Account password
+                      <Input
+                        className="mt-2"
+                        type="password"
+                        autoComplete="current-password"
+                        maxLength={LIMITS.maxPasswordLength}
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                      />
+                    </label>
+                    {requiresCode && (
+                      <label className="block text-sm font-semibold">
+                        Authenticator or recovery code
+                        <Input
+                          className="mt-2"
+                          maxLength={64}
+                          value={code}
+                          onChange={(event) => setCode(event.target.value.slice(0, 64))}
+                        />
+                      </label>
+                    )}
+                    {error && <ErrorText error={error} />}
+                  </div>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep it frozen</AlertDialogCancel>
+                    <AlertDialogAction
+                      disabled={busy || !password || (requiresCode && code.length < 6)}
+                      onClick={() => void apply(false)}
+                    >
+                      Unfreeze wallet
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             ) : (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="destructive">
+                  <Button variant="destructive" disabled={busy}>
                     <Icon icon={SnowIcon} size={17} />
                     Freeze wallet
                   </Button>
@@ -369,7 +555,9 @@ export function FreezeWalletContent() {
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={() => apply(true)}>Freeze wallet</AlertDialogAction>
+                    <AlertDialogAction onClick={() => void apply(true)}>
+                      Freeze wallet
+                    </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
@@ -386,6 +574,11 @@ export function FreezeWalletContent() {
                 : "No freeze is active. Use it when a device is lost or you suspect someone else has your credentials."}
             </p>
           </div>
+          {error && !frozen && (
+            <div className="mt-4">
+              <ErrorText error={error} />
+            </div>
+          )}
           {message && (
             <div className="mt-4">
               <FormMessage tone="ok">{message}</FormMessage>
@@ -398,9 +591,8 @@ export function FreezeWalletContent() {
           bodyClassName="p-0"
         >
           {[
-            ["Transfers out", "Refused before they are submitted"],
+            ["Transfers out", "Refused by the backend before they are submitted"],
             ["Sign-in on a new device", "Blocked"],
-            ["Sessions already open", "Locked out until you unfreeze"],
             ["LMA sent to you", "Still arrives and shows in Transactions"],
             ["Unfreezing", "Any time from this page, or from Security Center"],
           ].map(([label, value]) => (
@@ -413,32 +605,66 @@ export function FreezeWalletContent() {
             </div>
           ))}
         </Panel>
-        <PreviewNote>
-          Preview build: the freeze lives in this session's memory, so a page reload clears it.
-        </PreviewNote>
       </div>
     </>
   );
 }
 
-/** Icons per device type, so a phone and a laptop are told apart at a glance. */
-const sessionIcons: Record<WalletSession["kind"], IconData> = {
-  browser: ComputerIcon,
-  app: SmartPhone01Icon,
-};
-
 /** Every device signed in to the wallet, with a revoke action per row. */
 export function DevicesContent() {
   const page = securityDevices;
-  const { snapshot } = useSecurity();
-  const [sessions, setSessions] = useState(readSessions);
+  const { refreshSecurity } = useWallet();
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const otherSessions = sessions.filter((session) => !session.current).length;
-  const revoke = (session: WalletSession) => {
-    revokeSession(session.id);
-    setSessions(readSessions());
-    setMessage(`${session.device} signed out.`);
+  const [error, setError] = useState("");
+  const load = async () => {
+    const response = await api.get<{ sessions: Session[] }>("/api/v1/sessions");
+    setSessions(response.sessions);
+  };
+  useEffect(() => {
+    let active = true;
+    void api
+      .get<{ sessions: Session[] }>("/api/v1/sessions")
+      .then((response) => {
+        if (active) setSessions(response.sessions);
+      })
+      .catch((cause: unknown) => {
+        if (active) setError(messageForError(cause));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  const otherSessions = sessions.filter((session) => !session.current);
+  const revoke = async (session: Session) => {
+    setError("");
+    try {
+      await api.delete(`/api/v1/sessions/${encodeURIComponent(session.id)}`);
+      await load();
+      await refreshSecurity();
+      setMessage(`${session.device} signed out.`);
+    } catch (cause) {
+      setError(messageForError(cause));
+    }
+  };
+  const revokeOthers = async () => {
+    setError("");
+    let removed = 0;
+    for (const session of otherSessions) {
+      try {
+        await api.delete(`/api/v1/sessions/${encodeURIComponent(session.id)}`);
+        removed += 1;
+      } catch {
+        // A session that was already revoked is not a failure; keep going.
+      }
+    }
+    await load();
+    await refreshSecurity();
+    setMessage(`${removed} other session(s) signed out.`);
   };
   return (
     <>
@@ -449,8 +675,8 @@ export function DevicesContent() {
           description="Revoking a device ends its session on the next request."
           bodyClassName="p-0"
           action={
-            otherSessions > 0 ? (
-              <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+            otherSessions.length > 0 ? (
+              <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button variant="outline" size="sm">
                     Sign out other devices
@@ -458,7 +684,9 @@ export function DevicesContent() {
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>Sign out {otherSessions} other device(s)?</AlertDialogTitle>
+                    <AlertDialogTitle>
+                      Sign out {otherSessions.length} other device(s)?
+                    </AlertDialogTitle>
                     <AlertDialogDescription>
                       They stay signed in until their next request, then need your credentials and a
                       second factor again. This device is not affected.
@@ -466,13 +694,7 @@ export function DevicesContent() {
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() => {
-                        const removed = revokeOtherSessions();
-                        setSessions(readSessions());
-                        setMessage(`${removed} session(s) signed out.`);
-                      }}
-                    >
+                    <AlertDialogAction onClick={() => void revokeOthers()}>
                       Sign them out
                     </AlertDialogAction>
                   </AlertDialogFooter>
@@ -481,33 +703,30 @@ export function DevicesContent() {
             ) : undefined
           }
         >
-          {sessions.length ? (
+          {loading ? (
+            <p className="px-5 py-6 text-sm text-muted-foreground">Loading devices…</p>
+          ) : sessions.length ? (
             sessions.map((session) => (
               <div
                 key={session.id}
                 className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
               >
                 <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
-                  <Icon icon={sessionIcons[session.kind]} size={19} />
+                  <Icon icon={ComputerIcon} size={19} />
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{session.device}</p>
                   <p className="text-xs text-muted-foreground">
-                    {session.location} · {session.ip} · last active {dateText(session.lastActiveAt)}
+                    Last active {dateText(session.lastActiveAt)} · expires{" "}
+                    {dateText(session.expiresAt)}
                   </p>
                 </div>
-                {session.current ? (
-                  <StatusPill enabled on="This device" />
-                ) : session.trusted ? (
-                  <span className="shrink-0 rounded-full border bg-secondary px-2.5 py-1 text-[11px] font-semibold">
-                    Trusted
-                  </span>
-                ) : null}
+                {session.current && <StatusPill enabled on="This device" />}
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={session.current}
-                  onClick={() => revoke(session)}
+                  onClick={() => void revoke(session)}
                 >
                   {session.current ? "Current session" : "Sign out"}
                 </Button>
@@ -515,38 +734,19 @@ export function DevicesContent() {
             ))
           ) : (
             <p className="px-5 py-6 text-sm text-muted-foreground">
-              Only this device is signed in to the wallet.
+              No active sessions were found.
             </p>
           )}
         </Panel>
+        {error && <ErrorText error={error} />}
         {message && <FormMessage tone="ok">{message}</FormMessage>}
-        <Panel
-          title="Protection on every device"
-          description="The protections that guard this wallet wherever it is signed in."
-        >
-          <FactList
-            items={[
-              ["Two-factor", securityStateText("two-factor", snapshot)],
-              ["Transfer password", securityStateText("transfer-password", snapshot)],
-            ]}
-          />
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Link to="/security/two-factor">
-              <Button variant="outline" size="sm">
-                Two-factor
-              </Button>
-            </Link>
-            <Link to="/security/transfer-password">
-              <Button variant="outline" size="sm">
-                Transfer password
-              </Button>
-            </Link>
-          </div>
-        </Panel>
-        <PreviewNote>
-          Preview build: the device list is held in this session's memory, so revoking a device is
-          undone by a page reload and never reaches a real session.
-        </PreviewNote>
+        <div className="text-sm text-muted-foreground">
+          Lost a device?{" "}
+          <Link to="/security/freeze" className="font-semibold text-primary">
+            Freeze the wallet
+          </Link>{" "}
+          first, then revoke the session.
+        </div>
       </div>
     </>
   );

@@ -19,16 +19,17 @@ import {
   ArrowRight01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { useWallet } from "@/hooks/use-wallet";
-import { readSecurity, securityScore } from "@/lib/demo-security";
-import { CURRENCY, currency, dateText } from "@/lib/wallet-format";
+import { useWallet } from "@/hooks/wallet-context";
+import { securityScore } from "@/lib/security-state";
+import { currency, dateText, moneyChartValue, sumMoney } from "@/lib/wallet-format";
 import { navSections } from "@/lib/wallet-nav";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
 type OverviewMetric = {
   icon: Parameters<typeof Icon>[0]["icon"];
   label: string;
-  value: number;
-  suffix: string;
+  /** Money is already a formatted decimal string; counts stay numbers for the digit animation. */
+  money?: string;
+  count?: number;
   hint: string;
   href: "/wallet" | "/history" | "/custom-address" | "/security";
 };
@@ -65,12 +66,12 @@ function Count({ value, suffix = "" }: { value: number; suffix?: string }) {
   );
 }
 export function OverviewContent() {
-  const { wallet, transactions } = useWallet();
-  const security = securityScore(readSecurity());
+  const { wallet, transactions, security } = useWallet();
+  const score = securityScore(security);
   const received = transactions.filter((t) => t.direction === "received");
   const sent = transactions.filter((t) => t.direction === "sent");
-  const totalIn = received.reduce((sum, t) => sum + t.amount, 0);
-  const totalOut = sent.reduce((sum, t) => sum + t.amount, 0);
+  const totalIn = sumMoney(received.map((t) => t.amount));
+  const totalOut = sumMoney(sent.map((t) => t.amount));
   const chart = useMemo(() => {
     const days = Array.from({ length: 7 }, (_, i) => {
       const date = new Date();
@@ -80,12 +81,17 @@ export function OverviewContent() {
     });
     return days.map((date) => {
       const daily = transactions.filter(
-        (t) => new Date(t.created_at).toDateString() === date.toDateString(),
+        (t) => new Date(t.createdAt).toDateString() === date.toDateString(),
       );
       return {
         day: date.toLocaleDateString("en-US", { weekday: "short" }),
-        received: daily.filter((t) => t.direction === "received").reduce((n, t) => n + t.amount, 0),
-        sent: daily.filter((t) => t.direction === "sent").reduce((n, t) => n + t.amount, 0),
+        // Summed in integer minor units, then converted once for the chart coordinate.
+        received: moneyChartValue(
+          sumMoney(daily.filter((t) => t.direction === "received").map((t) => t.amount)),
+        ),
+        sent: moneyChartValue(
+          sumMoney(daily.filter((t) => t.direction === "sent").map((t) => t.amount)),
+        ),
       };
     });
   }, [transactions]);
@@ -93,49 +99,43 @@ export function OverviewContent() {
     {
       icon: Wallet01Icon,
       label: "Available Balance",
-      value: wallet?.balance ?? 0,
-      suffix: ` ${CURRENCY}`,
+      money: currency(wallet?.balance ?? "0"),
       hint: "Current wallet",
       href: "/wallet",
     },
     {
       icon: ArrowDownLeft01Icon,
       label: "Total Received",
-      value: totalIn,
-      suffix: ` ${CURRENCY}`,
-      hint: "All incoming transfers",
+      money: currency(totalIn),
+      hint: "Incoming transfers in the loaded history",
       href: "/history",
     },
     {
       icon: ArrowUpRight01Icon,
       label: "Total Sent",
-      value: totalOut,
-      suffix: ` ${CURRENCY}`,
-      hint: "All outgoing transfers",
+      money: currency(totalOut),
+      hint: "Outgoing transfers in the loaded history",
       href: "/history",
     },
     {
       icon: TransactionHistoryIcon,
       label: "Transactions",
-      value: transactions.length,
-      suffix: "",
+      count: transactions.length,
       hint: "Search and filter transactions",
       href: "/history",
     },
     {
       icon: QrCodeIcon,
       label: "Custom Address",
-      value: wallet ? 1 : 0,
-      suffix: "",
-      hint: "Receiving address",
+      count: wallet?.customAddress ? 1 : 0,
+      hint: wallet?.customAddress ? `@${wallet.customAddress.replace(/^@/, "")}` : "Not set",
       href: "/custom-address",
     },
     {
       icon: SecurityCheckIcon,
       label: "Security score",
-      value: security.score,
-      suffix: "",
-      hint: `${security.enabledCount} of ${security.total} protections are on, scored out of ${security.max}`,
+      count: score.score,
+      hint: `${score.enabledCount} of ${score.total} protections are on, scored out of ${score.max}`,
       href: "/security",
     },
   ];
@@ -171,7 +171,7 @@ export function OverviewContent() {
               <Icon icon={ArrowRight01Icon} size={15} className="ms-auto text-muted-foreground" />
             </div>
             <strong className="mt-5 block font-display text-2xl">
-              <Count value={metric.value} suffix={metric.suffix} />
+              {metric.money ?? <Count value={metric.count ?? 0} />}
             </strong>
             <p className="mt-1 text-xs text-muted-foreground">{metric.hint}</p>
           </Link>
@@ -200,7 +200,7 @@ export function OverviewContent() {
                   <CartesianGrid vertical={false} stroke="var(--border)" />
                   <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
                   <YAxis tickLine={false} axisLine={false} fontSize={12} width={38} />
-                  <Tooltip formatter={(value) => currency(Number(value))} />
+                  <Tooltip formatter={(value) => currency(Number(value).toFixed(4))} />
                   <Area
                     type="monotone"
                     dataKey="received"
@@ -276,7 +276,7 @@ export function OverviewContent() {
             <Link
               key={t.id}
               to="/history/$transferId"
-              params={{ transferId: t.transfer_id }}
+              params={{ transferId: t.transferId }}
               className="flex items-center gap-3 border-b px-5 py-4 transition-colors last:border-0 hover:bg-secondary/40"
             >
               <Icon
@@ -284,8 +284,8 @@ export function OverviewContent() {
                 className={t.direction === "sent" ? "text-primary" : "text-success"}
               />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{t.counterparty_address}</p>
-                <p className="text-xs text-muted-foreground">{dateText(t.created_at)}</p>
+                <p className="truncate text-sm font-semibold">{t.counterpartyAddress}</p>
+                <p className="text-xs text-muted-foreground">{dateText(t.createdAt)}</p>
               </div>
               <strong className="text-sm">
                 {t.direction === "sent" ? "-" : "+"}
