@@ -20,19 +20,11 @@ import { Route as HistoryIndexRouteImport } from './routes/history/index'
 import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
 import { Route as ProfileIndexRouteImport } from './routes/profile/index'
 import { Route as SecurityIndexRouteImport } from './routes/security/index'
-import { Route as SecurityAutoSignInRouteImport } from './routes/security/auto-sign-in'
-import { Route as SecurityDailyLimitRouteImport } from './routes/security/daily-limit'
 import { Route as SecurityDevicesRouteImport } from './routes/security/devices'
 import { Route as SecurityFreezeRouteImport } from './routes/security/freeze'
-import { Route as SecurityGeoLockRouteImport } from './routes/security/geo-lock'
-import { Route as SecurityIpWhitelistRouteImport } from './routes/security/ip-whitelist'
-import { Route as SecurityPasswordRouteImport } from './routes/security/password'
-import { Route as SecurityTimeAccessRouteImport } from './routes/security/time-access'
-import { Route as SecurityTransferApprovalRouteImport } from './routes/security/transfer-approval'
 import { Route as SecurityTransferPasswordRouteImport } from './routes/security/transfer-password'
 import { Route as SecurityTwoFactorRouteImport } from './routes/security/two-factor'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
-import { Route as SettingsPrivacyRouteImport } from './routes/settings/privacy'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -89,16 +81,6 @@ const SecurityIndexRoute = SecurityIndexRouteImport.update({
   path: '/security/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SecurityAutoSignInRoute = SecurityAutoSignInRouteImport.update({
-  id: '/security/auto-sign-in',
-  path: '/security/auto-sign-in',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecurityDailyLimitRoute = SecurityDailyLimitRouteImport.update({
-  id: '/security/daily-limit',
-  path: '/security/daily-limit',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SecurityDevicesRoute = SecurityDevicesRouteImport.update({
   id: '/security/devices',
   path: '/security/devices',
@@ -109,32 +91,6 @@ const SecurityFreezeRoute = SecurityFreezeRouteImport.update({
   path: '/security/freeze',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SecurityGeoLockRoute = SecurityGeoLockRouteImport.update({
-  id: '/security/geo-lock',
-  path: '/security/geo-lock',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecurityIpWhitelistRoute = SecurityIpWhitelistRouteImport.update({
-  id: '/security/ip-whitelist',
-  path: '/security/ip-whitelist',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecurityPasswordRoute = SecurityPasswordRouteImport.update({
-  id: '/security/password',
-  path: '/security/password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecurityTimeAccessRoute = SecurityTimeAccessRouteImport.update({
-  id: '/security/time-access',
-  path: '/security/time-access',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SecurityTransferApprovalRoute =
-  SecurityTransferApprovalRouteImport.update({
-    id: '/security/transfer-approval',
-    path: '/security/transfer-approval',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const SecurityTransferPasswordRoute =
   SecurityTransferPasswordRouteImport.update({
     id: '/security/transfer-password',
@@ -151,11 +107,6 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SettingsPrivacyRoute = SettingsPrivacyRouteImport.update({
-  id: '/settings/privacy',
-  path: '/settings/privacy',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -166,18 +117,10 @@ export interface FileRoutesByFullPath {
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
-  '/security/auto-sign-in': typeof SecurityAutoSignInRoute
-  '/security/daily-limit': typeof SecurityDailyLimitRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
-  '/security/geo-lock': typeof SecurityGeoLockRoute
-  '/security/ip-whitelist': typeof SecurityIpWhitelistRoute
-  '/security/password': typeof SecurityPasswordRoute
-  '/security/time-access': typeof SecurityTimeAccessRoute
-  '/security/transfer-approval': typeof SecurityTransferApprovalRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/settings/privacy': typeof SettingsPrivacyRoute
   '/history/': typeof HistoryIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -191,18 +134,10 @@ export interface FileRoutesByTo {
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
-  '/security/auto-sign-in': typeof SecurityAutoSignInRoute
-  '/security/daily-limit': typeof SecurityDailyLimitRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
-  '/security/geo-lock': typeof SecurityGeoLockRoute
-  '/security/ip-whitelist': typeof SecurityIpWhitelistRoute
-  '/security/password': typeof SecurityPasswordRoute
-  '/security/time-access': typeof SecurityTimeAccessRoute
-  '/security/transfer-approval': typeof SecurityTransferApprovalRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/settings/privacy': typeof SettingsPrivacyRoute
   '/history': typeof HistoryIndexRoute
   '/profile': typeof ProfileIndexRoute
   '/security': typeof SecurityIndexRoute
@@ -218,18 +153,10 @@ export interface FileRoutesById {
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
-  '/security/auto-sign-in': typeof SecurityAutoSignInRoute
-  '/security/daily-limit': typeof SecurityDailyLimitRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
-  '/security/geo-lock': typeof SecurityGeoLockRoute
-  '/security/ip-whitelist': typeof SecurityIpWhitelistRoute
-  '/security/password': typeof SecurityPasswordRoute
-  '/security/time-access': typeof SecurityTimeAccessRoute
-  '/security/transfer-approval': typeof SecurityTransferApprovalRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/settings/privacy': typeof SettingsPrivacyRoute
   '/history/': typeof HistoryIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -246,18 +173,10 @@ export interface FileRouteTypes {
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
-    | '/security/auto-sign-in'
-    | '/security/daily-limit'
     | '/security/devices'
     | '/security/freeze'
-    | '/security/geo-lock'
-    | '/security/ip-whitelist'
-    | '/security/password'
-    | '/security/time-access'
-    | '/security/transfer-approval'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/settings/privacy'
     | '/history/'
     | '/profile/'
     | '/security/'
@@ -271,18 +190,10 @@ export interface FileRouteTypes {
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
-    | '/security/auto-sign-in'
-    | '/security/daily-limit'
     | '/security/devices'
     | '/security/freeze'
-    | '/security/geo-lock'
-    | '/security/ip-whitelist'
-    | '/security/password'
-    | '/security/time-access'
-    | '/security/transfer-approval'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/settings/privacy'
     | '/history'
     | '/profile'
     | '/security'
@@ -297,18 +208,10 @@ export interface FileRouteTypes {
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
-    | '/security/auto-sign-in'
-    | '/security/daily-limit'
     | '/security/devices'
     | '/security/freeze'
-    | '/security/geo-lock'
-    | '/security/ip-whitelist'
-    | '/security/password'
-    | '/security/time-access'
-    | '/security/transfer-approval'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/settings/privacy'
     | '/history/'
     | '/profile/'
     | '/security/'
@@ -323,18 +226,10 @@ export interface RootRouteChildren {
   MiningRoute: typeof MiningRoute
   TransferRoute: typeof TransferRoute
   WalletRoute: typeof WalletRoute
-  SecurityAutoSignInRoute: typeof SecurityAutoSignInRoute
-  SecurityDailyLimitRoute: typeof SecurityDailyLimitRoute
   SecurityDevicesRoute: typeof SecurityDevicesRoute
   SecurityFreezeRoute: typeof SecurityFreezeRoute
-  SecurityGeoLockRoute: typeof SecurityGeoLockRoute
-  SecurityIpWhitelistRoute: typeof SecurityIpWhitelistRoute
-  SecurityPasswordRoute: typeof SecurityPasswordRoute
-  SecurityTimeAccessRoute: typeof SecurityTimeAccessRoute
-  SecurityTransferApprovalRoute: typeof SecurityTransferApprovalRoute
   SecurityTransferPasswordRoute: typeof SecurityTransferPasswordRoute
   SecurityTwoFactorRoute: typeof SecurityTwoFactorRoute
-  SettingsPrivacyRoute: typeof SettingsPrivacyRoute
   ProfileIndexRoute: typeof ProfileIndexRoute
   SecurityIndexRoute: typeof SecurityIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
@@ -419,20 +314,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SecurityIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/security/auto-sign-in': {
-      id: '/security/auto-sign-in'
-      path: '/security/auto-sign-in'
-      fullPath: '/security/auto-sign-in'
-      preLoaderRoute: typeof SecurityAutoSignInRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/daily-limit': {
-      id: '/security/daily-limit'
-      path: '/security/daily-limit'
-      fullPath: '/security/daily-limit'
-      preLoaderRoute: typeof SecurityDailyLimitRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/security/devices': {
       id: '/security/devices'
       path: '/security/devices'
@@ -445,41 +326,6 @@ declare module '@tanstack/react-router' {
       path: '/security/freeze'
       fullPath: '/security/freeze'
       preLoaderRoute: typeof SecurityFreezeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/geo-lock': {
-      id: '/security/geo-lock'
-      path: '/security/geo-lock'
-      fullPath: '/security/geo-lock'
-      preLoaderRoute: typeof SecurityGeoLockRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/ip-whitelist': {
-      id: '/security/ip-whitelist'
-      path: '/security/ip-whitelist'
-      fullPath: '/security/ip-whitelist'
-      preLoaderRoute: typeof SecurityIpWhitelistRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/password': {
-      id: '/security/password'
-      path: '/security/password'
-      fullPath: '/security/password'
-      preLoaderRoute: typeof SecurityPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/time-access': {
-      id: '/security/time-access'
-      path: '/security/time-access'
-      fullPath: '/security/time-access'
-      preLoaderRoute: typeof SecurityTimeAccessRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/security/transfer-approval': {
-      id: '/security/transfer-approval'
-      path: '/security/transfer-approval'
-      fullPath: '/security/transfer-approval'
-      preLoaderRoute: typeof SecurityTransferApprovalRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/security/transfer-password': {
@@ -501,13 +347,6 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings/'
       preLoaderRoute: typeof SettingsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/privacy': {
-      id: '/settings/privacy'
-      path: '/settings/privacy'
-      fullPath: '/settings/privacy'
-      preLoaderRoute: typeof SettingsPrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -535,18 +374,10 @@ const rootRouteChildren: RootRouteChildren = {
   MiningRoute: MiningRoute,
   TransferRoute: TransferRoute,
   WalletRoute: WalletRoute,
-  SecurityAutoSignInRoute: SecurityAutoSignInRoute,
-  SecurityDailyLimitRoute: SecurityDailyLimitRoute,
   SecurityDevicesRoute: SecurityDevicesRoute,
   SecurityFreezeRoute: SecurityFreezeRoute,
-  SecurityGeoLockRoute: SecurityGeoLockRoute,
-  SecurityIpWhitelistRoute: SecurityIpWhitelistRoute,
-  SecurityPasswordRoute: SecurityPasswordRoute,
-  SecurityTimeAccessRoute: SecurityTimeAccessRoute,
-  SecurityTransferApprovalRoute: SecurityTransferApprovalRoute,
   SecurityTransferPasswordRoute: SecurityTransferPasswordRoute,
   SecurityTwoFactorRoute: SecurityTwoFactorRoute,
-  SettingsPrivacyRoute: SettingsPrivacyRoute,
   ProfileIndexRoute: ProfileIndexRoute,
   SecurityIndexRoute: SecurityIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,

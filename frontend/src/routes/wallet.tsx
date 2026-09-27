@@ -4,9 +4,9 @@ import { WalletContent } from "@/components/wallet-pages";
 export const Route = createFileRoute("/wallet")({
   head: () => ({
     meta: [
-      { title: "My Wallet — Louma" },
+      { title: "My Wallet" },
       { name: "description", content: "View your LMA balance and primary receiving address." },
-      { property: "og:title", content: "My Wallet — Louma" },
+      { property: "og:title", content: "My Wallet" },
       {
         property: "og:description",
         content: "View your LMA balance and primary receiving address.",

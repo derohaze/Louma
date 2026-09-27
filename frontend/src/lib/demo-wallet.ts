@@ -26,6 +26,7 @@ const wallet: Wallet = {
   balance: 2480.75,
   // Still a column on the wallets table, but no screen reads it: the wallet has no account tiers.
   is_premium: true,
+  // Still a column on the wallets table, but no screen reads it: the wallet has no privacy page.
   privacy_mode: false,
   // Still a column on the wallets table, but no screen reads it: the wallet has no backup page.
   backup_confirmed: true,
@@ -252,9 +253,4 @@ export const setDemoCustomAddress = (newAddress: string): void => {
   wallet.address = handle;
   wallet.custom_address_changed_at = now;
   wallet.updated_at = now;
-};
-
-export const updateDemoWallet = (preferences: Partial<Pick<Wallet, "privacy_mode">>): void => {
-  Object.assign(wallet, preferences);
-  wallet.updated_at = new Date().toISOString();
 };

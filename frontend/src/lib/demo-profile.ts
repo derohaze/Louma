@@ -6,7 +6,7 @@ import { DEMO_USER_EMAIL, DEMO_USER_ID } from "@/lib/demo-wallet";
  */
 export interface Profile {
   displayName: string;
-  /** ISO country code, matching the codes used by Geo-Lock. */
+  /** ISO country code, matching the codes in the country list. */
   country: string;
   createdAt: string;
 }

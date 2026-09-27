@@ -5,12 +5,12 @@ import { HistoryContent } from "@/components/wallet-pages";
 export const Route = createFileRoute("/history/")({
   head: () => ({
     meta: [
-      { title: "Transactions — Louma" },
+      { title: "Transactions" },
       {
         name: "description",
         content: "Search, filter, and export your private LMA transactions.",
       },
-      { property: "og:title", content: "Transactions — Louma" },
+      { property: "og:title", content: "Transactions" },
       {
         property: "og:description",
         content: "Search, filter, and export your private LMA transactions.",

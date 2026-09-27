@@ -135,9 +135,7 @@ export function ProfileContent() {
                   "Available balance",
                   <span key="balance" className="inline-flex items-center gap-2">
                     <Icon icon={Wallet01Icon} size={16} className="text-muted-foreground" />
-                    {wallet?.privacy_mode
-                      ? "Hidden by privacy settings"
-                      : currency(wallet?.balance ?? 0)}
+                    {currency(wallet?.balance ?? 0)}
                   </span>,
                 ],
                 [
@@ -222,7 +220,7 @@ export function ProfileContent() {
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-semibold">Settings</span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Account and privacy
+                  Account and wallet identity
                 </span>
               </span>
             </Link>

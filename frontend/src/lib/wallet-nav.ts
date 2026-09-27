@@ -115,7 +115,7 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         title: "Transactions",
         href: "/history",
         icon: TransactionHistoryIcon,
-        searchTerms: "transactions history statement export receipt",
+        searchTerms: "transactions history transfers search filter",
       },
     ],
   },

@@ -1,16 +1,10 @@
 import type { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Clock01Icon,
   DeviceAccessIcon,
-  FirewallIcon,
   FingerPrintIcon,
-  GlobeLockIcon,
-  MoneyLockIcon,
   SecurityCheckIcon,
   SecurityPasswordIcon,
   SnowIcon,
-  SquareLockPasswordIcon,
-  UserCheck01Icon,
 } from "@hugeicons/core-free-icons";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
@@ -24,15 +18,8 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
  */
 export type SecurityHref =
   | "/security"
-  | "/security/password"
   | "/security/two-factor"
   | "/security/transfer-password"
-  | "/security/daily-limit"
-  | "/security/auto-sign-in"
-  | "/security/time-access"
-  | "/security/geo-lock"
-  | "/security/ip-whitelist"
-  | "/security/transfer-approval"
   | "/security/freeze"
   | "/security/devices";
 
@@ -47,20 +34,13 @@ export interface SecurityPage {
   description: string;
 }
 
-export type SecurityFeatureId =
-  | "two-factor"
-  | "transfer-password"
-  | "daily-limit"
-  | "auto-sign-in"
-  | "time-access"
-  | "geo-lock"
-  | "ip-whitelist";
+export type SecurityFeatureId = "two-factor" | "transfer-password";
 
 export interface SecurityFeature extends SecurityPage {
   id: SecurityFeatureId;
   /**
-   * Weight in the security score. The enabled weights add up to 100, so the score reads as
-   * "how much of the available protection is switched on".
+   * Weight in the security score. The weights together make up `securityScoreMax`, so the score
+   * reads as "how much of the available protection is switched on".
    */
   importance: number;
 }
@@ -72,24 +52,6 @@ export const securityCenter: SecurityPage = {
   href: "/security",
   icon: SecurityCheckIcon,
   description: "Layered sign-in and transfer controls for your wallet.",
-};
-
-/** The credential that opens the wallet. It is a page, not a toggle, so it sits outside the score. */
-export const securityWalletPassword: SecurityPage = {
-  title: "Wallet Password",
-  label: "Wallet Password",
-  href: "/security/password",
-  icon: SquareLockPasswordIcon,
-  description: "Change the password that opens this wallet.",
-};
-
-/** Chooses which protection approves a transfer; it holds no score of its own. */
-export const securityTransferApproval: SecurityPage = {
-  title: "Transfer Approval",
-  label: "Transfer Approval",
-  href: "/security/transfer-approval",
-  icon: SecurityPasswordIcon,
-  description: "Decide what must be entered before a transfer leaves the wallet.",
 };
 
 /** The emergency stop: instant, reversible, and outside the score. */
@@ -111,15 +73,10 @@ export const securityDevices: SecurityPage = {
 };
 
 /**
- * Pages that control the wallet without counting towards the score: a credential, the transfer
- * approval choice, the emergency freeze, and the device list.
+ * Pages that control the wallet without counting towards the score: the emergency freeze and the
+ * device list.
  */
-export const securityControls: readonly SecurityPage[] = [
-  securityWalletPassword,
-  securityTransferApproval,
-  securityFreezeWallet,
-  securityDevices,
-];
+export const securityControls: readonly SecurityPage[] = [securityFreezeWallet, securityDevices];
 
 export const securityFeatures: readonly SecurityFeature[] = [
   {
@@ -139,51 +96,6 @@ export const securityFeatures: readonly SecurityFeature[] = [
     icon: SecurityPasswordIcon,
     description: "Require a separate password before a transfer is approved.",
     importance: 10,
-  },
-  {
-    id: "daily-limit",
-    title: "Daily Transfer Limit",
-    label: "Daily Limit",
-    href: "/security/daily-limit",
-    icon: MoneyLockIcon,
-    description: "Cap how much LMA can leave the wallet in a single day.",
-    importance: 8,
-  },
-  {
-    id: "auto-sign-in",
-    title: "Auto Sign-In",
-    label: "Auto Sign-In",
-    href: "/security/auto-sign-in",
-    icon: UserCheck01Icon,
-    description: "Stay signed in on this device without entering credentials again.",
-    importance: 7,
-  },
-  {
-    id: "time-access",
-    title: "Time-based Access",
-    label: "Time Access",
-    href: "/security/time-access",
-    icon: Clock01Icon,
-    description: "Only allow wallet access during the hours you choose.",
-    importance: 7,
-  },
-  {
-    id: "geo-lock",
-    title: "Geo-Lock",
-    label: "Geo-Lock",
-    href: "/security/geo-lock",
-    icon: GlobeLockIcon,
-    description: "Allow sign-ins from the countries you choose, and nothing else.",
-    importance: 15,
-  },
-  {
-    id: "ip-whitelist",
-    title: "IP Whitelist",
-    label: "IP Whitelist",
-    href: "/security/ip-whitelist",
-    icon: FirewallIcon,
-    description: "Approve the IP addresses that may reach this wallet, starting with this device.",
-    importance: 28,
   },
 ];
 

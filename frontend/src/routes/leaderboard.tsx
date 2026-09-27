@@ -4,12 +4,12 @@ import { LeaderboardContent } from "@/components/leaderboard-page";
 export const Route = createFileRoute("/leaderboard")({
   head: () => ({
     meta: [
-      { title: "Wallet Leaderboard — Louma" },
+      { title: "Wallet Leaderboard" },
       {
         name: "description",
         content: "Compare wallet balances, transfers, and mining rewards on the Louma leaderboard.",
       },
-      { property: "og:title", content: "Wallet Leaderboard — Louma" },
+      { property: "og:title", content: "Wallet Leaderboard" },
       {
         property: "og:description",
         content: "Compare wallet balances, transfers, and mining rewards on the Louma leaderboard.",

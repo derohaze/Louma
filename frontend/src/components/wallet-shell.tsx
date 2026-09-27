@@ -12,7 +12,6 @@ import {
   UserCircleIcon,
   Menu01Icon,
   SecurityCheckIcon,
-  SquareLock02Icon,
   Copy01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -37,12 +36,7 @@ import {
   type NavItem,
   type NavSection,
 } from "@/lib/wallet-nav";
-import {
-  currentSession,
-  isWalletClosed,
-  readSecurity,
-  subscribeSecurity,
-} from "@/lib/demo-security";
+import { readSecurity, subscribeSecurity } from "@/lib/demo-security";
 import { LIMITS } from "@/lib/validation";
 import { DEMO_USER_EMAIL, DEMO_USER_ID, readTransactions, readWallet } from "@/lib/demo-wallet";
 import { readProfile } from "@/lib/demo-profile";
@@ -198,21 +192,11 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
-  /**
-   * Filled after mount: the server has its own clock, so a time-based access check during the first
-   * render would hydrate a different answer than the browser shows.
-   */
-  const [now, setNow] = useState<Date | null>(null);
   /** The account menu shows the profile name, so it reads the store on every render. */
   const profile = readProfile();
   const navigate = useNavigate();
   const location = useLocation();
   const mainRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    setNow(new Date());
-    const timer = window.setInterval(() => setNow(new Date()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
   // <main> is the app shell's scroll container, so the router's window-based scroll
   // restoration cannot reset it: do it here whenever the route changes.
   useEffect(() => {
@@ -245,21 +229,18 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   );
   const activeSection = findActiveSection(location.pathname);
   /**
-   * Subscribed rather than read on render: a freeze or an access window switched on from a
-   * Security page has to lock the pages around it right away, not on the next route change. The
-   * security pages themselves stay reachable, so the owner can always undo the lock.
+   * Subscribed rather than read on render: a freeze switched on from a Security page has to lock
+   * the pages around it right away, not on the next route change. The security pages themselves
+   * stay reachable, so the owner can always undo the lock.
    */
   const security = useSyncExternalStore(subscribeSecurity, readSecurity, readSecurity);
   const walletFrozen = security.frozen;
-  const walletClosed = now !== null && isWalletClosed(security, now);
-  /** Freezing and the access window both lock the wallet, and both are undone from Security. */
-  const locked = walletFrozen || walletClosed;
   /**
-   * Security pages stay reachable while the wallet is closed: whoever closes the window has to be
-   * able to open it again from the same device. Everything else waits for the opening time.
+   * Security pages stay reachable while the wallet is frozen: whoever froze it has to be able to
+   * unfreeze it from the same device. Everything else waits.
    */
   const securitySectionOpen = location.pathname.startsWith("/security");
-  const accessClosed = locked && !securitySectionOpen;
+  const accessClosed = walletFrozen && !securitySectionOpen;
   /**
    * With no query the panel is a quick launcher, so it lists the most used pages instead of all of
    * them. Transactions join the list as soon as the owner types.
@@ -342,10 +323,15 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
       <div className="min-h-dvh bg-shell text-foreground">
         <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground">
           <div className="flex w-[330px] items-center gap-3">
-            <span className="grid size-10 place-items-center rounded-2xl border border-primary/70 bg-primary/35 font-display text-lg font-bold">
-              L
-            </span>
-            <span className="font-display text-lg font-semibold tracking-tight">Louma</span>
+            <img
+              src="/Louma_Brand_logos/png/louma-logo-256x256.png"
+              alt="Louma logo"
+              width={64}
+              height={64}
+              draggable={false}
+              className="size-16 shrink-0 border-0 bg-transparent object-contain shadow-none outline-none"
+            />
+            <span className="font-display text-xl font-semibold tracking-tight">Louma</span>
           </div>
           <div className="ms-auto flex items-center gap-3">
             <Button
@@ -561,15 +547,13 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                 <Icon icon={ArrowRight01Icon} size={15} />
                 <strong className="text-foreground">{title}</strong>
               </div>
-              {locked && securitySectionOpen && (
+              {walletFrozen && securitySectionOpen && (
                 <p
                   role="status"
                   className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-warning bg-warning/10 px-4 py-3 text-sm"
                 >
-                  <Icon icon={walletFrozen ? SnowIcon : SquareLock02Icon} size={18} />
-                  {walletFrozen
-                    ? "The wallet is frozen, so every transfer is refused until you unfreeze it."
-                    : `The wallet is closed until ${security.timeAccess.start} (time-based access). Only these security pages stay reachable.`}
+                  <Icon icon={SnowIcon} size={18} />
+                  The wallet is frozen, so every transfer is refused until you unfreeze it.
                 </p>
               )}
               {loading ? (
@@ -582,28 +566,15 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                 />
               ) : accessClosed ? (
                 <EmptyState
-                  title={walletFrozen ? "Wallet frozen" : "Wallet closed right now"}
-                  detail={
-                    walletFrozen
-                      ? "Every transfer is refused while the wallet is frozen. Nothing was taken: unfreeze it and the wallet works as before."
-                      : `Time-based access is on, so the wallet opens again at ${security.timeAccess.start} (${currentSession.city} time). Transfers and new sign-ins wait until then.`
-                  }
+                  title="Wallet frozen"
+                  detail="Every transfer is refused while the wallet is frozen. Nothing was taken: unfreeze it and the wallet works as before."
                   action={
-                    walletFrozen ? (
-                      <Link to="/security/freeze">
-                        <Button variant="outline">
-                          <Icon icon={SnowIcon} size={17} />
-                          Open Freeze Wallet
-                        </Button>
-                      </Link>
-                    ) : (
-                      <Link to="/security/time-access">
-                        <Button variant="outline">
-                          <Icon icon={SquareLock02Icon} size={17} />
-                          Manage access window
-                        </Button>
-                      </Link>
-                    )
+                    <Link to="/security/freeze">
+                      <Button variant="outline">
+                        <Icon icon={SnowIcon} size={17} />
+                        Open Freeze Wallet
+                      </Button>
+                    </Link>
                   }
                 />
               ) : (

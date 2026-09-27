@@ -18,7 +18,7 @@ export interface WalletSession {
   lastActiveAt: string;
   /** The session reading the page. It can only be ended by signing out, never revoked from here. */
   current: boolean;
-  /** Set by auto sign-in, so the row can say why the device stayed signed in. */
+  /** A device the owner recognised and chose to keep, so the row is marked apart from the rest. */
   trusted: boolean;
 }
 

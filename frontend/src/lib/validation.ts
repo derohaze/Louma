@@ -11,8 +11,6 @@ export const LIMITS = {
   amountDecimals: 4,
   minAmount: 0.0001,
   maxAmount: 1_000_000,
-  minDailyLimit: 50,
-  maxDailyLimit: 1_000_000,
   minPasswordLength: 8,
   maxPasswordLength: 128,
   maxNoteLength: 240,
@@ -52,20 +50,6 @@ export const isHandle = (value: string): boolean => HANDLE_PATTERN.test(value.tr
 /** A transfer target is either a wallet address or a public handle. */
 export const isTransferTarget = (value: string): boolean =>
   isWalletAddress(value) || isHandle(value);
-
-/** Accepts only a full IPv4 address with each octet inside 0-255. */
-export const isIpv4 = (value: string): boolean => {
-  const parts = value.trim().split(".");
-  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
-}; /** "HH:MM" on a 24-hour clock, as `type="time"` produces it. */
-const isTimeOfDay = (value: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim());
-
-/** A saved access window needs two valid times that are not the same. */
-export const timeWindowError = (start: string, end: string): string | null => {
-  if (!isTimeOfDay(start) || !isTimeOfDay(end)) return "Enter both times as HH:MM.";
-  if (start.trim() === end.trim()) return "The window has to open before it closes.";
-  return null;
-};
 
 /** Six digits from the authenticator app. */
 export const isOneTimeCode = (value: string): boolean =>
@@ -110,7 +94,7 @@ export interface PasswordRule {
   met: boolean;
 }
 
-/** The rules the wallet password and the transfer password share. */
+/** The strength rules every wallet credential has to satisfy. */
 export const passwordRules = (value: string): PasswordRule[] => [
   {
     id: "length",
@@ -126,8 +110,8 @@ export const isStrongPassword = (value: string): boolean =>
   value.length <= LIMITS.maxPasswordLength && passwordRules(value).every((rule) => rule.met);
 
 /**
- * Whether a new password may be saved, and the message to show when it may not. Kept here so the
- * transfer password form and the wallet password form cannot drift apart.
+ * Whether a new password may be saved, and the message to show when it may not. Kept here so every
+ * password form in the wallet applies the same rules.
  */
 export const newPasswordError = (value: string, confirmation: string): string | null => {
   if (value.length > LIMITS.maxPasswordLength) {

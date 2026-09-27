@@ -1,4 +1,3 @@
-import { currency } from "@/lib/wallet-format";
 import { securityFeatures, securityScoreMax, type SecurityFeatureId } from "@/lib/security-catalog";
 
 /**
@@ -17,24 +16,10 @@ export interface SecurityAlert {
   at: string;
 }
 
-/** What the wallet asks for before a transfer leaves the account. */
-export type TransferAuthMethod = "password" | "two-factor" | "both";
-
 export interface SecuritySnapshot {
   enabled: Record<SecurityFeatureId, boolean>;
-  /** LMA cap for a single day, used by the daily transfer limit. */
-  dailyLimit: number;
-  /** Days a device stays signed in under auto sign-in. */
-  autoSignInDays: number;
-  /** 24h clock window for time-based access. */
-  timeAccess: { start: string; end: string };
-  /** ISO country codes allowed to sign in; an empty list allows every country. */
-  geoLockCountries: string[];
   /** Stops every transfer and sign-in until the owner unfreezes the wallet. */
   frozen: boolean;
-  /** Which protection approves a transfer; it only applies while that protection is on. */
-  transferAuthMethod: TransferAuthMethod;
-  approvedIps: string[];
   /** Placeholder authenticator key; a real one is issued by the backend. */
   twoFactorSecret: string;
   backupCodesRemaining: number;
@@ -47,14 +32,12 @@ export interface SecuritySnapshot {
   alerts: SecurityAlert[];
 }
 
-/** The visitor's demo session; the geo-lock and IP pages compare the wallet against these. */
+/** The visitor's demo session; the device list reads its device, location, and address from here. */
 export const currentSession = {
   ip: "102.44.18.7",
   city: "Cairo",
-  country: "EG",
   countryName: "Egypt",
   device: "Chrome · Windows 11",
-  signedInAt: null as string | null,
 };
 
 export const geoCountries: readonly { code: string; name: string }[] = [
@@ -76,25 +59,12 @@ const isoAt = (daysAgo: number, hour: number, minute = 0): string => {
   return date.toISOString();
 };
 
-if (!currentSession.signedInAt) currentSession.signedInAt = isoAt(0, 8, 12);
-
 const state: SecuritySnapshot = {
   enabled: {
     "two-factor": true,
     "transfer-password": true,
-    "daily-limit": false,
-    "auto-sign-in": true,
-    "time-access": false,
-    "geo-lock": false,
-    "ip-whitelist": false,
   },
-  dailyLimit: 500,
-  autoSignInDays: 20,
-  timeAccess: { start: "08:00", end: "22:00" },
-  geoLockCountries: ["EG"],
   frozen: false,
-  transferAuthMethod: "password",
-  approvedIps: ["102.44.18.7", "102.44.19.31"],
   twoFactorSecret: "LMA-7Q4M 2XK9 5HP3 8DT6",
   backupCodesRemaining: 8,
   transferPassword: "louma-demo-2026",
@@ -153,9 +123,6 @@ export const readSecurity = (): SecuritySnapshot => {
     snapshot = {
       ...state,
       enabled: { ...state.enabled },
-      timeAccess: { ...state.timeAccess },
-      approvedIps: [...state.approvedIps],
-      geoLockCountries: [...state.geoLockCountries],
       alerts: [...state.alerts],
     };
   }
@@ -167,51 +134,8 @@ export const setSecurityFeature = (id: SecurityFeatureId, enabled: boolean): voi
   securityChanged();
 };
 
-export const setDailyLimit = (amount: number): void => {
-  state.dailyLimit = amount;
-  securityChanged();
-};
-
-export const setAutoSignInDays = (days: number): void => {
-  state.autoSignInDays = days;
-  securityChanged();
-};
-
-export const setTimeAccess = (start: string, end: string): void => {
-  state.timeAccess = { start, end };
-  securityChanged();
-};
-
-export const addGeoLockCountry = (code: string): void => {
-  if (!state.geoLockCountries.includes(code)) state.geoLockCountries.push(code);
-  securityChanged();
-};
-
-export const removeGeoLockCountry = (code: string): void => {
-  state.geoLockCountries = state.geoLockCountries.filter((item) => item !== code);
-  securityChanged();
-};
-
 export const setFrozen = (frozen: boolean): void => {
   state.frozen = frozen;
-  securityChanged();
-};
-
-export const setTransferAuthMethod = (method: TransferAuthMethod): void => {
-  state.transferAuthMethod = method;
-  securityChanged();
-};
-
-/** True while the owner froze the wallet from the security screen. */
-export const isWalletFrozen = (snapshot: SecuritySnapshot): boolean => snapshot.frozen;
-
-export const addApprovedIp = (ip: string): void => {
-  if (!state.approvedIps.includes(ip)) state.approvedIps.push(ip);
-  securityChanged();
-};
-
-export const removeApprovedIp = (ip: string): void => {
-  state.approvedIps = state.approvedIps.filter((item) => item !== ip);
   securityChanged();
 };
 
@@ -255,73 +179,9 @@ export const setTransferPassword = (password: string): void => {
   securityChanged();
 };
 
-/** "HH:MM" as minutes past midnight, or NaN when the value is not a time. */
-const clockMinutes = (value: string): number => {
-  const [hours, minutes] = value.split(":").map(Number);
-  if (hours === undefined || minutes === undefined) return Number.NaN;
-  return hours * 60 + minutes;
-};
-
-/**
- * Whether the wallet is open at `time`. Time-based access windows may run past midnight, so the
- * comparison flips when the end time is earlier than the start time.
- */
-export const isWithinAccessWindow = (snapshot: SecuritySnapshot, time: Date): boolean => {
-  if (!snapshot.enabled["time-access"]) return true;
-  const now = time.getHours() * 60 + time.getMinutes();
-  const start = clockMinutes(snapshot.timeAccess.start);
-  const end = clockMinutes(snapshot.timeAccess.end);
-  // An unreadable window must never lock anyone out, so it counts as open.
-  if (Number.isNaN(start) || Number.isNaN(end)) return true;
-  return start <= end ? now >= start && now <= end : now >= start || now <= end;
-};
-
-/** True when time-based access is on and the current clock is outside its window. */
-export const isWalletClosed = (snapshot: SecuritySnapshot, time: Date): boolean =>
-  !isWithinAccessWindow(snapshot, time);
-
-/**
- * Stand-in for the authenticator app: six digits that rotate every 30 seconds, like a real TOTP
- * code, derived from the demo key. Display-only — nothing behind this build verifies it.
- */
-const twoFactorCodeAtStep = (step: number): string => {
-  const seed =
-    [...state.twoFactorSecret].reduce((total, character) => total + character.charCodeAt(0), 0) +
-    step;
-  const hashed = Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
-  return String(Math.floor(hashed * 1_000_000)).padStart(6, "0");
-};
-
-/** The code that is valid right now. */
-export const twoFactorCode = (time: Date): string =>
-  twoFactorCodeAtStep(Math.floor(time.getTime() / 30_000));
-
-/**
- * Accepts the previous and the next window as well: a code typed just before it rotates would
- * otherwise be rejected for a reason the person holding the phone cannot see.
- */
-export const isTwoFactorCodeValid = (code: string, time: Date): boolean => {
-  const trimmed = code.trim();
-  if (!/^\d{6}$/.test(trimmed)) return false;
-  const step = Math.floor(time.getTime() / 30_000);
-  return [step - 1, step, step + 1].some((value) => twoFactorCodeAtStep(value) === trimmed);
-};
-
-/** Seconds until the demo code rotates, so the UI can say how long the current one lasts. */
-export const twoFactorCodeSecondsLeft = (time: Date): number =>
-  30 - (Math.floor(time.getTime() / 1000) % 30);
-
 export interface TransferGuardInput {
-  /** LMA the transfer would send. */
-  amount: number;
-  /** LMA already sent today, which the daily limit is measured against. */
-  spentToday: number;
   /** What the account typed as its transfer password. */
   transferPassword: string;
-  /** What the account typed from their authenticator app. */
-  twoFactorCode: string;
-  /** Supplied by the caller so the rules stay pure and easy to test. */
-  now: Date;
 }
 
 /**
@@ -335,26 +195,10 @@ export const transferBlockedReason = (
   if (snapshot.frozen) {
     return "The wallet is frozen. Unfreeze it from Security before sending.";
   }
-  if (isWalletClosed(snapshot, input.now)) {
-    return `The wallet is closed until ${snapshot.timeAccess.start}.`;
-  }
-  if (snapshot.enabled["daily-limit"]) {
-    const remaining = snapshot.dailyLimit - input.spentToday;
-    if (input.amount > remaining) {
-      return `Daily limit reached: ${currency(Math.max(remaining, 0))} left for today.`;
-    }
-  }
-  // The chosen approval only applies while its protection is switched on.
-  const method = snapshot.transferAuthMethod;
-  if (snapshot.enabled["transfer-password"] && (method === "password" || method === "both")) {
+  if (snapshot.enabled["transfer-password"]) {
     if (!snapshot.transferPassword) return "Set your transfer password before sending.";
     if (input.transferPassword !== snapshot.transferPassword) {
       return "The transfer password is incorrect.";
-    }
-  }
-  if (snapshot.enabled["two-factor"] && (method === "two-factor" || method === "both")) {
-    if (!isTwoFactorCodeValid(input.twoFactorCode, input.now)) {
-      return "That one-time code is not valid. Open your authenticator app for a fresh one.";
     }
   }
   return null;
@@ -377,18 +221,6 @@ export const securityScore = (snapshot: SecuritySnapshot): SecurityScore => ({
   total: securityFeatures.length,
 });
 
-/** LMA the wallet has already sent today, which the daily transfer limit is measured against. */
-export const sentToday = (
-  transactions: { direction: string; amount: number; created_at: string }[],
-): number =>
-  transactions
-    .filter(
-      (transaction) =>
-        transaction.direction === "sent" &&
-        new Date(transaction.created_at).toDateString() === new Date().toDateString(),
-    )
-    .reduce((total, transaction) => total + transaction.amount, 0);
-
 /** One-line state summary, shown in the Security Center list and on each feature page. */
 export const securityStateText = (id: SecurityFeatureId, snapshot: SecuritySnapshot): string => {
   switch (id) {
@@ -400,26 +232,5 @@ export const securityStateText = (id: SecurityFeatureId, snapshot: SecuritySnaps
       return snapshot.enabled[id]
         ? `Last changed ${new Date(snapshot.transferPasswordChangedAt ?? Date.now()).toLocaleDateString()}`
         : "Transfers are approved with your account password";
-    case "daily-limit":
-      return snapshot.enabled[id]
-        ? `Up to ${currency(snapshot.dailyLimit)} per day`
-        : "No cap on daily transfers";
-    case "auto-sign-in":
-      return snapshot.enabled[id]
-        ? `Devices stay signed in for ${snapshot.autoSignInDays} days`
-        : "Credentials required for every session";
-    case "time-access":
-      return snapshot.enabled[id]
-        ? `Access allowed ${snapshot.timeAccess.start} – ${snapshot.timeAccess.end}`
-        : "Access allowed at any hour";
-    case "geo-lock":
-      if (!snapshot.enabled[id]) return "Access allowed from any country";
-      return snapshot.geoLockCountries.length
-        ? `${snapshot.geoLockCountries.map(countryName).join(", ")} only`
-        : "No country allowed yet";
-    case "ip-whitelist":
-      return snapshot.enabled[id]
-        ? `${snapshot.approvedIps.length} approved address${snapshot.approvedIps.length === 1 ? "" : "es"}`
-        : "Any IP address is accepted";
   }
 };

@@ -1,14 +1,11 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   ArrowDownLeft01Icon,
   ArrowUpRight01Icon,
-  Download01Icon,
-  File01Icon,
   PercentCircleIcon,
   QrCodeIcon,
-  SnowIcon,
 } from "@hugeicons/core-free-icons";
 import {
   AlertDialog,
@@ -22,66 +19,29 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { useWallet } from "@/hooks/use-wallet";
-import {
-  readSecurity,
-  sentToday,
-  setFrozen,
-  setSecurityFeature,
-  transferBlockedReason,
-  twoFactorCode,
-  type SecuritySnapshot,
-} from "@/lib/demo-security";
-import { readSettings } from "@/lib/demo-settings";
-import {
-  LIMITS,
-  isOneTimeCode,
-  oneTimeCodeDigits,
-  parseAmount,
-  sanitizeText,
-} from "@/lib/validation";
+import { readSecurity, transferBlockedReason } from "@/lib/demo-security";
+import { LIMITS, parseAmount, sanitizeText } from "@/lib/validation";
 import { lookupAddress, sendDemoTransfer, setDemoCustomAddress } from "@/lib/demo-wallet";
-import { exportTransactions, exportTransactionsCsv } from "@/lib/transaction-statement";
-import { currency, dateText, hiddenAmount, transferNet, transferTax } from "@/lib/wallet-format";
+import { currency, dateText, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
 import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
 
-/** Whether the transfer approval needs a password, a one-time code, or both, right now. */
-const approvalNeeds = (security: SecuritySnapshot) => {
-  const method = security.transferAuthMethod;
-  return {
-    password: security.enabled["transfer-password"] && (method === "password" || method === "both"),
-    code: security.enabled["two-factor"] && (method === "two-factor" || method === "both"),
-  };
-};
-
 export function TransferContent() {
-  const { wallet, transactions, refresh } = useWallet();
+  const { wallet, refresh } = useWallet();
   const [tab, setTab] = useState<"send" | "receive">("send");
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [transferPassword, setTransferPasswordInput] = useState("");
-  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [lastId, setLastId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Read on render rather than on mount so a security change made on another page applies to the
-  // next transfer, and switching a control here takes effect straight away.
-  const [security, setSecurity] = useState(readSecurity);
-  /**
-   * The one-time code hint has to follow the same 30-second rotation the guard checks against, so
-   * the form keeps its own second-by-second clock while it is mounted.
-   */
-  const [clock, setClock] = useState(() => new Date());
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const syncSecurity = () => setSecurity(readSecurity());
-  const needs = approvalNeeds(security);
+  // next transfer.
+  const [security] = useState(readSecurity);
+  /** The transfer password is asked for on every transfer while its protection is on. */
+  const needsPassword = security.enabled["transfer-password"];
   const recipient = address.trim() ? lookupAddress(address) : null;
   /** The balance is the cap, so an amount over it is rejected here instead of at the store. */
   const amountCheck = parseAmount(amount, { max: Number(wallet?.balance ?? LIMITS.maxAmount) });
@@ -89,24 +49,21 @@ export function TransferContent() {
   const numericAmount = amountCheck.value;
   const tax = amountValid ? transferTax(numericAmount) : 0;
   const net = amountValid ? transferNet(numericAmount) : 0;
-  const spentToday = sentToday(transactions);
   /** The transfer itself, split out so the confirmation dialog can run the same path. */
   const completeTransfer = async () => {
     setBusy(true);
-    const transferId = sendDemoTransfer({
+    sendDemoTransfer({
       recipientAddress: address.trim(),
       amount: numericAmount,
       note: sanitizeText(note, LIMITS.maxNoteLength),
     });
     setBusy(false);
     setConfirmOpen(false);
-    setLastId(transferId);
     setMessage("Transfer completed.");
     setAddress("");
     setAmount("");
     setNote("");
     setTransferPasswordInput("");
-    setCode("");
     await refresh();
   };
   const send = async (event: React.FormEvent) => {
@@ -124,27 +81,13 @@ export function TransferContent() {
       setMessage(amountCheck.error);
       return;
     }
-    if (needs.code && !isOneTimeCode(code)) {
-      setMessage("Enter the six-digit code from your authenticator app.");
-      return;
-    }
     // Every switch on the Security pages is enforced here, in one place.
-    const blocked = transferBlockedReason(readSecurity(), {
-      amount: numericAmount,
-      spentToday,
-      transferPassword,
-      twoFactorCode: code,
-      now: new Date(),
-    });
+    const blocked = transferBlockedReason(readSecurity(), { transferPassword });
     if (blocked) {
       setMessage(blocked);
       return;
     }
-    if (readSettings().confirmTransfers) {
-      setConfirmOpen(true);
-      return;
-    }
-    await completeTransfer();
+    setConfirmOpen(true);
   };
   return (
     <>
@@ -215,13 +158,7 @@ export function TransferContent() {
                 </div>
               </div>
             )}
-            {security.enabled["daily-limit"] && (
-              <p className="text-xs text-muted-foreground">
-                {currency(Math.max(security.dailyLimit - spentToday, 0))} left of your{" "}
-                {currency(security.dailyLimit)} daily limit.
-              </p>
-            )}
-            {needs.password && (
+            {needsPassword && (
               <label className="block text-sm font-semibold">
                 Transfer password
                 <Input
@@ -233,23 +170,6 @@ export function TransferContent() {
                   onChange={(event) => setTransferPasswordInput(event.target.value)}
                   placeholder="Required by your security settings"
                 />
-              </label>
-            )}
-            {needs.code && (
-              <label className="block text-sm font-semibold">
-                One-time code
-                <Input
-                  className="mt-2"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={LIMITS.oneTimeCodeLength}
-                  value={code}
-                  onChange={(event) => setCode(oneTimeCodeDigits(event.target.value))}
-                  placeholder="6 digits from your authenticator app"
-                />
-                <span className="mt-2 block text-xs font-normal text-muted-foreground">
-                  Preview build: the code is {twoFactorCode(clock)} right now.
-                </span>
               </label>
             )}
             <label className="block text-sm font-semibold">
@@ -285,83 +205,14 @@ export function TransferContent() {
                 {message}
               </p>
             )}
-            {lastId && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  const transaction = transactions.find((item) => item.transfer_id === lastId);
-                  if (transaction)
-                    exportTransactions([transaction], `transfer-${lastId.slice(0, 8)}`);
-                }}
-              >
-                <Icon icon={Download01Icon} size={17} />
-                Download receipt PDF
-              </Button>
-            )}
           </form>
-          <div className="space-y-4">
-            <section className="rounded-[22px] border bg-card p-5 shadow-sm">
-              <p className="text-sm text-muted-foreground">Available balance</p>
-              <p className="mt-3 font-display text-2xl font-bold">
-                {wallet?.privacy_mode ? hiddenAmount : currency(wallet?.balance ?? 0)}
-              </p>
-              <p className="mt-5 text-sm text-muted-foreground">
-                Transfers are final after submission. Check the address before sending.
-              </p>
-            </section>
-            <Panel title="Wallet controls" description="The two switches that stop money moving.">
-              <div className="flex items-center gap-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold">Daily limit</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {security.enabled["daily-limit"]
-                      ? `${currency(security.dailyLimit)} per day · ${currency(Math.max(security.dailyLimit - spentToday, 0))} left`
-                      : "No cap on transfers today"}
-                  </p>
-                </div>
-                <Switch
-                  checked={security.enabled["daily-limit"]}
-                  aria-label="Daily transfer limit"
-                  onCheckedChange={(value) => {
-                    setSecurityFeature("daily-limit", value);
-                    syncSecurity();
-                  }}
-                />
-              </div>
-              <div className="mt-4 flex items-center gap-4 border-t pt-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold">Freeze wallet</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {security.frozen
-                      ? "Frozen — every transfer is refused"
-                      : "Active — transfers are allowed"}
-                  </p>
-                </div>
-                <Switch
-                  checked={security.frozen}
-                  aria-label="Freeze wallet"
-                  onCheckedChange={(value) => {
-                    setFrozen(value);
-                    syncSecurity();
-                  }}
-                />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Link to="/security/daily-limit">
-                  <Button variant="outline" size="sm">
-                    Daily limit
-                  </Button>
-                </Link>
-                <Link to="/security/freeze">
-                  <Button variant="outline" size="sm">
-                    <Icon icon={SnowIcon} size={16} />
-                    Freeze
-                  </Button>
-                </Link>
-              </div>
-            </Panel>
-          </div>
+          <section className="h-fit rounded-[22px] border bg-card p-5 shadow-sm">
+            <p className="text-sm text-muted-foreground">Available balance</p>
+            <p className="mt-3 font-display text-2xl font-bold">{currency(wallet?.balance ?? 0)}</p>
+            <p className="mt-5 text-sm text-muted-foreground">
+              Transfers are final after submission. Check the address before sending.
+            </p>
+          </section>
         </div>
       ) : (
         <section className="max-w-3xl rounded-[22px] border bg-card p-5 shadow-sm">
@@ -440,9 +291,7 @@ export function WalletContent() {
       <div className="grid gap-4 sm:grid-cols-2">
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
           <p className="text-sm text-muted-foreground">Available balance</p>
-          <p className="mt-4 font-display text-3xl font-bold">
-            {wallet?.privacy_mode ? hiddenAmount : currency(wallet?.balance ?? 0)}
-          </p>
+          <p className="mt-4 font-display text-3xl font-bold">{currency(wallet?.balance ?? 0)}</p>
           <p className="mt-4 text-xs text-muted-foreground">
             {transactions.length} recorded transactions
           </p>
@@ -491,30 +340,7 @@ export function HistoryContent() {
   const shown = filtered.slice((page - 1) * pageSize, page * pageSize);
   return (
     <>
-      <PageHeader
-        title="Transactions"
-        subtitle="Search, filter, and export your transactions."
-        action={
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={!filtered.length}
-              onClick={() => exportTransactionsCsv(filtered)}
-            >
-              <Icon icon={File01Icon} size={17} />
-              Export CSV
-            </Button>
-            <Button
-              variant="outline"
-              disabled={!filtered.length}
-              onClick={() => exportTransactions(filtered)}
-            >
-              <Icon icon={Download01Icon} size={17} />
-              Export PDF
-            </Button>
-          </div>
-        }
-      />
+      <PageHeader title="Transactions" subtitle="Search and filter your transactions." />
       <div className="mb-5 flex flex-col gap-3 sm:flex-row">
         <Input
           aria-label="Search transactions"
@@ -593,20 +419,6 @@ export function HistoryContent() {
                   {sent ? "-" : "+"}
                   {currency(transaction.amount)}
                 </strong>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Open receipt"
-                  title="Open receipt"
-                  onClick={() =>
-                    exportTransactions(
-                      [transaction],
-                      `transfer-${transaction.transfer_id.slice(0, 8)}`,
-                    )
-                  }
-                >
-                  <Icon icon={Download01Icon} size={17} />
-                </Button>
               </div>
             );
           })
@@ -652,7 +464,7 @@ export function HistoryContent() {
         </div>
       )}
       <div className="mt-4">
-        <FactList items={[["Tap a row", "Opens the full transfer, with its receipt"]]} />
+        <FactList items={[["Tap a row", "Opens the full transfer detail"]]} />
       </div>
     </>
   );

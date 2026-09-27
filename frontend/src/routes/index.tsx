@@ -4,12 +4,12 @@ import { OverviewContent } from "@/components/wallet-overview";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Overview — Louma" },
+      { title: "Overview" },
       {
         name: "description",
         content: "Balance and activity at a glance, with a link into every LMA wallet section.",
       },
-      { property: "og:title", content: "Overview — Louma" },
+      { property: "og:title", content: "Overview" },
       {
         property: "og:description",
         content: "Balance and activity at a glance, with a link into every LMA wallet section.",

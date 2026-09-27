@@ -23,9 +23,6 @@ export const transferTax = (amount: number): number => roundAmount(amount * TRAN
 /** What actually reaches the recipient after the tax is deducted. */
 export const transferNet = (amount: number): number => roundAmount(amount - transferTax(amount));
 
-/** Shown instead of an amount while the wallet's balance privacy preference is on. */
-export const hiddenAmount = "••••";
-
 export const dateText = (date: string) =>
   new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(date),

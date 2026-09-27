@@ -4,12 +4,12 @@ import { MiningContent } from "@/components/mining-page";
 export const Route = createFileRoute("/mining")({
   head: () => ({
     meta: [
-      { title: "Mining — Louma" },
+      { title: "Mining" },
       {
         name: "description",
         content: "Monitor your mining farm, hashrate, power draw, and mining rewards.",
       },
-      { property: "og:title", content: "Mining — Louma" },
+      { property: "og:title", content: "Mining" },
       {
         property: "og:description",
         content: "Monitor your mining farm, hashrate, power draw, and mining rewards.",

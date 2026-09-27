@@ -5,12 +5,12 @@ import { ProfileContent } from "@/components/profile-page";
 export const Route = createFileRoute("/profile/")({
   head: () => ({
     meta: [
-      { title: "Profile — Louma" },
+      { title: "Profile" },
       {
         name: "description",
         content: "Your wallet account details, activity summary, and protection status.",
       },
-      { property: "og:title", content: "Profile — Louma" },
+      { property: "og:title", content: "Profile" },
       {
         property: "og:description",
         content: "Your wallet account details, activity summary, and protection status.",

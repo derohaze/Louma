@@ -4,9 +4,9 @@ import { TransferContent } from "@/components/wallet-pages";
 export const Route = createFileRoute("/transfer")({
   head: () => ({
     meta: [
-      { title: "Transfer LMA — Louma" },
+      { title: "Transfer LMA" },
       { name: "description", content: "Send and receive LMA securely using wallet addresses." },
-      { property: "og:title", content: "Transfer LMA — Louma" },
+      { property: "og:title", content: "Transfer LMA" },
       {
         property: "og:description",
         content: "Send and receive LMA securely using wallet addresses.",

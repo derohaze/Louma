@@ -1,9 +1,7 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
 import type { HugeiconsIcon } from "@hugeicons/react";
 import {
   CpuIcon,
-  EyeOffIcon,
   MedalFirstPlaceIcon,
   MedalSecondPlaceIcon,
   MedalThirdPlaceIcon,
@@ -12,7 +10,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useWallet } from "@/hooks/use-wallet";
-import { readSettings } from "@/lib/demo-settings";
 import {
   leaderboardSorts,
   rankLeaderboard,
@@ -75,16 +72,10 @@ export function LeaderboardContent() {
   const { wallet } = useWallet();
   const [sort, setSort] = useState<LeaderboardSort>("balance");
   const [query, setQuery] = useState("");
-  const [settings] = useState(readSettings);
   const ranked = rankLeaderboard(readLeaderboard(), sort);
   const you = ranked.find((entry) => entry.isYou);
-  const hidden = settings.hideRanking;
-  /** Hidden wallets are removed from every list, but keep the rank they were assigned. */
-  const visible = ranked.filter((entry) => !hidden || !entry.isYou);
-  const podium = visible.slice(0, 3);
-  const rows = ranked.filter(
-    (entry) =>
-      (!hidden || !entry.isYou) && entry.address.toLowerCase().includes(query.trim().toLowerCase()),
+  const rows = ranked.filter((entry) =>
+    entry.address.toLowerCase().includes(query.trim().toLowerCase()),
   );
   const metric = (entry: LeaderboardEntry) => {
     switch (sort) {
@@ -96,6 +87,7 @@ export function LeaderboardContent() {
         return currency(entry.miningEarnings);
     }
   };
+  const podium = ranked.slice(0, 3);
   return (
     <>
       <PageHeader
@@ -108,22 +100,7 @@ export function LeaderboardContent() {
             <Icon icon={RankingIcon} size={18} className="text-muted-foreground" />
             Your position
           </div>
-          {hidden || !you ? (
-            <>
-              <p className="mt-4 font-display text-2xl font-semibold">Hidden</p>
-              <p className="mt-3 text-sm text-muted-foreground">
-                Your wallet is excluded from the public ranking. Nobody sees your balance, and your
-                position stays reserved.
-              </p>
-              <Link
-                to="/settings/privacy"
-                className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"
-              >
-                <Icon icon={EyeOffIcon} size={16} />
-                Change privacy settings
-              </Link>
-            </>
-          ) : (
+          {you ? (
             <>
               <p className="mt-4 font-display text-3xl font-bold">
                 #{you.rank}
@@ -148,14 +125,9 @@ export function LeaderboardContent() {
                   <dd className="font-semibold">{currency(wallet?.balance ?? you.balance)}</dd>
                 </div>
               </dl>
-              <Link
-                to="/settings/privacy"
-                className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"
-              >
-                <Icon icon={EyeOffIcon} size={16} />
-                Hide my wallet
-              </Link>
             </>
+          ) : (
+            <p className="mt-4 font-display text-2xl font-semibold">Unranked</p>
           )}
         </section>
         <Panel
@@ -246,21 +218,11 @@ export function LeaderboardContent() {
         ) : (
           <EmptyState
             title="No wallets match"
-            detail={
-              hidden
-                ? "Your wallet is hidden from the ranking. Change that in Privacy."
-                : "Try a different address."
-            }
+            detail="Try a different address."
             action={
-              hidden ? (
-                <Link to="/settings/privacy">
-                  <Button variant="outline">Open privacy settings</Button>
-                </Link>
-              ) : (
-                <Button variant="outline" onClick={() => setQuery("")}>
-                  Clear search
-                </Button>
-              )
+              <Button variant="outline" onClick={() => setQuery("")}>
+                Clear search
+              </Button>
             }
           />
         )}

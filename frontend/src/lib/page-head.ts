@@ -5,9 +5,9 @@
  */
 export const pageHead = (title: string, description: string) => ({
   meta: [
-    { title: `${title} — Louma` },
+    { title },
     { name: "description", content: description },
-    { property: "og:title", content: `${title} — Louma` },
+    { property: "og:title", content: title },
     { property: "og:description", content: description },
     { property: "og:type", content: "website" },
     { name: "twitter:card", content: "summary_large_image" },

@@ -164,8 +164,8 @@ const sortValue = (entry: LeaderboardEntry, sort: LeaderboardSort): number => {
 };
 
 /**
- * Ranks by the selected metric. Ranks are assigned before any row is hidden, so hiding a wallet in
- * Privacy never renumbers the wallets below it.
+ * Ranks by the selected metric. Ranks are assigned over the full list before any row is rendered, so
+ * a search that hides rows never renumbers the wallets below it.
  */
 export const rankLeaderboard = (
   entries: LeaderboardEntry[],

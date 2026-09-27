@@ -1,159 +1,64 @@
 /**
- * The mining dashboard runs on simulated farm data until the mining API exists.
- * The fields mirror what the mining endpoints exposed in the previous wallet
- * (device list, hashrate, power draw, temperature, rewards) so replacing the
- * reads below with real requests later is mechanical.
+ * The mining dashboard runs on simulated farm data until the mining API exists. The snapshot mirrors
+ * what the mining endpoints exposed in the previous wallet (hashrate, power draw, rewards) so
+ * replacing the reads below with real requests later is mechanical.
  *
- * Mining rewards are deliberately kept out of the wallet balance: the wallet
- * store owns real balance mutations, and nothing here should look like money
- * that was actually credited.
+ * Mining rewards are deliberately kept out of the wallet balance: the wallet store owns real balance
+ * mutations, and nothing here should look like money that was actually credited.
  */
-export type MiningDeviceStatus = "mining" | "idle" | "offline";
-
-export interface MiningDevice {
-  id: string;
-  name: string;
-  model: string;
-  status: MiningDeviceStatus;
-  hashrate: number;
-  power: number;
-  temperature: number;
-  earnedToday: number;
-}
-
 export interface MiningSnapshot {
   active: boolean;
-  boosted: boolean;
   startedAt: string | null;
-  devices: MiningDevice[];
   totalHashrate: number;
   powerDraw: number;
-  devicesOnline: number;
   todayEarnings: number;
   lifetimeEarnings: number;
 }
 
-/** Normal-clock hashrate for a four-module rig. */
-const BASE_RATE = 940;
-const BOOST_FACTOR = 1.35;
+/** Farm totals when running. Stopping drops hashrate to zero. */
+const BASE_HASH_RATE = 1823.6;
+const RUNNING_POWER = 815;
+const IDLE_POWER = 36;
+const TODAY_EARNINGS = 187.6;
 
 const farm = {
-  active: false,
-  boosted: false,
+  active: true,
   startedAt: null as string | null,
+  hashrate: BASE_HASH_RATE,
+  power: RUNNING_POWER,
+  todayEarnings: TODAY_EARNINGS,
   lifetimeEarnings: 18420.35,
 };
 
-const devices: MiningDevice[] = [
-  {
-    id: "rig-a1",
-    name: "Rig A1",
-    model: "CRN-X4 · 4 modules",
-    status: "mining",
-    hashrate: BASE_RATE,
-    power: 420,
-    temperature: 62,
-    earnedToday: 96.4,
-  },
-  {
-    id: "rig-b2",
-    name: "Rig B2",
-    model: "CRN-X4 · 4 modules",
-    status: "mining",
-    hashrate: BASE_RATE,
-    power: 405,
-    temperature: 65,
-    earnedToday: 91.2,
-  },
-  {
-    id: "node-c3",
-    name: "Node C3",
-    model: "CRN-Mini · 2 modules",
-    status: "idle",
-    hashrate: 0,
-    power: 18,
-    temperature: 34,
-    earnedToday: 0,
-  },
-  {
-    id: "node-d4",
-    name: "Node D4",
-    model: "CRN-Mini · 2 modules",
-    status: "offline",
-    hashrate: 0,
-    power: 0,
-    temperature: 0,
-    earnedToday: 0,
-  },
-];
-
 const applyClock = (): void => {
-  const factor = farm.boosted ? BOOST_FACTOR : 1;
-  for (const device of devices) {
-    if (device.status === "mining") {
-      const derate = device.id === "rig-b2" ? 0.94 : 1;
-      device.hashrate = Number((BASE_RATE * factor * derate).toFixed(1));
-      device.power = Math.round(420 * factor * derate);
-      device.temperature = Math.min(device.temperature + (farm.boosted ? 4 : 0), 78);
-    } else if (device.status === "idle") {
-      device.hashrate = 0;
-      device.power = farm.boosted ? 22 : 18;
-      device.temperature = farm.boosted ? 37 : 34;
-    } else {
-      device.hashrate = 0;
-      device.power = 0;
-      device.temperature = 0;
-    }
-  }
-  farm.active = devices.some((device) => device.status === "mining");
+  // A stopped farm cannot hold a session, so it resets before the clock is read.
   if (!farm.active) {
-    farm.boosted = false;
     farm.startedAt = null;
   }
+  farm.hashrate = farm.active ? BASE_HASH_RATE : 0;
+  farm.power = farm.active ? RUNNING_POWER : IDLE_POWER;
 };
 
 export const readMining = (): MiningSnapshot => {
   applyClock();
-  const todayEarnings = devices.reduce((sum, device) => sum + device.earnedToday, 0);
   return {
     active: farm.active,
-    boosted: farm.boosted,
     startedAt: farm.startedAt,
-    devices: devices.map((device) => ({ ...device })),
-    totalHashrate: devices.reduce((sum, device) => sum + device.hashrate, 0),
-    powerDraw: devices.reduce((sum, device) => sum + device.power, 0),
-    devicesOnline: devices.filter((device) => device.status !== "offline").length,
-    todayEarnings,
-    lifetimeEarnings: farm.lifetimeEarnings + todayEarnings,
+    totalHashrate: farm.hashrate,
+    powerDraw: farm.power,
+    todayEarnings: farm.todayEarnings,
+    lifetimeEarnings: farm.lifetimeEarnings + farm.todayEarnings,
   };
 };
 
-export const startMining = (boosted: boolean): void => {
-  farm.boosted = boosted;
+export const startMining = (): void => {
+  farm.active = true;
   farm.startedAt = new Date().toISOString();
-  for (const device of devices) {
-    if (device.status === "idle") device.status = "mining";
-  }
   applyClock();
 };
 
 export const stopMining = (): void => {
-  for (const device of devices) {
-    if (device.status === "mining") device.status = "idle";
-  }
-  applyClock();
-};
-
-export const setBoosted = (boosted: boolean): void => {
-  farm.boosted = boosted;
-  if (boosted && !farm.startedAt) farm.startedAt = new Date().toISOString();
-  applyClock();
-};
-
-export const setDeviceStatus = (id: string, status: MiningDeviceStatus): void => {
-  const device = devices.find((item) => item.id === id);
-  if (!device || device.status === "offline") return;
-  device.status = status;
+  farm.active = false;
   applyClock();
 };
 
@@ -169,7 +74,7 @@ export const hashrateSeries = (
   range: "24h" | "7d",
 ): { label: string; hashrate: number }[] => {
   const points = range === "24h" ? 24 : 7;
-  const peak = snapshot.totalHashrate || BASE_RATE;
+  const peak = snapshot.totalHashrate || BASE_HASH_RATE;
   return Array.from({ length: points }, (_, index) => {
     const progress = index / (points - 1);
     const warmup = 0.78 + 0.22 * Math.sin(progress * Math.PI * 1.6);

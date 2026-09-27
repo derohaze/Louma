@@ -57,10 +57,6 @@ export function SecurityCenterContent() {
   };
   /** One line of state for the controls, which hold no switch of their own. */
   const controlState: Record<string, { label: string; enabled?: boolean }> = {
-    "/security/password": { label: "Opens the wallet" },
-    "/security/transfer-approval": {
-      label: snapshot.transferAuthMethod.replace("two-factor", "one-time code"),
-    },
     "/security/freeze": {
       label: snapshot.frozen ? "Frozen" : "Active",
       enabled: !snapshot.frozen,
@@ -193,7 +189,7 @@ export function SecurityCenterContent() {
         <div className="border-b px-5 py-4">
           <h2 className="font-display font-semibold">Wallet controls</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            The credential, the transfer approval, the emergency freeze, and the device list.
+            The emergency freeze and the list of signed-in devices.
           </p>
         </div>
         {securityControls.map((control) => {

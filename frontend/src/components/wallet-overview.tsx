@@ -21,7 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/use-wallet";
 import { readSecurity, securityScore } from "@/lib/demo-security";
-import { CURRENCY, currency, dateText, hiddenAmount } from "@/lib/wallet-format";
+import { CURRENCY, currency, dateText } from "@/lib/wallet-format";
 import { navSections } from "@/lib/wallet-nav";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
 type OverviewMetric = {
@@ -31,8 +31,6 @@ type OverviewMetric = {
   suffix: string;
   hint: string;
   href: "/wallet" | "/history" | "/custom-address" | "/security";
-  /** Amounts are masked on the card while the balance privacy preference is on. */
-  sensitive?: boolean;
 };
 
 function Count({ value, suffix = "" }: { value: number; suffix?: string }) {
@@ -99,7 +97,6 @@ export function OverviewContent() {
       suffix: ` ${CURRENCY}`,
       hint: "Current wallet",
       href: "/wallet",
-      sensitive: true,
     },
     {
       icon: ArrowDownLeft01Icon,
@@ -122,7 +119,7 @@ export function OverviewContent() {
       label: "Transactions",
       value: transactions.length,
       suffix: "",
-      hint: "Search and export transactions",
+      hint: "Search and filter transactions",
       href: "/history",
     },
     {
@@ -174,11 +171,7 @@ export function OverviewContent() {
               <Icon icon={ArrowRight01Icon} size={15} className="ms-auto text-muted-foreground" />
             </div>
             <strong className="mt-5 block font-display text-2xl">
-              {metric.sensitive && wallet?.privacy_mode ? (
-                `${hiddenAmount} ${CURRENCY}`
-              ) : (
-                <Count value={metric.value} suffix={metric.suffix} />
-              )}
+              <Count value={metric.value} suffix={metric.suffix} />
             </strong>
             <p className="mt-1 text-xs text-muted-foreground">{metric.hint}</p>
           </Link>
