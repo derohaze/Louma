@@ -12,6 +12,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LIMITS, sanitizeText } from "@/lib/validation";
 import {
   Select,
   SelectContent,
@@ -82,7 +83,10 @@ export function ProfileContent() {
             className="mt-5 grid max-w-xl gap-4 sm:grid-cols-2"
             onSubmit={(event) => {
               event.preventDefault();
-              updateProfile({ displayName: draft.displayName.trim(), country: draft.country });
+              updateProfile({
+                displayName: sanitizeText(draft.displayName, LIMITS.maxDisplayNameLength),
+                country: draft.country,
+              });
               setSaved(readProfile());
               setMessage("Profile saved.");
             }}
@@ -92,7 +96,7 @@ export function ProfileContent() {
               <Input
                 className="mt-2"
                 required
-                maxLength={32}
+                maxLength={LIMITS.maxDisplayNameLength}
                 value={draft.displayName}
                 onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
               />

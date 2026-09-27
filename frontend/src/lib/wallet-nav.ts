@@ -110,7 +110,7 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     ],
   },
   {
-    title: "Transactions",
+    title: "History",
     icon: TransactionHistoryIcon,
     items: [
       {

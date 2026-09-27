@@ -30,6 +30,7 @@ import {
   type PublicProfile,
   type RatingsSettings,
 } from "@/lib/demo-ratings";
+import { LIMITS, sanitizeMultiline } from "@/lib/validation";
 import { currency, dateText } from "@/lib/wallet-format";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
 import { FactList, FormMessage, Panel, PreviewNote, StatusPill } from "./security-ui";
@@ -110,7 +111,7 @@ export function RatingDialog({
           Note (optional)
           <Textarea
             className="mt-2"
-            maxLength={200}
+            maxLength={LIMITS.maxRatingNoteLength}
             value={note}
             onChange={(event) => setNote(event.target.value)}
             placeholder="How did this transfer go?"
@@ -123,7 +124,7 @@ export function RatingDialog({
           <Button
             disabled={stars === 0}
             onClick={() => {
-              rateTransfer(transferId, stars, note);
+              rateTransfer(transferId, stars, sanitizeMultiline(note, LIMITS.maxRatingNoteLength));
               onRated?.();
               onOpenChange(false);
             }}

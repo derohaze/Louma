@@ -1,5 +1,6 @@
 import type { Database } from "@/integrations/supabase/types";
 import { CURRENCY } from "@/lib/wallet-format";
+import { LIMITS, isHandle, isTransferTarget, parseAmount, sanitizeText } from "@/lib/validation";
 
 /**
  * The wallet UI is being built before the backend and auth exist, so every wallet
@@ -178,11 +179,19 @@ export const readWallet = (): Wallet => wallet;
 export const readTransactions = (): Transaction[] =>
   [...transactions].sort((first, second) => second.created_at.localeCompare(first.created_at));
 
+/**
+ * Records a transfer. The arguments are validated again here, not only in the form: the store is the
+ * boundary a backend would own, and it must not write a row it would reject as a request.
+ */
 export const sendDemoTransfer = (input: {
   recipientAddress: string;
   amount: number;
   note: string;
 }): string => {
+  const recipient = input.recipientAddress.trim();
+  if (!isTransferTarget(recipient)) throw new Error("Invalid recipient address.");
+  const amount = parseAmount(String(input.amount), { max: wallet.balance });
+  if (!amount.ok) throw new Error(amount.error);
   const now = new Date().toISOString();
   const transferId = nextTransferId();
   transactions.push({
@@ -190,14 +199,14 @@ export const sendDemoTransfer = (input: {
     owner_id: DEMO_USER_ID,
     transfer_id: transferId,
     direction: "sent",
-    counterparty_address: input.recipientAddress,
-    amount: input.amount,
-    note: input.note,
+    counterparty_address: recipient,
+    amount: amount.value,
+    note: sanitizeText(input.note, LIMITS.maxNoteLength),
     recipient_rating: null,
     created_at: now,
     updated_at: now,
   });
-  wallet.balance = Number((wallet.balance - input.amount).toFixed(2));
+  wallet.balance = Number((wallet.balance - amount.value).toFixed(2));
   wallet.updated_at = now;
   return transferId;
 };
@@ -211,9 +220,6 @@ export interface AddressLookup {
   /** Shown next to the input: who the address belongs to, or why it was rejected. */
   detail: string;
 }
-
-const WALLET_ADDRESS_PATTERN = /^LMA(-[A-Z0-9]{4}){3}$/;
-const HANDLE_PATTERN = /^@[a-z0-9_]{4,24}$/;
 
 /**
  * The wallets this account has already transacted with, which is what makes an address "known"
@@ -232,7 +238,7 @@ const addressDirectory = (): Map<string, string> => {
 export const lookupAddress = (value: string): AddressLookup => {
   const address = value.trim();
   if (!address) return { status: "invalid", detail: "Enter a wallet address or a @handle." };
-  if (!WALLET_ADDRESS_PATTERN.test(address) && !HANDLE_PATTERN.test(address)) {
+  if (!isTransferTarget(address)) {
     return { status: "invalid", detail: `Use @handle or ${CURRENCY}-XXXX-XXXX-XXXX.` };
   }
   if (address === wallet.address) return { status: "own", detail: "This is your own address." };
@@ -259,9 +265,12 @@ export const setTransferRating = (transferId: string, stars: number): void => {
   transaction.updated_at = new Date().toISOString();
 };
 
+/** The custom address is a handle, so it is normalised and checked before it is stored. */
 export const setDemoCustomAddress = (newAddress: string): void => {
+  const handle = sanitizeText(newAddress, LIMITS.maxHandleLength + 1).toLowerCase();
+  if (!isHandle(handle)) throw new Error("Use 4 to 24 letters, numbers, or _.");
   const now = new Date().toISOString();
-  wallet.address = newAddress;
+  wallet.address = handle;
   wallet.custom_address_changed_at = now;
   wallet.updated_at = now;
 };

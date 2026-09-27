@@ -18,7 +18,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +44,7 @@ import {
   readSecurity,
   subscribeSecurity,
 } from "@/lib/demo-security";
+import { LIMITS } from "@/lib/validation";
 import { DEMO_USER_EMAIL, DEMO_USER_ID, readTransactions, readWallet } from "@/lib/demo-wallet";
 import { readProfile } from "@/lib/demo-profile";
 import { currency, dateText } from "@/lib/wallet-format";
@@ -142,12 +143,6 @@ const searchPages: SearchPage[] = navSections.flatMap((section) =>
   })),
 );
 
-/** Category chips: "all" first, then one per section so a search can be narrowed to a section. */
-const searchCategories: { id: string; label: string }[] = [
-  { id: "all", label: "All" },
-  ...navSections.map((section) => ({ id: section.title, label: section.title })),
-];
-
 /** Order of the dialog's default list, so it opens on the pages an owner reaches for most. */
 const searchPageRank: NavHref[] = [
   "/transfer",
@@ -204,7 +199,6 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [searchCategory, setSearchCategory] = useState("all");
   /**
    * Filled after mount: the server has its own clock, so a time-based access check during the first
    * render would hydrate a different answer than the browser shows.
@@ -268,32 +262,25 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   const securitySectionOpen = location.pathname.startsWith("/security");
   const accessClosed = locked && !securitySectionOpen;
   /**
-   * With no query the dialog is a quick launcher, so it lists the most used pages instead of all of
-   * them. Transactions join the list as soon as the owner types, and make up the list on their own
-   * while the Transactions chip is selected.
+   * With no query the panel is a quick launcher, so it lists the most used pages instead of all of
+   * them. Transactions join the list as soon as the owner types.
    */
   const query = search.trim().toLowerCase();
   const browsing = query.length === 0;
-  const transactionsInScope = searchCategory === "all" || searchCategory === "Transactions";
-  const matchedPages = searchPages
-    .filter((page) => searchCategory === "all" || page.category === searchCategory)
-    .filter(
-      (page) =>
-        !query || `${page.title} ${page.subtitle} ${page.terms}`.toLowerCase().includes(query),
-    );
+  const matchedPages = searchPages.filter(
+    (page) =>
+      !query || `${page.title} ${page.subtitle} ${page.terms}`.toLowerCase().includes(query),
+  );
   const pageResults = (
     browsing
       ? [...matchedPages].sort((a, b) => searchRank(a.href) - searchRank(b.href))
       : matchedPages
   ).slice(0, searchPageLimit);
-  const transactionResults: SearchEntry[] = transactionsInScope
-    ? transactions
+  const transactionResults: SearchEntry[] = browsing
+    ? []
+    : transactions
         .filter((tx) =>
-          browsing
-            ? searchCategory === "Transactions"
-            : `${tx.counterparty_address} ${tx.note} ${tx.transfer_id}`
-                .toLowerCase()
-                .includes(query),
+          `${tx.counterparty_address} ${tx.note} ${tx.transfer_id}`.toLowerCase().includes(query),
         )
         .slice(0, searchTransactionLimit)
         .map((tx) => ({
@@ -302,19 +289,13 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
           subtitle: `${tx.direction === "sent" ? "Sent" : "Received"} · ${currency(tx.amount)} · ${dateText(tx.created_at)}`,
           icon: tx.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon,
           href: "/history" as const,
-        }))
-    : [];
+        }));
   const results: SearchEntry[] = [...pageResults, ...transactionResults];
-  const resultsHeading = browsing
-    ? searchCategory === "all"
-      ? "Most used"
-      : searchCategory
-    : "Results";
+  const resultsHeading = browsing ? "Most used" : "Results";
   /** Every row leaves the dialog in the same state, so the next opening starts clean. */
   const openResult = (href: NavHref) => {
     setSearchOpen(false);
     setSearch("");
-    setSearchCategory("all");
     navigate({ to: href });
   };
   const panelLink = ({ title: label, href, icon }: NavItem) => {
@@ -376,15 +357,108 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
               <Icon icon={ArrowUpRight01Icon} size={18} />
               Transfer
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Search"
-              onClick={() => setSearchOpen(true)}
-              className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+            <Popover
+              open={searchOpen}
+              onOpenChange={(open) => {
+                setSearchOpen(open);
+                if (!open) {
+                  setSearch("");
+                }
+              }}
             >
-              <Icon icon={Search01Icon} />
-            </Button>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Search"
+                  aria-expanded={searchOpen}
+                  className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+                >
+                  <Icon icon={Search01Icon} />
+                </Button>
+              </PopoverTrigger>
+              {/*
+               * Anchored dropdown under the search button (align="end"):
+               * non-modal, so there is no dimmed overlay behind it.
+               */}
+              <PopoverContent
+                align="end"
+                sideOffset={12}
+                aria-label="Search Louma"
+                className="w-[min(880px,calc(100vw-2rem))] gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl"
+              >
+                <div className="p-3">
+                  <div className="flex h-14 items-center gap-3 rounded-2xl border bg-card px-4 shadow-sm">
+                    <Icon
+                      icon={Search01Icon}
+                      size={20}
+                      className="shrink-0 text-muted-foreground"
+                    />
+                    <Input
+                      autoFocus
+                      aria-label="Search"
+                      maxLength={LIMITS.maxSearchLength}
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search pages, transfers, and settings"
+                      className="h-auto flex-1 border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:ring-0"
+                    />
+                    <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
+                      <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                        Ctrl
+                      </kbd>
+                      <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                        K
+                      </kbd>
+                    </span>
+                  </div>
+                </div>
+                <div className="max-h-[48vh] min-h-[286px] overflow-y-auto px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <p className="px-2 py-3 text-[13px] font-semibold">{resultsHeading}</p>
+                  {results.length ? (
+                    results.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => openResult(entry.href)}
+                        className="flex w-full cursor-pointer items-center gap-3.5 rounded-2xl px-3 py-2.5 text-start transition-colors hover:bg-secondary"
+                      >
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
+                          <Icon icon={entry.icon} size={20} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[15px] font-semibold">
+                            {entry.title}
+                          </span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {entry.subtitle}
+                          </span>
+                        </span>
+                        <Icon
+                          icon={ArrowRight01Icon}
+                          size={16}
+                          className="shrink-0 text-muted-foreground"
+                        />
+                      </button>
+                    ))
+                  ) : (
+                    <p className="px-3 py-10 text-center text-sm text-muted-foreground">
+                      No matches for “{search.trim()}”.
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t bg-secondary/40 px-4 py-3">
+                  <p className="text-sm text-muted-foreground">Can't find what you need?</p>
+                  <Button
+                    className="h-10 rounded-full px-5"
+                    onClick={() => openResult("/transfer")}
+                  >
+                    <Icon icon={ArrowUpRight01Icon} size={18} />
+                    New transfer
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
             <WalletNotifications />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -544,108 +618,6 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
           </main>
         </div>
       </div>
-      <Dialog
-        open={searchOpen}
-        onOpenChange={(open) => {
-          setSearchOpen(open);
-          if (!open) {
-            setSearch("");
-            setSearchCategory("all");
-          }
-        }}
-      >
-        {/*
-         * `[&>button]:hidden` drops the dialog's built-in close button (Escape still closes it), and
-         * `sm:rounded-[26px]` overrides the base dialog's `sm:rounded-lg` so the card stays a card.
-         */}
-        <DialogContent className="top-[10%] max-w-[880px] translate-y-0 gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl sm:rounded-[26px] [&>button]:hidden">
-          <DialogTitle className="sr-only">Search Louma</DialogTitle>
-          <DialogDescription className="sr-only">
-            Search every page, security control, setting, and transaction in this wallet
-          </DialogDescription>
-          <div className="p-3">
-            <div className="flex h-14 items-center gap-3 rounded-2xl border bg-card px-4 shadow-sm">
-              <Icon icon={Search01Icon} size={20} className="shrink-0 text-muted-foreground" />
-              <Input
-                autoFocus
-                aria-label="Search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search pages, transfers, and settings"
-                className="h-auto flex-1 border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:ring-0"
-              />
-              <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
-                <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                  Ctrl
-                </kbd>
-                <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                  K
-                </kbd>
-              </span>
-            </div>
-          </div>
-          <div className="flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {searchCategories.map((category) => {
-              const active = category.id === searchCategory;
-              return (
-                <button
-                  key={category.id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setSearchCategory(category.id)}
-                  className={cn(
-                    "h-9 shrink-0 cursor-pointer rounded-full px-4 text-[13px] font-semibold transition-colors",
-                    active
-                      ? "bg-[#323234] text-white"
-                      : "bg-secondary text-[#58585E] hover:bg-secondary/70 hover:text-[#323234]",
-                  )}
-                >
-                  {category.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="max-h-[48vh] min-h-[286px] overflow-y-auto px-3 pb-2">
-            <p className="px-2 py-3 text-[13px] font-semibold">{resultsHeading}</p>
-            {results.length ? (
-              results.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  onClick={() => openResult(entry.href)}
-                  className="flex w-full cursor-pointer items-center gap-3.5 rounded-2xl px-3 py-2.5 text-start transition-colors hover:bg-secondary"
-                >
-                  <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
-                    <Icon icon={entry.icon} size={20} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] font-semibold">{entry.title}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {entry.subtitle}
-                    </span>
-                  </span>
-                  <Icon
-                    icon={ArrowRight01Icon}
-                    size={16}
-                    className="shrink-0 text-muted-foreground"
-                  />
-                </button>
-              ))
-            ) : (
-              <p className="px-3 py-10 text-center text-sm text-muted-foreground">
-                No matches for “{search.trim()}”.
-              </p>
-            )}
-          </div>
-          <div className="flex items-center justify-between gap-3 border-t bg-secondary/40 px-4 py-3">
-            <p className="text-sm text-muted-foreground">Can't find what you need?</p>
-            <Button className="h-10 rounded-full px-5" onClick={() => openResult("/transfer")}>
-              <Icon icon={ArrowUpRight01Icon} size={18} />
-              New transfer
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </WalletContext.Provider>
   );
 }

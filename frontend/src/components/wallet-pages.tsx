@@ -35,16 +35,16 @@ import {
   type SecuritySnapshot,
 } from "@/lib/demo-security";
 import { readSettings } from "@/lib/demo-settings";
+import {
+  LIMITS,
+  isOneTimeCode,
+  oneTimeCodeDigits,
+  parseAmount,
+  sanitizeText,
+} from "@/lib/validation";
 import { lookupAddress, sendDemoTransfer, setDemoCustomAddress } from "@/lib/demo-wallet";
 import { exportTransactions, exportTransactionsCsv } from "@/lib/transaction-statement";
-import {
-  currency,
-  dateText,
-  hiddenAmount,
-  isValidAmountInput,
-  transferNet,
-  transferTax,
-} from "@/lib/wallet-format";
+import { currency, dateText, hiddenAmount, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
 import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
 import { RatingDialog, StarRow } from "./ratings-pages";
@@ -87,8 +87,10 @@ export function TransferContent() {
   const syncSecurity = () => setSecurity(readSecurity());
   const needs = approvalNeeds(security);
   const recipient = address.trim() ? lookupAddress(address) : null;
-  const numericAmount = Number(amount);
-  const amountValid = isValidAmountInput(amount) && numericAmount > 0;
+  /** The balance is the cap, so an amount over it is rejected here instead of at the store. */
+  const amountCheck = parseAmount(amount, { max: Number(wallet?.balance ?? LIMITS.maxAmount) });
+  const amountValid = amountCheck.ok;
+  const numericAmount = amountCheck.value;
   const tax = amountValid ? transferTax(numericAmount) : 0;
   const net = amountValid ? transferNet(numericAmount) : 0;
   const spentToday = sentToday(transactions);
@@ -99,7 +101,7 @@ export function TransferContent() {
     const transferId = sendDemoTransfer({
       recipientAddress: sentTo,
       amount: numericAmount,
-      note: note.trim(),
+      note: sanitizeText(note, LIMITS.maxNoteLength),
     });
     setBusy(false);
     setConfirmOpen(false);
@@ -126,8 +128,12 @@ export function TransferContent() {
       setMessage("Use another wallet address.");
       return;
     }
-    if (!amountValid || numericAmount > Number(wallet?.balance)) {
-      setMessage("Enter a valid amount within your available balance.");
+    if (!amountValid) {
+      setMessage(amountCheck.error);
+      return;
+    }
+    if (needs.code && !isOneTimeCode(code)) {
+      setMessage("Enter the six-digit code from your authenticator app.");
       return;
     }
     // Every switch on the Security pages is enforced here, in one place.
@@ -230,6 +236,7 @@ export function TransferContent() {
                   className="mt-2"
                   type="password"
                   autoComplete="off"
+                  maxLength={LIMITS.maxPasswordLength}
                   value={transferPassword}
                   onChange={(event) => setTransferPasswordInput(event.target.value)}
                   placeholder="Required by your security settings"
@@ -243,9 +250,9 @@ export function TransferContent() {
                   className="mt-2"
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  maxLength={6}
+                  maxLength={LIMITS.oneTimeCodeLength}
                   value={code}
-                  onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))}
+                  onChange={(event) => setCode(oneTimeCodeDigits(event.target.value))}
                   placeholder="6 digits from your authenticator app"
                 />
                 <span className="mt-2 block text-xs font-normal text-muted-foreground">
@@ -257,7 +264,7 @@ export function TransferContent() {
               Note (optional)
               <Input
                 className="mt-2"
-                maxLength={240}
+                maxLength={LIMITS.maxNoteLength}
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder="What is this transfer for?"

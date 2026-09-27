@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   CreditCardAddIcon,
@@ -52,8 +52,28 @@ export function WalletNotifications({
 }) {
   const [open, setOpen] = useState(false);
   const [readIds, setReadIds] = useState<string[]>([]);
-
+  /**
+   * The badge slide-in must only play when the unread count changes in place
+   * (a new notification). Every route renders its own shell, so navigation
+   * remounts this button — playing the enter animation on mount makes the
+   * badge look like it jumps on every page change.
+   */
+  const [canAnimate, setCanAnimate] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setCanAnimate(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const unreadCount = tasks.filter((t) => !readIds.includes(t.id)).length;
+  /**
+   * Count on first paint of this mount (navigation remounts the shell).
+   * Flipping `data-animate` alone must not start the slide-in, so the
+   * animation is armed only once the count actually differs from it.
+   */
+  const initialCount = useRef<number | null>(null);
+  if (initialCount.current === null) {
+    initialCount.current = unreadCount;
+  }
+  const badgeChanged = unreadCount !== initialCount.current;
   const markRead = (id: string) => setReadIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
   const markAllRead = () => setReadIds(tasks.map((t) => t.id));
 
@@ -79,10 +99,15 @@ export function WalletNotifications({
            * the wrapper slides in diagonally while the dot pops independently,
            * so the bell button itself never moves. `key` replays the enter
            * animation whenever the unread count changes (new notification).
+           * `data-animate` stays false on mount so route changes (which remount
+           * the shell) render the badge statically instead of replaying it.
+           * It arms only when the count differs from the mount count, so the
+           * rAF flip alone never starts the slide-in.
            */}
           <span
             aria-hidden
             data-open={unreadCount > 0 ? "true" : "false"}
+            data-animate={canAnimate && badgeChanged ? "true" : "false"}
             key={unreadCount > 0 ? unreadCount : "empty"}
             className="t-badge absolute -end-1 -top-1"
           >

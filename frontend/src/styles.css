@@ -246,7 +246,7 @@
     pointer-events: none;
     will-change: transform;
   }
-  .t-badge[data-open="true"] {
+  .t-badge[data-open="true"][data-animate="true"] {
     animation: t-badge-slide-in var(--badge-slide-dur) var(--badge-slide-ease);
   }
 

@@ -30,6 +30,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  LIMITS,
+  isIpv4,
+  isStrongPassword,
+  newPasswordError,
+  parseAmount,
+  passwordRules,
+  timeWindowError,
+} from "@/lib/validation";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -240,7 +249,9 @@ export function TransferPasswordContent() {
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const strong = next.length >= 8 && /[0-9]/.test(next) && /[A-Za-z]/.test(next);
+  /** The same rules the wallet password form applies, read from the shared validation module. */
+  const rules = passwordRules(next);
+  const strong = isStrongPassword(next);
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setMessage("");
@@ -249,12 +260,9 @@ export function TransferPasswordContent() {
       setError("The current transfer password is incorrect.");
       return;
     }
-    if (!strong) {
-      setError("Use at least 8 characters with both letters and numbers.");
-      return;
-    }
-    if (next !== confirm) {
-      setError("The two passwords do not match.");
+    const problem = newPasswordError(next, confirm);
+    if (problem) {
+      setError(problem);
       return;
     }
     setTransferPassword(next);
@@ -289,6 +297,7 @@ export function TransferPasswordContent() {
                   className="mt-2"
                   type="password"
                   autoComplete="current-password"
+                  maxLength={LIMITS.maxPasswordLength}
                   value={current}
                   onChange={(event) => setCurrent(event.target.value)}
                   placeholder="••••••••"
@@ -301,6 +310,7 @@ export function TransferPasswordContent() {
                 className="mt-2"
                 type="password"
                 autoComplete="new-password"
+                maxLength={LIMITS.maxPasswordLength}
                 value={next}
                 onChange={(event) => setNext(event.target.value)}
                 placeholder="At least 8 characters"
@@ -318,9 +328,11 @@ export function TransferPasswordContent() {
               />
             </label>
             <ul className="space-y-1 text-xs text-muted-foreground">
-              <li>{strong ? "✓" : "•"} At least 8 characters</li>
-              <li>{/[0-9]/.test(next) ? "✓" : "•"} Contains a number</li>
-              <li>{/[A-Za-z]/.test(next) ? "✓" : "•"} Contains a letter</li>
+              {rules.map((rule) => (
+                <li key={rule.id}>
+                  {rule.met ? "✓" : "•"} {rule.label}
+                </li>
+              ))}
             </ul>
             <Button type="submit" disabled={!enabled}>
               <Icon icon={LockIcon} size={16} />
@@ -362,14 +374,18 @@ export function DailyLimitContent() {
     event.preventDefault();
     setMessage("");
     setError("");
-    const value = Number(amount);
-    if (!Number.isFinite(value) || value < 50) {
-      setError("Enter a limit of at least 50 LMA.");
+    // The limit is a money amount, so it goes through the same parser as a transfer.
+    const limit = parseAmount(amount, {
+      min: LIMITS.minDailyLimit,
+      max: LIMITS.maxDailyLimit,
+    });
+    if (!limit.ok) {
+      setError(`Enter a limit between ${LIMITS.minDailyLimit} and ${LIMITS.maxDailyLimit} LMA.`);
       return;
     }
-    setDailyLimit(value);
+    setDailyLimit(limit.value);
     refresh();
-    setMessage(`Daily limit set to ${currency(value)}.`);
+    setMessage(`Daily limit set to ${currency(limit.value)}.`);
   };
   return (
     <>
@@ -541,6 +557,7 @@ export function TimeAccessContent() {
   const [start, setStart] = useState(snapshot.timeAccess.start);
   const [end, setEnd] = useState(snapshot.timeAccess.end);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   /**
    * `now` is filled after mount: the server has its own clock, so rendering it during the first
    * pass would hydrate a different time than the browser shows.
@@ -586,6 +603,10 @@ export function TimeAccessContent() {
             <Button
               disabled={!enabled}
               onClick={() => {
+                const problem = timeWindowError(start, end);
+                setError(problem ?? "");
+                setMessage("");
+                if (problem) return;
                 setTimeAccess(start, end);
                 refresh();
                 setMessage(`Access allowed between ${start} and ${end}.`);
@@ -603,6 +624,11 @@ export function TimeAccessContent() {
                     : "The wallet is closed right now."}
             </span>
           </div>
+          {error && (
+            <div className="mt-4">
+              <FormMessage tone="error">{error}</FormMessage>
+            </div>
+          )}
           {message && (
             <div className="mt-4">
               <FormMessage tone="ok">{message}</FormMessage>
@@ -747,12 +773,6 @@ export function GeoLockContent() {
   );
 }
 
-/** Accepts only a full IPv4 address with each octet inside 0-255. */
-const isIpv4 = (value: string): boolean => {
-  const parts = value.trim().split(".");
-  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
-};
-
 export function IpWhitelistContent() {
   const feature = securityFeature("ip-whitelist");
   const { snapshot, refresh, enable } = useSecurity();
@@ -839,6 +859,8 @@ export function IpWhitelistContent() {
               Add an address
               <Input
                 className="mt-2"
+                inputMode="decimal"
+                maxLength={15}
                 value={draft}
                 placeholder="102.44.18.7"
                 onChange={(event) => setDraft(event.target.value)}
@@ -893,15 +915,15 @@ export function WalletPasswordContent() {
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const longEnough = next.length >= 8;
-  const mixed = /[0-9]/.test(next) && /[A-Za-z]/.test(next);
-  const matches = next.length > 0 && next === confirm;
-  const ready = longEnough && mixed && matches;
+  /** Turning a password into rules and a boolean keeps the page and the store in step. */
+  const passwordProblem =
+    next.length === 0 ? "Enter a new password." : newPasswordError(next, confirm);
+  const ready = passwordProblem === null;
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setMessage("");
     if (!ready) {
-      setError("Fix the requirements below before saving.");
+      setError(passwordProblem ?? "Fix the requirements below before saving.");
       return;
     }
     setError("");
@@ -922,6 +944,7 @@ export function WalletPasswordContent() {
                 className="mt-2"
                 type="password"
                 autoComplete="current-password"
+                maxLength={LIMITS.maxPasswordLength}
                 value={current}
                 onChange={(event) => setCurrent(event.target.value)}
                 placeholder="••••••••"
@@ -933,6 +956,7 @@ export function WalletPasswordContent() {
                 className="mt-2"
                 type="password"
                 autoComplete="new-password"
+                maxLength={LIMITS.maxPasswordLength}
                 value={next}
                 onChange={(event) => setNext(event.target.value)}
                 placeholder="At least 8 characters"
@@ -944,15 +968,19 @@ export function WalletPasswordContent() {
                 className="mt-2"
                 type="password"
                 autoComplete="new-password"
+                maxLength={LIMITS.maxPasswordLength}
                 value={confirm}
                 onChange={(event) => setConfirm(event.target.value)}
                 placeholder="••••••••"
               />
             </label>
             <ul className="space-y-1 text-xs text-muted-foreground">
-              <li>{longEnough ? "✓" : "•"} At least 8 characters</li>
-              <li>{mixed ? "✓" : "•"} Letters and numbers</li>
-              <li>{matches ? "✓" : "•"} Both fields match</li>
+              {passwordRules(next).map((rule) => (
+                <li key={rule.id}>
+                  {rule.met ? "✓" : "•"} {rule.label}
+                </li>
+              ))}
+              <li>{confirm.length > 0 && next === confirm ? "✓" : "•"} Both fields match</li>
             </ul>
             <Button type="submit" disabled={!ready}>
               Update password

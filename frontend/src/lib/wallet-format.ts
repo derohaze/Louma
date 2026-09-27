@@ -23,10 +23,6 @@ export const transferTax = (amount: number): number => roundAmount(amount * TRAN
 /** What actually reaches the recipient after the tax is deducted. */
 export const transferNet = (amount: number): number => roundAmount(amount - transferTax(amount));
 
-/** Amount strings the transfer form accepts: positive, at most four decimals, no separators. */
-export const isValidAmountInput = (value: string): boolean =>
-  /^\d+(\.\d{1,4})?$/.test(value.trim());
-
 /** Shown instead of an amount while the wallet's balance privacy preference is on. */
 export const hiddenAmount = "••••";
 
