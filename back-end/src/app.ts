@@ -64,7 +64,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     logger: options.logger === false ? false : {
       level: options.config.logLevel,
       redact: {
-        paths: ["req.headers.authorization", "req.headers.cookie", "req.headers['set-cookie']", "req.body.password", "req.body.currentPassword", "req.body.newPassword", "req.body.code", "req.body.refreshToken"],
+        // `transferPassword` travels with every transfer body: it is a spend credential and must
+        // never survive into a request log line.
+        paths: ["req.headers.authorization", "req.headers.cookie", "req.headers['set-cookie']", "req.body.password", "req.body.currentPassword", "req.body.newPassword", "req.body.code", "req.body.refreshToken", "req.body.transferPassword"],
         censor: "[Redacted]",
       },
       // Production keeps pino's JSON lines for the log collector; everywhere else a terminal gets
@@ -77,7 +79,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     genReqId: () => randomUUID(),
     bodyLimit: 32 * 1024,
     requestTimeout: 30_000,
-    trustProxy: false,
+    // Off by default: believing X-Forwarded-For without a proxy in front lets a client choose the
+    // address the API knows it by (registration records and the rate limiter both read it).
+    trustProxy: options.config.trustProxy,
   });
 
   app.decorate("config", options.config);

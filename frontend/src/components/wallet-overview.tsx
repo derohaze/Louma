@@ -70,7 +70,12 @@ export function OverviewContent() {
   const score = securityScore(security);
   const received = transactions.filter((t) => t.direction === "received");
   const sent = transactions.filter((t) => t.direction === "sent");
-  const totalIn = sumMoney(received.map((t) => t.amount));
+  /**
+   * Each side totals what actually moved for this wallet: the sender is debited the full amount,
+   * while a received transfer credits the net amount (the network tax is taken out of it). Summing
+   * `amount` on both sides would report a balance that never existed.
+   */
+  const totalIn = sumMoney(received.map((t) => t.netAmount));
   const totalOut = sumMoney(sent.map((t) => t.amount));
   const chart = useMemo(() => {
     const days = Array.from({ length: 7 }, (_, i) => {
@@ -87,7 +92,7 @@ export function OverviewContent() {
         day: date.toLocaleDateString("en-US", { weekday: "short" }),
         // Summed in integer minor units, then converted once for the chart coordinate.
         received: moneyChartValue(
-          sumMoney(daily.filter((t) => t.direction === "received").map((t) => t.amount)),
+          sumMoney(daily.filter((t) => t.direction === "received").map((t) => t.netAmount)),
         ),
         sent: moneyChartValue(
           sumMoney(daily.filter((t) => t.direction === "sent").map((t) => t.amount)),
@@ -107,7 +112,7 @@ export function OverviewContent() {
       icon: ArrowDownLeft01Icon,
       label: "Total Received",
       money: currency(totalIn),
-      hint: "Incoming transfers in the loaded history",
+      hint: "Net of the network tax, in the loaded history",
       href: "/history",
     },
     {
@@ -289,7 +294,7 @@ export function OverviewContent() {
               </div>
               <strong className="text-sm">
                 {t.direction === "sent" ? "-" : "+"}
-                {currency(t.amount)}
+                {currency(t.direction === "sent" ? t.amount : t.netAmount)}
               </strong>
             </Link>
           ))

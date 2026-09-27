@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { useWallet, type Transaction } from "@/hooks/wallet-context";
@@ -66,10 +66,29 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
   const tax = transaction.fee || transferTax(transaction.amount);
   const net =
     transaction.netAmount || (sent ? transferNet(transaction.amount) : transaction.amount);
+  /**
+   * The amount debited from the sender and the amount credited to the recipient are different
+   * numbers: the network tax sits between them. Each side is shown what moved in its own wallet, so
+   * a received transfer is worth its net amount here — the same figure the wallet balance grew by.
+   */
+  const movedForThisWallet = sent ? transaction.amount : net;
+  const breakdown: [string, ReactNode][] = sent
+    ? [
+        ["Amount debited", currency(transaction.amount)],
+        ["Network tax (1%)", currency(tax)],
+        ["Recipient received", currency(net)],
+        // `balanceAfter` is the sender's own balance, so it only means something on this side.
+        ["Balance after", transaction.balanceAfter ? currency(transaction.balanceAfter) : "—"],
+      ]
+    : [
+        ["Amount credited", currency(net)],
+        ["Network tax (1%)", `${currency(tax)} — paid by the sender`],
+        ["Sender paid", currency(transaction.amount)],
+      ];
   return (
     <>
       <PageHeader
-        title={`${sent ? "Sent" : "Received"} ${currency(transaction.amount)}`}
+        title={`${sent ? "Sent" : "Received"} ${currency(movedForThisWallet)}`}
         subtitle={`${transaction.transferId} · ${dateText(transaction.createdAt)}`}
       />
       <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
@@ -80,16 +99,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
           >
             <FactList
               items={[
-                [sent ? "Amount debited" : "Amount credited", currency(transaction.amount)],
-                [
-                  "Network tax (1%)",
-                  sent ? currency(tax) : `${currency(tax)} — paid by the sender`,
-                ],
-                [sent ? "Recipient received" : "Kept by this wallet", currency(net)],
-                [
-                  "Balance after",
-                  transaction.balanceAfter ? currency(transaction.balanceAfter) : "—",
-                ],
+                ...breakdown,
                 ["Status", "Completed"],
                 ["Note", transaction.note || "—"],
                 [

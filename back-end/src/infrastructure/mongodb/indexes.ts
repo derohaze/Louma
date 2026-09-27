@@ -1,4 +1,5 @@
 import { MongoServerError, type Db, type Document } from "mongodb";
+import { LEDGER_AMOUNT_MAX_MINOR } from "../../shared/types.js";
 
 const schemas: Record<string, Document> = {
   users: {
@@ -19,18 +20,42 @@ const schemas: Record<string, Document> = {
   },
   wallets: {
     $and: [
-      { $jsonSchema: { bsonType: "object", required: ["publicId", "address", "addressNormalized", "ownerUserId", "status", "createdAt", "updatedAt", "customAddressChangedAt", "customAddress", "customAddressNormalized"], properties: { publicId: { bsonType: "string" }, address: { bsonType: "string" }, addressNormalized: { bsonType: "string" }, ownerUserId: { bsonType: "string" }, status: { enum: ["active", "frozen"] }, createdAt: { bsonType: "date" }, updatedAt: { bsonType: "date" }, customAddressChangedAt: { bsonType: ["date", "null"] }, customAddress: { bsonType: ["string", "null"] }, customAddressNormalized: { bsonType: ["string", "null"] } } } },
+      { $jsonSchema: { bsonType: "object", required: ["publicId", "address", "addressNormalized", "ownerUserId", "status", "financialVersion", "createdAt", "updatedAt", "customAddressChangedAt", "customAddress", "customAddressNormalized"], properties: { publicId: { bsonType: "string" }, address: { bsonType: "string" }, addressNormalized: { bsonType: "string" }, ownerUserId: { bsonType: "string" }, status: { enum: ["active", "frozen"] }, financialVersion: { bsonType: "int", minimum: 0 }, createdAt: { bsonType: "date" }, updatedAt: { bsonType: "date" }, customAddressChangedAt: { bsonType: ["date", "null"] }, customAddress: { bsonType: ["string", "null"] }, customAddressNormalized: { bsonType: ["string", "null"] } } } },
       { balance: { $exists: false } },
     ],
   },
   ledger_accounts: {
-    $jsonSchema: { bsonType: "object", required: ["publicId", "walletId", "accountType", "currency", "balanceMinor", "createdAt"], properties: { publicId: { bsonType: "string" }, walletId: { bsonType: ["string", "null"] }, accountType: { enum: ["wallet", "fee_revenue"] }, currency: { enum: ["LMA"] }, balanceMinor: { bsonType: "number", minimum: 0 }, createdAt: { bsonType: "date" } } },
+    // `$jsonSchema` speaks JSON Schema, so the account-type/wallet-id pairing is expressed with
+    // allOf/anyOf (the query language's $and/$or are not valid inside it).
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["publicId", "walletId", "accountType", "currency", "balanceMinor", "createdAt"],
+      properties: {
+        publicId: { bsonType: "string" },
+        walletId: { bsonType: ["string", "null"] },
+        accountType: { enum: ["wallet", "fee_revenue", "system_treasury"] },
+        currency: { enum: ["LMA"] },
+        // Bounded to the largest movement the product can produce: the projection can never
+        // leave the exact-integer safe range, whatever is added up inside it.
+        balanceMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR },
+        createdAt: { bsonType: "date" },
+      },
+      allOf: [
+        // A wallet account belongs to exactly one wallet; an offline account belongs to none.
+        {
+          anyOf: [
+            { properties: { accountType: { enum: ["wallet"] }, walletId: { bsonType: "string" } }, required: ["accountType", "walletId"] },
+            { properties: { accountType: { enum: ["fee_revenue", "system_treasury"] }, walletId: { bsonType: "null" } }, required: ["accountType", "walletId"] },
+          ],
+        },
+      ],
+    },
   },
   ledger_entries: {
-    $jsonSchema: { bsonType: "object", required: ["publicId", "transactionId", "lineNumber", "walletId", "ledgerAccountId", "side", "amountMinor", "currency", "correlationId", "createdAt"], properties: { publicId: { bsonType: "string" }, transactionId: { bsonType: "string" }, lineNumber: { bsonType: "int", minimum: 1 }, walletId: { bsonType: ["string", "null"] }, ledgerAccountId: { bsonType: "string" }, side: { enum: ["debit", "credit"] }, amountMinor: { bsonType: "number", minimum: 1 }, currency: { enum: ["LMA"] }, correlationId: { bsonType: "string" }, createdAt: { bsonType: "date" } } },
+    $jsonSchema: { bsonType: "object", required: ["publicId", "transactionId", "lineNumber", "walletId", "ledgerAccountId", "side", "amountMinor", "currency", "correlationId", "createdAt"], properties: { publicId: { bsonType: "string" }, transactionId: { bsonType: "string" }, lineNumber: { bsonType: "int", minimum: 1 }, walletId: { bsonType: ["string", "null"] }, ledgerAccountId: { bsonType: "string" }, side: { enum: ["debit", "credit"] }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, correlationId: { bsonType: "string" }, createdAt: { bsonType: "date" } } },
   },
   transactions: {
-    $jsonSchema: { bsonType: "object", required: ["publicId", "transferId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "status", "type", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor", "correlationId", "createdAt", "completedAt"], properties: { publicId: { bsonType: "string" }, transferId: { bsonType: "string" }, idempotencyKey: { bsonType: "string" }, requestFingerprint: { bsonType: "string" }, correlationId: { bsonType: "string" }, balanceAfterMinor: { bsonType: "number", minimum: 0 }, amountMinor: { bsonType: "number", minimum: 1 }, feeMinor: { bsonType: "number", minimum: 0 }, netAmountMinor: { bsonType: "number", minimum: 1 }, currency: { enum: ["LMA"] }, status: { enum: ["completed"] }, type: { enum: ["transfer"] }, createdAt: { bsonType: "date" }, completedAt: { bsonType: "date" } } },
+    $jsonSchema: { bsonType: "object", required: ["publicId", "transferId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "status", "type", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor", "correlationId", "createdAt", "completedAt"], properties: { publicId: { bsonType: "string" }, transferId: { bsonType: "string" }, idempotencyKey: { bsonType: "string" }, requestFingerprint: { bsonType: "string" }, correlationId: { bsonType: "string" }, balanceAfterMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, feeMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR }, netAmountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, status: { enum: ["completed"] }, type: { enum: ["transfer"] }, createdAt: { bsonType: "date" }, completedAt: { bsonType: "date" } } },
   },
   sessions: {
     $jsonSchema: { bsonType: "object", required: ["publicId", "ownerUserId", "refreshTokenHash", "previousRefreshTokenHash", "status", "twoFactorAttempts", "createdAt", "lastActiveAt", "expiresAt", "revokedAt"], properties: { publicId: { bsonType: "string" }, ownerUserId: { bsonType: "string" }, refreshTokenHash: { bsonType: ["string", "null"] }, previousRefreshTokenHash: { bsonType: ["string", "null"] }, status: { enum: ["active", "pending_two_factor", "revoked"] }, twoFactorAttempts: { bsonType: "int", minimum: 0 }, expiresAt: { bsonType: "date" } } },

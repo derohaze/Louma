@@ -36,8 +36,13 @@ async function verifyTotpOrRecovery(input: { config: AppConfig; collections: Col
   return { credential, remainingHashes: credential.recoveryCodeHashes.filter((_, item) => item !== index), recoveryCodeUsed: true };
 }
 
-export async function beginTwoFactorSetup(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown }) {
-  await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
+/**
+ * Starts enrolment. No password is asked for: the caller already holds an authenticated session, and
+ * the enrolment only counts once the new authenticator answers with a code, so nothing is trusted on
+ * the strength of the request alone. Turning a second factor *off* is the direction that still
+ * requires a code (see `disableTwoFactor`).
+ */
+export async function beginTwoFactorSetup(input: { collections: Collections; config: AppConfig; ownerUserId: string }) {
   const current = await input.collections.twoFactorCredentials.findOne({ ownerUserId: input.ownerUserId });
   if (current?.enabledAt) throw conflict("two_factor_already_enabled", "Two-factor authentication is already enabled.");
 
@@ -89,18 +94,18 @@ export async function confirmTwoFactorSetup(input: { collections: Collections; c
   return { enabledAt: now.toISOString(), recoveryCodes };
 }
 
-export async function disableTwoFactor(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown; code: unknown; requestId: string }) {
-  await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
+export async function disableTwoFactor(input: { collections: Collections; config: AppConfig; ownerUserId: string; code: unknown; requestId: string }) {
   const verification = await verifyTotpOrRecovery(input);
   if (!verification) throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
-  const result = await input.collections.twoFactorCredentials.deleteOne({ _id: verification.credential._id, enabledAt: { $ne: null } });
+  // The delete is conditional on the recovery-code set that was verified: a code invalidated by a
+  // regeneration in the meantime must not still authorise turning the second factor off.
+  const result = await input.collections.twoFactorCredentials.deleteOne({ _id: verification.credential._id, enabledAt: { $ne: null }, recoveryCodeHashes: verification.credential.recoveryCodeHashes });
   if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_disabled", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } });
   return { enabled: false };
 }
 
-export async function regenerateRecoveryCodes(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown; code: unknown; requestId: string }) {
-  await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
+export async function regenerateRecoveryCodes(input: { collections: Collections; config: AppConfig; ownerUserId: string; code: unknown; requestId: string }) {
   const verification = await verifyTotpOrRecovery(input);
   if (!verification) throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
   const recoveryCodes = generateRecoveryCodes();
@@ -143,12 +148,24 @@ export async function setTransferPassword(input: { collections: Collections; own
     }
   }
   const now = new Date();
-  const result = await input.collections.transferPasswordCredentials.updateOne(
-    { ownerUserId: input.ownerUserId },
-    { $set: { passwordHash: await argon2.hash(input.newPassword, ARGON2_OPTIONS), changedAt: now }, $setOnInsert: { ownerUserId: input.ownerUserId } },
-    { upsert: true },
-  );
-  if (result.matchedCount === 0 && !result.upsertedId) throw conflict("transfer_password_changed", "The transfer password changed. Try again.");
+  const passwordHash = await argon2.hash(input.newPassword, ARGON2_OPTIONS);
+  /**
+   * The write is conditional on the credential that was just verified, so two requests that both
+   * checked the old password cannot both replace it: the second is told to retry rather than
+   * silently overwriting the password the first one has already set.
+   */
+  const result = existing
+    ? await input.collections.transferPasswordCredentials.updateOne(
+        { ownerUserId: input.ownerUserId, passwordHash: existing.passwordHash, changedAt: existing.changedAt },
+        { $set: { passwordHash, changedAt: now } },
+      )
+    : await input.collections.transferPasswordCredentials.updateOne(
+        { ownerUserId: input.ownerUserId },
+        { $setOnInsert: { ownerUserId: input.ownerUserId, passwordHash, changedAt: now } },
+        { upsert: true },
+      );
+  const applied = existing ? result.modifiedCount === 1 : Boolean(result.upsertedId);
+  if (!applied) throw conflict("transfer_password_changed", "The transfer password changed. Try again.");
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: existing ? "transfer_password_changed" : "transfer_password_set", outcome: "success", correlationId: input.requestId });
   return { enabled: true, changedAt: now.toISOString() };
 }
@@ -193,12 +210,18 @@ export async function listNotifications(input: { collections: Collections; owner
     if (!NOTIFICATION_CURSOR_PATTERN.test(input.cursor)) throw notFound();
     const cursor = await input.collections.notifications.findOne({ ownerUserId: input.ownerUserId, _id: ObjectId.createFromHexString(input.cursor) });
     if (!cursor) throw notFound();
-    filter["createdAt"] = { $lt: cursor.createdAt };
+    // A transfer notifies both sides in the same instant, so two notices regularly share a
+    // millisecond: the cursor is the pair (createdAt, _id), because filtering on the timestamp
+    // alone would skip every remaining notice from that millisecond.
+    filter["$and"] = [
+      { ownerUserId: input.ownerUserId },
+      { $or: [{ createdAt: { $lt: cursor.createdAt } }, { createdAt: cursor.createdAt, _id: { $lt: cursor._id } }] },
+    ];
   }
   // `unread` counts the whole account, not the page: a badge derived from the twenty notifications
   // a client happens to have loaded would silently under-report and never reach zero.
   const [notifications, unread] = await Promise.all([
-    input.collections.notifications.find(filter, { projection: { _id: 1, kind: 1, title: 1, body: 1, readAt: 1, createdAt: 1 } }).sort({ createdAt: -1 }).limit(pageSize + 1).toArray(),
+    input.collections.notifications.find(filter, { projection: { _id: 1, kind: 1, title: 1, body: 1, readAt: 1, createdAt: 1 } }).sort({ createdAt: -1, _id: -1 }).limit(pageSize + 1).toArray(),
     input.collections.notifications.countDocuments({ ownerUserId: input.ownerUserId, readAt: null }),
   ]);
   const hasMore = notifications.length > pageSize;

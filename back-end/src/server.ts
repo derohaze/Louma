@@ -19,6 +19,14 @@ try {
   process.once("SIGINT", () => void close("SIGINT").then(() => process.exit(0)));
   process.once("SIGTERM", () => void close("SIGTERM").then(() => process.exit(0)));
 
+  if (!config.ipinfoToken) {
+    // Degrading quietly would hide that signups are being recorded without a location.
+    app.log.warn(
+      { variable: "IPINFO_TOKEN" },
+      "signup_geolocation_disabled: connecting IPs are still stored, city/country/org stay null",
+    );
+  }
+
   await app.listen({ host: config.host, port: config.port });
 } catch (error) {
   await client.close();

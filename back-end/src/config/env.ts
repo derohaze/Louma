@@ -18,6 +18,15 @@ export interface AppConfig {
   rateLimitMax: number;
   rateLimitWindowMs: number;
   logLevel: LogLevel;
+  /** ipinfo.io token for signup geolocation. Null disables the lookup; the IP itself is still stored. */
+  ipinfoToken: string | null;
+  ipinfoTimeoutMs: number;
+  /**
+   * Whether `X-Forwarded-For` may be believed. False unless the deployment sits behind a proxy that
+   * overwrites the header: with it on and no such proxy, a client picks its own address — and with
+   * that, the rate limiter's idea of who it is talking to.
+   */
+  trustProxy: boolean;
 }
 
 function required(name: string, values: NodeJS.ProcessEnv): string {
@@ -32,6 +41,11 @@ function positiveInteger(name: string, raw: string, minimum = 1): number {
     throw new Error(`Invalid environment variable: ${name}`);
   }
   return value;
+}
+
+function optionalString(name: string, values: NodeJS.ProcessEnv): string | null {
+  const value = values[name]?.trim();
+  return value ? value : null;
 }
 
 function decodeKey(name: string, raw: string): Buffer {
@@ -115,5 +129,8 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitMax: positiveInteger("RATE_LIMIT_MAX", values["RATE_LIMIT_MAX"] ?? "120"),
     rateLimitWindowMs: positiveInteger("RATE_LIMIT_WINDOW_MS", values["RATE_LIMIT_WINDOW_MS"] ?? "60000"),
     logLevel: logLevel(values["LOG_LEVEL"] ?? (isProduction ? "info" : "debug")),
+    ipinfoToken: optionalString("IPINFO_TOKEN", values),
+    ipinfoTimeoutMs: positiveInteger("IPINFO_TIMEOUT_MS", values["IPINFO_TIMEOUT_MS"] ?? "2500"),
+    trustProxy: values["TRUST_PROXY"] === "true",
   };
 }

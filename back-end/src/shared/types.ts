@@ -16,6 +16,37 @@ export type WalletStatus = "active" | "frozen";
 export type SessionStatus = "active" | "pending_two_factor" | "revoked";
 export type LedgerSide = "debit" | "credit";
 export type TransactionDirection = "sent" | "received";
+/**
+ * Offline (non-customer) ledger account types. None of them is owned by a wallet, none is reachable
+ * through a customer endpoint, and no public API can post to them: they exist so every LMA in the
+ * system has a ledger home — revenue taken in, and currency issued from a controlled source.
+ */
+export type SystemAccountType = "fee_revenue" | "system_treasury";
+
+/**
+ * The largest amount a single ledger line may carry, in minor units. It equals the maximum transfer
+ * amount — the largest movement the product can produce — so every financial document (account
+ * projection, ledger entry, transaction amount) is bounded by it, which keeps every persisted money
+ * integer inside the safe-integer range no matter how many operations land.
+ */
+export const LEDGER_AMOUNT_MAX_MINOR = MAX_TRANSFER_MINOR;
+
+/**
+ * Where an account signed up from: the connecting address, captured with the account, plus whatever
+ * the ipinfo.io lookup reports for it moments later. The country a person *chooses* is a different
+ * field (`profile.country`), because a chosen country and an observed country are not the same fact.
+ */
+export interface SignupLocation {
+  ipAddress: string;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  org: string | null;
+  timezone: string | null;
+  capturedAt: Date;
+  /** Null until the background lookup has run; it stays null when the lookup is disabled. */
+  resolvedAt: Date | null;
+}
 
 export interface UserRecord {
   _id: ObjectId;
@@ -23,6 +54,7 @@ export interface UserRecord {
   email: string;
   passwordHash: string;
   profile: { displayName: string; country: string | null };
+  signupLocation: SignupLocation | null;
   status: AccountStatus;
   emailVerifiedAt: Date | null;
   createdAt: Date;
@@ -36,6 +68,13 @@ export interface WalletRecord {
   addressNormalized: string;
   ownerUserId: string;
   status: WalletStatus;
+  /**
+   * Write-conflict guard for wallet-affecting financial operations, not a balance: a transfer
+   * increments it inside its transaction and refuses to commit when the increment did not land,
+   * which makes a freeze that races a transfer serialize against it. It carries no money meaning —
+   * balances live on the ledger account and are explained by the ledger entries.
+   */
+  financialVersion: number;
   createdAt: Date;
   updatedAt: Date;
   customAddressChangedAt: Date | null;
@@ -46,10 +85,16 @@ export interface WalletRecord {
 export interface LedgerAccountRecord {
   _id: ObjectId;
   publicId: string;
+  /** Null for offline accounts (fee revenue, treasury), which belong to no wallet. */
   walletId: string | null;
-  accountType: "wallet" | "fee_revenue";
+  accountType: "wallet" | SystemAccountType;
   currency: typeof CURRENCY;
-  /** Normal-side balance is a concurrency-safe projection; the ledger entries remain authoritative. */
+  /**
+   * Concurrency-safe projection of the account's ledger-derived balance, kept in the same
+   * transaction as the entries that produce it. The ledger entries remain authoritative: a
+   * reconciler can always recompute this number from them alone. Never negative for any account
+   * type — issuance credits the user side and debits the treasury side, it never overdraws it.
+   */
   balanceMinor: number;
   createdAt: Date;
 }
@@ -68,9 +113,16 @@ export interface LedgerEntryRecord {
   createdAt: Date;
 }
 
+export interface ReconciliationIssue {
+  kind: "projection_mismatch" | "negative_balance" | "unbalanced_transaction" | "empty_transaction" | "orphan_entry" | "duplicate_transaction" | "currency_mismatch" | "invalid_reference";
+  severity: "error" | "critical";
+  detail: string;
+}
+
 export interface TransactionRecord {
   _id: ObjectId;
   publicId: string;
+  /** The customer-facing movement identifier; the API also accepts it for lookups. */
   transferId: string;
   senderUserId: string;
   receiverUserId: string;
@@ -82,6 +134,7 @@ export interface TransactionRecord {
   feeMinor: number;
   netAmountMinor: number;
   currency: typeof CURRENCY;
+  /** Completed-at-write today; the state machine has room for pending states if async flows come. */
   status: "completed";
   type: "transfer";
   note: string;

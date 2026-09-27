@@ -1,3 +1,5 @@
+import { clearWalletSnapshot } from "@/lib/wallet-cache";
+
 export interface ApiUser {
   id: string;
   email: string;
@@ -151,8 +153,13 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 }
 
+/**
+ * Called only when a session starts (sign-in, sign-up, second factor). A new session must not see
+ * the wallet snapshot the previous one left in the tab, so that cache is dropped here.
+ */
 export function acceptAccessToken(token: string | null): void {
   accessToken = token;
+  clearWalletSnapshot();
 }
 
 export function clearAccessToken(): void {
