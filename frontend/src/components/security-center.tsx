@@ -1,43 +1,34 @@
-import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import type { HugeiconsIcon } from "@hugeicons/react";
 import {
   AlertCircleIcon,
   CheckmarkCircle02Icon,
-  ComputerIcon,
   InformationCircleIcon,
   ShieldEnergyIcon,
-  SmartPhone01Icon,
   SnowIcon,
+  ComputerIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
+import { useWallet } from "@/hooks/wallet-context";
 import {
-  readSecurity,
+  securityEventLevel,
+  securityEventTitle,
   securityScore,
   securityStateText,
-  setFrozen,
-  setSecurityFeature,
-  type SecurityAlert,
-} from "@/lib/demo-security";
-import { readSessions, type WalletSession } from "@/lib/demo-sessions";
-import { securityControls, securityFeatures, type SecurityFeatureId } from "@/lib/security-catalog";
+} from "@/lib/security-state";
+import { securityControls, securityFeatures } from "@/lib/security-catalog";
 import { dateText } from "@/lib/wallet-format";
 import { Icon, PageHeader } from "./wallet-shell";
-import { Panel, PreviewNote, StatusPill } from "./security-ui";
+import { Panel, StatusPill } from "./security-ui";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
-const alertStyles: Record<SecurityAlert["level"], { icon: IconData; className: string }> = {
+const alertStyles: Record<"success" | "warning" | "info", { icon: IconData; className: string }> = {
   success: { icon: CheckmarkCircle02Icon, className: "text-success" },
   warning: { icon: AlertCircleIcon, className: "text-warning" },
   info: { icon: InformationCircleIcon, className: "text-muted-foreground" },
-};
-
-const sessionIcons: Record<WalletSession["kind"], IconData> = {
-  browser: ComputerIcon,
-  app: SmartPhone01Icon,
 };
 
 /** Colour for the score: green once most protections are on, amber while they are partial. */
@@ -47,23 +38,23 @@ const scoreTone = (score: number) => {
   return "text-destructive";
 };
 
+/**
+ * Landing page of the Security section: the score, the switch list, and the recorded security
+ * events. Every value comes from `/api/v1/security`, and every switch opens the page that owns the
+ * change, because enabling 2FA or setting a transfer password needs more than a toggle.
+ */
 export function SecurityCenterContent() {
-  const [snapshot, setSnapshot] = useState(readSecurity);
-  const score = securityScore(snapshot);
-  const sessions = readSessions();
-  const toggle = (id: SecurityFeatureId, enabled: boolean) => {
-    setSecurityFeature(id, enabled);
-    setSnapshot(readSecurity());
-  };
+  const { security, refreshSecurity } = useWallet();
+  const navigate = useNavigate();
+  const score = securityScore(security);
+  const frozen = security?.wallet.status === "frozen";
+  const events = (security?.events ?? []).slice(0, 6);
   /** One line of state for the controls, which hold no switch of their own. */
-  const controlState: Record<string, { label: string; enabled?: boolean }> = {
-    "/security/freeze": {
-      label: snapshot.frozen ? "Frozen" : "Active",
-      enabled: !snapshot.frozen,
-    },
-    "/security/devices": {
-      label: `${sessions.length} device${sessions.length === 1 ? "" : "s"} signed in`,
-    },
+  const controlState: Record<string, string> = {
+    "/security/freeze": frozen ? "Frozen" : "Active",
+    "/security/devices": `${security?.activeSessions ?? 0} signed-in ${
+      (security?.activeSessions ?? 0) === 1 ? "device" : "devices"
+    }`,
   };
 
   return (
@@ -72,22 +63,17 @@ export function SecurityCenterContent() {
         title="Security Center"
         subtitle="Layered sign-in and transfer controls for your wallet."
       />
-      {snapshot.frozen && (
+      {frozen && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-warning bg-warning/10 px-4 py-3 text-sm">
           <Icon icon={SnowIcon} size={18} className="shrink-0" />
           <p className="min-w-0 flex-1">
             The wallet is frozen, so every transfer is refused until you unfreeze it.
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setFrozen(false);
-              setSnapshot(readSecurity());
-            }}
-          >
-            Unfreeze wallet
-          </Button>
+          <Link to="/security/freeze">
+            <Button variant="outline" size="sm">
+              Unfreeze wallet
+            </Button>
+          </Link>
         </div>
       )}
       <div className="grid gap-4 xl:grid-cols-[1fr_1.3fr]">
@@ -109,9 +95,10 @@ export function SecurityCenterContent() {
           </p>
         </section>
         <Panel
-          title="Sign-in activity"
-          description="The last three sessions on this wallet."
-          bodyClassName="p-0"
+          title="Signed-in devices"
+          description={`${security?.activeSessions ?? 0} active ${
+            (security?.activeSessions ?? 0) === 1 ? "session" : "sessions"
+          } on this wallet.`}
           action={
             <Link to="/security/devices">
               <Button variant="outline" size="sm">
@@ -120,42 +107,24 @@ export function SecurityCenterContent() {
             </Link>
           }
         >
-          {sessions.slice(0, 3).map((session) => (
-            <div
-              key={session.id}
-              className="flex items-center gap-3 border-b px-5 py-3.5 last:border-0"
-            >
-              <Icon
-                icon={sessionIcons[session.kind]}
-                size={19}
-                className="shrink-0 text-muted-foreground"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{session.device}</p>
-                <p className="text-xs text-muted-foreground">
-                  {session.location} · {session.ip}
-                </p>
-              </div>
-              {session.current ? (
-                <StatusPill enabled on="This device" />
-              ) : (
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {dateText(session.lastActiveAt)}
-                </span>
-              )}
-            </div>
-          ))}
+          <div className="flex items-center gap-3">
+            <Icon icon={ComputerIcon} size={19} className="shrink-0 text-muted-foreground" />
+            <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+              A device stays signed in until its session expires or you revoke it. Revoking ends the
+              session on that device's next request.
+            </p>
+          </div>
         </Panel>
       </div>
       <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
         <div className="border-b px-5 py-4">
           <h2 className="font-display font-semibold">Protections</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Switch a control on here, or open it for its settings.
+            Open a control to turn it on or off; the change is applied by the backend.
           </p>
         </div>
         {securityFeatures.map((feature) => {
-          const enabled = snapshot.enabled[feature.id];
+          const enabled = score.enabled[feature.id];
           return (
             <div
               key={feature.id}
@@ -172,14 +141,14 @@ export function SecurityCenterContent() {
                   {feature.title}
                 </Link>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {securityStateText(feature.id, snapshot)}
+                  {securityStateText(feature.id, security)}
                 </p>
               </div>
               <StatusPill enabled={enabled} />
               <Switch
                 checked={enabled}
-                onCheckedChange={(value) => toggle(feature.id, value)}
-                aria-label={`Enable ${feature.title}`}
+                onCheckedChange={() => void navigate({ to: feature.href })}
+                aria-label={`Open ${feature.title} settings`}
               />
             </div>
           );
@@ -192,62 +161,67 @@ export function SecurityCenterContent() {
             The emergency freeze and the list of signed-in devices.
           </p>
         </div>
-        {securityControls.map((control) => {
-          const state = controlState[control.href] ?? { label: "" };
-          return (
-            <div
-              key={control.href}
-              className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
-            >
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
-                <Icon icon={control.icon} size={19} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <Link
-                  to={control.href}
-                  className="text-sm font-semibold transition-colors hover:text-primary"
-                >
-                  {control.title}
-                </Link>
-                <p className="mt-1 text-xs text-muted-foreground">{control.description}</p>
-              </div>
-              {state.enabled === undefined ? (
-                <span className="shrink-0 text-xs text-muted-foreground">{state.label}</span>
-              ) : (
-                <StatusPill enabled={state.enabled} on={state.label} off="Frozen" />
-              )}
+        {securityControls.map((control) => (
+          <div
+            key={control.href}
+            className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
+          >
+            <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
+              <Icon icon={control.icon} size={19} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <Link
+                to={control.href}
+                className="text-sm font-semibold transition-colors hover:text-primary"
+              >
+                {control.title}
+              </Link>
+              <p className="mt-1 text-xs text-muted-foreground">{control.description}</p>
             </div>
-          );
-        })}
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {controlState[control.href] ?? ""}
+            </span>
+          </div>
+        ))}
       </section>
       <Panel
         title="Security alerts"
-        description="What the wallet noticed on this account."
+        description="What the wallet recorded on this account, most recent first."
         bodyClassName="p-0"
+        action={
+          <Button variant="outline" size="sm" onClick={() => void refreshSecurity()}>
+            Refresh
+          </Button>
+        }
       >
-        {snapshot.alerts.map((alert) => {
-          const style = alertStyles[alert.level];
-          return (
-            <div
-              key={alert.id}
-              className="flex items-start gap-3 border-b px-5 py-3.5 last:border-0"
-            >
-              <Icon icon={style.icon} size={19} className={`shrink-0 ${style.className}`} />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">{alert.title}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{alert.detail}</p>
+        {events.length ? (
+          events.map((event) => {
+            const level = securityEventLevel(event.outcome);
+            const style = alertStyles[level];
+            return (
+              <div
+                key={event.id}
+                className="flex items-start gap-3 border-b px-5 py-3.5 last:border-0"
+              >
+                <Icon icon={style.icon} size={19} className={`shrink-0 ${style.className}`} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold">{securityEventTitle(event.type)}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {event.outcome === "failure" ? "The request was refused" : "Completed"}
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {dateText(event.createdAt)}
+                </span>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">{dateText(alert.at)}</span>
-            </div>
-          );
-        })}
+            );
+          })
+        ) : (
+          <p className="px-5 py-6 text-sm text-muted-foreground">
+            No security events have been recorded yet.
+          </p>
+        )}
       </Panel>
-      <div className="mt-4">
-        <PreviewNote>
-          Preview build: these controls change demo data for this session only — the security API is
-          not connected yet.
-        </PreviewNote>
-      </div>
     </>
   );
 }

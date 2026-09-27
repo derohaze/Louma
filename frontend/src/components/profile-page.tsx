@@ -1,9 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
-  CpuIcon,
   Mail01Icon,
-  RankingIcon,
   Settings01Icon,
   Shield01Icon,
   TransactionHistoryIcon,
@@ -19,20 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useWallet } from "@/hooks/use-wallet";
-import { rankLeaderboard, readLeaderboard } from "@/lib/demo-leaderboard";
-import { readMining } from "@/lib/demo-mining";
-import { countryName, geoCountries, readSecurity, securityScore } from "@/lib/demo-security";
-import {
-  profileAccountId,
-  profileInitials,
-  readProfile,
-  updateProfile,
-  type Profile,
-} from "@/lib/demo-profile";
+import { useWallet } from "@/hooks/wallet-context";
+import { api, messageForError, type ApiUser } from "@/lib/api";
+import { countryName, geoCountries, securityScore } from "@/lib/security-state";
+import { profileInitials } from "@/lib/profile-state";
 import { currency, dateText } from "@/lib/wallet-format";
 import { CopyButton, Icon, PageHeader } from "./wallet-shell";
-import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
+import { FactList, FormMessage, Panel } from "./security-ui";
 
 /**
  * The account behind the wallet: who owns it and what the wallet has done so far. Security and
@@ -40,13 +31,40 @@ import { FactList, FormMessage, Panel, PreviewNote } from "./security-ui";
  * rather than from the rail.
  */
 export function ProfileContent() {
-  const { wallet, email, transactions } = useWallet();
-  const [saved, setSaved] = useState<Profile>(readProfile);
-  const [draft, setDraft] = useState<Profile>(readProfile);
+  const { user, wallet, transactions, security, refresh, refreshSecurity } = useWallet();
+  const [draft, setDraft] = useState<{ displayName: string; country: string | null }>({
+    displayName: "",
+    country: null,
+  });
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const security = securityScore(readSecurity());
-  const rank = rankLeaderboard(readLeaderboard(), "balance").find((entry) => entry.isYou)?.rank;
-  const miningEarned = readMining().lifetimeEarnings;
+  const [error, setError] = useState("");
+  /** The form starts empty and follows the loaded account, so a slow response never blocks it. */
+  useEffect(() => {
+    if (!user) return;
+    setDraft((current) =>
+      current.displayName ? current : { displayName: user.displayName, country: user.country },
+    );
+  }, [user]);
+  const score = securityScore(security);
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      await api.patch<{ user: ApiUser }>("/api/v1/me", {
+        displayName: sanitizeText(draft.displayName, LIMITS.maxDisplayNameLength),
+        country: draft.country,
+      });
+      setMessage("Profile saved.");
+      await Promise.all([refresh(), refreshSecurity()]);
+    } catch (cause) {
+      setError(messageForError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
       <PageHeader
@@ -68,26 +86,18 @@ export function ProfileContent() {
               aria-hidden
               className="grid size-16 shrink-0 place-items-center rounded-2xl bg-primary font-display text-xl font-bold text-primary-foreground"
             >
-              {profileInitials(saved)}
+              {profileInitials(user)}
             </span>
             <div className="min-w-0">
-              <p className="font-display text-lg font-semibold">{saved.displayName}</p>
+              <p className="font-display text-lg font-semibold">{user?.displayName ?? "—"}</p>
               <p className="text-sm text-muted-foreground">
-                {email ?? "—"} · {countryName(saved.country)}
+                {user?.email ?? "—"} · {countryName(user?.country ?? null)}
               </p>
             </div>
           </div>
           <form
             className="mt-5 grid max-w-xl gap-4 sm:grid-cols-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              updateProfile({
-                displayName: sanitizeText(draft.displayName, LIMITS.maxDisplayNameLength),
-                country: draft.country,
-              });
-              setSaved(readProfile());
-              setMessage("Profile saved.");
-            }}
+            onSubmit={(event) => void save(event)}
           >
             <label className="block text-sm font-semibold">
               Display name
@@ -102,11 +112,11 @@ export function ProfileContent() {
             <label className="block text-sm font-semibold">
               Country
               <Select
-                value={draft.country}
+                value={draft.country ?? ""}
                 onValueChange={(country) => setDraft({ ...draft, country })}
               >
                 <SelectTrigger className="mt-2" aria-label="Country">
-                  <SelectValue />
+                  <SelectValue placeholder="Select a country" />
                 </SelectTrigger>
                 <SelectContent>
                   {geoCountries.map((country) => (
@@ -118,9 +128,16 @@ export function ProfileContent() {
               </Select>
             </label>
             <div className="sm:col-span-2">
-              <Button type="submit">Save profile</Button>
+              <Button type="submit" disabled={busy}>
+                {busy ? "Saving…" : "Save profile"}
+              </Button>
             </div>
           </form>
+          {error && (
+            <div className="mt-4">
+              <FormMessage tone="error">{error}</FormMessage>
+            </div>
+          )}
           {message && (
             <div className="mt-4">
               <FormMessage tone="ok">{message}</FormMessage>
@@ -135,7 +152,7 @@ export function ProfileContent() {
                   "Available balance",
                   <span key="balance" className="inline-flex items-center gap-2">
                     <Icon icon={Wallet01Icon} size={16} className="text-muted-foreground" />
-                    {currency(wallet?.balance ?? 0)}
+                    {currency(wallet?.balance ?? "0")}
                   </span>,
                 ],
                 [
@@ -150,26 +167,17 @@ export function ProfileContent() {
                   </span>,
                 ],
                 [
-                  "Mining earned",
-                  <span key="mining" className="inline-flex items-center gap-2">
-                    <Icon icon={CpuIcon} size={16} className="text-muted-foreground" />
-                    {currency(miningEarned)}
-                  </span>,
+                  "Protections on",
+                  `${score.enabledCount} of ${score.total} · score ${score.score}/${score.max}`,
                 ],
-                [
-                  "Leaderboard place",
-                  <span key="rank" className="inline-flex items-center gap-2">
-                    <Icon icon={RankingIcon} size={16} className="text-muted-foreground" />
-                    {rank ? `#${rank}` : "—"}
-                  </span>,
-                ],
+                ["Wallet status", wallet?.status === "frozen" ? "Frozen" : "Active"],
               ]}
             />
           </Panel>
           <Panel title="Account" description="Identifiers you may need when contacting support.">
             <FactList
               items={[
-                ["Account ID", <code key="id">{profileAccountId()}</code>],
+                ["Account ID", <code key="id">{user?.id ?? "—"}</code>],
                 [
                   "Wallet address",
                   <span key="address" className="flex items-center gap-1">
@@ -181,10 +189,10 @@ export function ProfileContent() {
                   "Sign-in email",
                   <span key="email" className="inline-flex items-center gap-2">
                     <Icon icon={Mail01Icon} size={16} className="text-muted-foreground" />
-                    {email ?? "—"}
+                    {user?.email ?? "—"}
                   </span>,
                 ],
-                ["Member since", wallet?.created_at ? dateText(wallet.created_at) : "—"],
+                ["Member since", user?.createdAt ? dateText(user.createdAt) : "—"],
               ]}
             />
           </Panel>
@@ -205,8 +213,8 @@ export function ProfileContent() {
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-semibold">Security Center</span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  {security.enabledCount} of {security.total} protections on · score{" "}
-                  {security.score}/{security.max}
+                  {score.enabledCount} of {score.total} protections on · score {score.score}/
+                  {score.max}
                 </span>
               </span>
             </Link>
@@ -226,10 +234,6 @@ export function ProfileContent() {
             </Link>
           </div>
         </Panel>
-        <PreviewNote>
-          Preview build: profile changes are kept for this session only, and the mining figure comes
-          from the demo farm.
-        </PreviewNote>
       </div>
     </>
   );
