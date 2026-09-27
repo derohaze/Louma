@@ -13,6 +13,7 @@ import {
   Menu01Icon,
   SecurityCheckIcon,
   Copy01Icon,
+  Logout01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,7 @@ import {
   type NavSection,
 } from "@/lib/wallet-nav";
 import { readSecurity, subscribeSecurity } from "@/lib/demo-security";
+import { demoLogout, isAuthed } from "@/lib/demo-auth";
 import { LIMITS } from "@/lib/validation";
 import { DEMO_USER_EMAIL, DEMO_USER_ID, readTransactions, readWallet } from "@/lib/demo-wallet";
 import { readProfile } from "@/lib/demo-profile";
@@ -192,6 +194,12 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
+  /**
+   * Demo auth gate: every wallet page waits for this check, so an unauthenticated visitor
+   * never sees dashboard content. The check runs in an effect (never during render) to keep
+   * server and client rendering identical, since the session lives in localStorage.
+   */
+  const [authChecked, setAuthChecked] = useState(false);
   /** The account menu shows the profile name, so it reads the store on every render. */
   const profile = readProfile();
   const navigate = useNavigate();
@@ -213,6 +221,13 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
   useEffect(() => {
     void refresh();
   }, []);
+  useEffect(() => {
+    if (isAuthed()) {
+      setAuthChecked(true);
+    } else {
+      void navigate({ to: "/login" });
+    }
+  }, [navigate]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -318,6 +333,24 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
       </nav>
     </aside>
   );
+  /**
+   * While the gate redirects, show only the brand mark on the shell background —
+   * dashboard content must never flash for an unauthenticated visitor.
+   */
+  if (!authChecked) {
+    return (
+      <div className="grid min-h-dvh place-items-center bg-shell">
+        <img
+          src="/Louma_Brand_logos/png/louma-logo-128x128.png"
+          alt="Louma logo"
+          width={64}
+          height={64}
+          draggable={false}
+          className="size-16 shrink-0 border-0 bg-transparent object-contain shadow-none"
+        />
+      </div>
+    );
+  }
   return (
     <WalletContext.Provider value={value}>
       <div className="min-h-dvh bg-shell text-foreground">
@@ -475,6 +508,16 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
                 <DropdownMenuItem onSelect={() => navigate({ to: "/settings" })}>
                   <Icon icon={Settings01Icon} />
                   Settings
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => {
+                    demoLogout();
+                    navigate({ to: "/login" });
+                  }}
+                >
+                  <Icon icon={Logout01Icon} />
+                  Log out
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

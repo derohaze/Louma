@@ -11,9 +11,12 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LeaderboardRouteImport } from './routes/leaderboard'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as MiningRouteImport } from './routes/mining'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TransferRouteImport } from './routes/transfer'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as HistoryIndexRouteImport } from './routes/history/index'
@@ -36,6 +39,11 @@ const CustomAddressRoute = CustomAddressRouteImport.update({
   path: '/custom-address',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HistoryRouteRoute = HistoryRouteRouteImport.update({
   id: '/history',
   path: '/history',
@@ -46,9 +54,19 @@ const LeaderboardRoute = LeaderboardRouteImport.update({
   path: '/leaderboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MiningRoute = MiningRouteImport.update({
   id: '/mining',
   path: '/mining',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TransferRoute = TransferRouteImport.update({
@@ -112,8 +130,11 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/history': typeof HistoryRouteRouteWithChildren
   '/custom-address': typeof CustomAddressRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/login': typeof LoginRoute
   '/mining': typeof MiningRoute
+  '/signup': typeof SignupRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
@@ -129,8 +150,11 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/custom-address': typeof CustomAddressRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/login': typeof LoginRoute
   '/mining': typeof MiningRoute
+  '/signup': typeof SignupRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
@@ -148,8 +172,11 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/history': typeof HistoryRouteRouteWithChildren
   '/custom-address': typeof CustomAddressRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/leaderboard': typeof LeaderboardRoute
+  '/login': typeof LoginRoute
   '/mining': typeof MiningRoute
+  '/signup': typeof SignupRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
@@ -168,8 +195,11 @@ export interface FileRouteTypes {
     | '/'
     | '/history'
     | '/custom-address'
+    | '/forgot-password'
     | '/leaderboard'
+    | '/login'
     | '/mining'
+    | '/signup'
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
@@ -185,8 +215,11 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/custom-address'
+    | '/forgot-password'
     | '/leaderboard'
+    | '/login'
     | '/mining'
+    | '/signup'
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
@@ -203,8 +236,11 @@ export interface FileRouteTypes {
     | '/'
     | '/history'
     | '/custom-address'
+    | '/forgot-password'
     | '/leaderboard'
+    | '/login'
     | '/mining'
+    | '/signup'
     | '/transfer'
     | '/wallet'
     | '/history/$transferId'
@@ -222,8 +258,11 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HistoryRouteRoute: typeof HistoryRouteRouteWithChildren
   CustomAddressRoute: typeof CustomAddressRoute
+  ForgotPasswordRoute: typeof ForgotPasswordRoute
   LeaderboardRoute: typeof LeaderboardRoute
+  LoginRoute: typeof LoginRoute
   MiningRoute: typeof MiningRoute
+  SignupRoute: typeof SignupRoute
   TransferRoute: typeof TransferRoute
   WalletRoute: typeof WalletRoute
   SecurityDevicesRoute: typeof SecurityDevicesRoute
@@ -251,6 +290,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CustomAddressRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/history': {
       id: '/history'
       path: '/history'
@@ -265,11 +311,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LeaderboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/mining': {
       id: '/mining'
       path: '/mining'
       fullPath: '/mining'
       preLoaderRoute: typeof MiningRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/transfer': {
@@ -370,8 +430,11 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HistoryRouteRoute: HistoryRouteRouteWithChildren,
   CustomAddressRoute: CustomAddressRoute,
+  ForgotPasswordRoute: ForgotPasswordRoute,
   LeaderboardRoute: LeaderboardRoute,
+  LoginRoute: LoginRoute,
   MiningRoute: MiningRoute,
+  SignupRoute: SignupRoute,
   TransferRoute: TransferRoute,
   WalletRoute: WalletRoute,
   SecurityDevicesRoute: SecurityDevicesRoute,
