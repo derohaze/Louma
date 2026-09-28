@@ -163,7 +163,10 @@ export function WalletNotifications() {
     try {
       // `cancelRefetch` cancels a refresh that started before this page did, so the page is appended
       // to the list it was requested against rather than to one a refresh replaced underneath it.
-      await query.fetchNextPage({ cancelRefetch: true });
+      // `throwOnError` is what puts a failed page in this `catch` at all: by default the fetch
+      // resolves with the error on the result and the list keeps whichever pages already loaded,
+      // which left this screen with no error text and no retry label.
+      await query.fetchNextPage({ cancelRefetch: true, throwOnError: true });
     } catch (cause) {
       setPageError(messageForError(cause));
     } finally {

@@ -492,14 +492,15 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {/* A logout whose reply was lost is reported as unconfirmed, not as a live session:
-                  the server may well have revoked it before the failure, and this tab is signed out
-                  either way. */}
+              {/* A logout the API did not confirm leaves this tab signed in, because the refresh
+                  cookie that keeps the session alive is the server's to clear: saying otherwise
+                  would only send the sign-in page, which redirects a signed-in visitor, straight
+                  back into the wallet. The failure is reported and the session is left usable. */}
               <DropdownMenuItem
                 onSelect={() =>
                   void signOut().catch((cause: unknown) =>
                     toast.error("Sign-out was not confirmed", {
-                      description: `${messageForError(cause)} This device is signed out anyway. If you are unsure, sign in again and sign out other devices.`,
+                      description: `${messageForError(cause)} The session on this device may still be active. Try again.`,
                     }),
                   )
                 }
@@ -593,7 +594,11 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
               <EmptyState
                 title="Wallet unavailable"
                 detail={error}
-                action={<Button onClick={() => void refresh()}>Try again</Button>}
+                action={
+                  // This screen is the error report: a retry that fails again updates the query's own
+                  // error, which is what re-renders this state.
+                  <Button onClick={() => void refresh().catch(() => undefined)}>Try again</Button>
+                }
               />
             ) : accessClosed ? (
               <EmptyState

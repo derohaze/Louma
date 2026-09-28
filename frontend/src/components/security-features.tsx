@@ -212,6 +212,10 @@ export function TwoFactorContent() {
                   variant="outline"
                   onClick={() => {
                     setConfirmingOff(false);
+                    // The password belongs to this form, but its state is shared with the
+                    // recovery-code form below: leaving it filled would put this action's credential
+                    // in a field for a different one.
+                    setPassword("");
                     setCode("");
                   }}
                 >
@@ -743,8 +747,14 @@ export function DevicesContent() {
         // A session that was already revoked is not a failure; keep going.
       }
     }
-    await load();
-    await refreshSecurity();
+    try {
+      await load();
+      await refreshSecurity();
+    } catch (cause) {
+      // The devices were revoked; only the list behind them could not be re-read.
+      setError(messageForError(cause));
+      return;
+    }
     setMessage(`${removed} other session(s) signed out.`);
   };
   return (

@@ -102,23 +102,31 @@ export function shouldRetryRequest(failureCount: number, error: unknown): boolea
 }
 
 /**
- * Re-reads the given queries, at most once each.
+ * Re-reads the given queries, at most once each, and rejects if any of them failed.
  *
  * `cancelRefetch: false` is what makes overlapping callers safe: screens that refresh several keys
  * at once — `Promise.all([refresh(), refreshSecurity()])` — share the fetch already in flight
  * instead of cancelling it and paying for a second request for the same data.
+ *
+ * `throwOnError` is what makes the returned promise mean something. `refetchQueries` swallows a
+ * failed fetch by default and resolves anyway, so a screen that awaits this after changing
+ * something would report success while still showing the balance, profile, or freeze state the API
+ * just replaced. Callers that do not await it own their own reporting.
  */
 export function refetchAccount(
   queryClient: QueryClient,
   keys: readonly (readonly unknown[])[],
 ): Promise<void> {
   return Promise.all(
-    keys.map((queryKey) => queryClient.refetchQueries({ queryKey }, { cancelRefetch: false })),
+    keys.map((queryKey) =>
+      queryClient.refetchQueries({ queryKey }, { cancelRefetch: false, throwOnError: true }),
+    ),
   ).then(() => undefined);
 }
 
 /**
- * Seeds the list caches from this tab's last snapshot, before the browser paints.
+ * Seeds the list caches from this tab's last snapshot, once the API has confirmed which account is
+ * signed in. Returns whether the snapshot belonged to that account.
  *
  * The account itself is deliberately not seeded. The profile is the record that decides whether a
  * session is still signed in, and a cached copy — `setQueryData` marks a query successful — would
@@ -126,11 +134,21 @@ export function refetchAccount(
  * revoked. Leaving it to the API keeps the page gated until the server answers for this load, while
  * the snapshot still removes the wait for the transaction and security panels once it has.
  *
+ * `accountUserId` is required for that reason as much as the gate is: the refresh cookie is shared
+ * between tabs, so signing in as another account elsewhere leaves this tab holding a snapshot that
+ * describes somebody else. Seeding it would show one account's history under another's profile and
+ * then write the mixture back as this tab's snapshot. The caller drops a snapshot that fails here.
+ *
  * The snapshot's age is carried into the cache rather than reset, so an old payload is displayed and
  * immediately re-asked for instead of being trusted for a freshness window it never earned. A
  * snapshot written by an earlier release has no age at all, which reads as perfectly stale.
  */
-export function hydrateAccountCache(queryClient: QueryClient, snapshot: WalletSnapshot): void {
+export function hydrateAccountCache(
+  queryClient: QueryClient,
+  snapshot: WalletSnapshot,
+  accountUserId: string,
+): boolean {
+  if (snapshot.user.id !== accountUserId) return false;
   const { savedAt: updatedAt } = snapshot;
   queryClient.setQueryData(
     serverStateKeys.transactions,
@@ -148,6 +166,7 @@ export function hydrateAccountCache(queryClient: QueryClient, snapshot: WalletSn
   if (snapshot.security) {
     queryClient.setQueryData(serverStateKeys.security, snapshot.security, { updatedAt });
   }
+  return true;
 }
 
 /**

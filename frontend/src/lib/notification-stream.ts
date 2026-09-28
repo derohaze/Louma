@@ -14,9 +14,11 @@ import { openNotificationStream } from "@/lib/api";
  * channel is started once a session is known and stopped when it ends. Reconnect, keep-alive
  * accounting, and the degraded mode live in this module so no screen has to think about them.
  *
- * If the endpoint cannot serve a stream at all (the API answers 503 when its change stream cannot
- * start), the channel degrades to a slower reconnect cadence that still refreshes on each attempt,
- * so a repaired server is picked up without a reload and the badge never freezes.
+ * If the endpoint cannot serve a stream at all, the channel degrades to a slower reconnect cadence
+ * that still refreshes on each attempt, so a repaired server is picked up without a reload and the
+ * badge never freezes. Both answers the endpoint can give for that count: 503 when its change stream
+ * cannot start, and 429 when this account already holds its share of streams — the fifth tab of one
+ * account is refused for exactly as long as the four it cannot see stay open.
  */
 
 type NotificationChangeListener = () => void;
@@ -50,8 +52,15 @@ let reconnectTimer: number | null = null;
 let silenceTimer: number | null = null;
 let coalesceTimer: number | null = null;
 let attempt = 0;
-/** True while the API is answering 503, so the degradation is reported once rather than every minute. */
+/** True while the API is refusing the stream, so the degradation is reported once rather than every minute. */
 let degraded = false;
+/**
+ * True once this run has made an attempt, so the one that first connects can be told from a
+ * reconnect. Every attempt after the first follows a period with no stream at all — a rotation, a
+ * dropped network, a degraded wait — and a notice written during that period has no subscriber to
+ * hint it, which would leave the badge stale until a tab switch or a manual refresh.
+ */
+let attempted = false;
 let retryBaseMs = DEFAULT_RETRY_MS;
 
 function isAbort(cause: unknown): boolean {
@@ -173,12 +182,18 @@ async function pump(response: Response, mine: number): Promise<void> {
 async function connect(): Promise<void> {
   if (!running) return;
   const mine = ++generation;
+  // Read before the attempt is recorded: the first one of a run follows the page's own read.
+  const reconnected = attempted;
+  attempted = true;
   const controller = new AbortController();
   activeController = controller;
   try {
     const response = await openNotificationStream(controller.signal);
     if (mine !== generation || !running) return;
-    if (response.status === 503) {
+    // 503 is the API saying it cannot serve realtime; 429 is the API saying this account already
+    // holds the streams it is allowed. Both leave this tab without hints, so both refresh on the
+    // slower cadence rather than retrying a connection that will keep being refused.
+    if (response.status === 503 || response.status === 429) {
       holdDegraded();
       return;
     }
@@ -194,6 +209,10 @@ async function connect(): Promise<void> {
     }
     attempt = 0;
     degraded = false;
+    // A stream is open again, which is the end of the gap that preceded it: re-read the page once so
+    // a notice written while nothing was subscribed is picked up instead of waiting for the next
+    // tab switch.
+    if (reconnected) notifyChanges();
     await pump(response, mine);
     if (mine !== generation || !running) return;
     scheduleReconnect(0);
@@ -225,6 +244,7 @@ export function stopNotificationStream(): void {
   coalesceTimer = clearTimer(coalesceTimer);
   attempt = 0;
   degraded = false;
+  attempted = false;
   retryBaseMs = DEFAULT_RETRY_MS;
 }
 

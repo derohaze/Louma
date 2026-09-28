@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
 import type { HugeiconsIcon } from "@hugeicons/react";
 import {
   AlertCircleIcon,
@@ -10,6 +11,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { messageForError } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 import { useWallet } from "@/hooks/wallet-context";
 import {
@@ -184,12 +186,24 @@ export function SecurityCenterContent() {
           </div>
         ))}
       </section>
+      {/* The alerts below are a copy of the API's answer with a freshness window on it, so a refresh
+          that fails leaves the previous copy on screen and the failure has to be said out loud. */}
       <Panel
         title="Security alerts"
         description="What the wallet recorded on this account, most recent first."
         bodyClassName="p-0"
         action={
-          <Button variant="outline" size="sm" onClick={() => void refreshSecurity()}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              void refreshSecurity().catch((cause: unknown) =>
+                toast.error("Security alerts could not be refreshed", {
+                  description: messageForError(cause),
+                }),
+              )
+            }
+          >
             Refresh
           </Button>
         }

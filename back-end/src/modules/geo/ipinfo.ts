@@ -66,7 +66,11 @@ function expandIpv6(address: string): number[] | null {
     const octets = embedded[1].split(".").map(Number);
     if (octets.some((octet) => octet < 0 || octet > 255)) return null;
     trailing.push(((octets[0] ?? 0) << 8) | (octets[1] ?? 0), ((octets[2] ?? 0) << 8) | (octets[3] ?? 0));
-    working = value.slice(0, value.length - embedded[1].length).replace(/:$/, "");
+    // The quad is preceded by the separator that joins it to the rest. A single colon has to go with
+    // it — `::ffff:8.8.8.8` leaves `::ffff` — but a `::` compression does not, or `2001:4860::8.8.8.8`
+    // would lose one of its two colons and stop parsing as a global address.
+    const head = value.slice(0, value.length - embedded[1].length);
+    working = head.endsWith("::") ? head : head.replace(/:$/, "");
   }
 
   const halves = working.split("::");

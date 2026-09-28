@@ -90,6 +90,13 @@ function parseTrustedProxies(name: string, values: NodeJS.ProcessEnv): boolean |
   if (proxies.length === 0) return false;
   for (const proxy of proxies) {
     if (!/^[0-9a-fA-F:.]+(\/\d{1,3})?$/.test(proxy)) throw new Error(`${name} must contain only IP addresses or CIDRs`);
+    // A `/0` prefix covers the whole address space, so `0.0.0.0/0` and `::/0` are `*` spelled out —
+    // every peer trusted, and therefore an `X-Forwarded-For` a client can forge. They are refused
+    // here for the same reason `true` and `*` are.
+    const prefix = proxy.includes("/") ? Number(proxy.slice(proxy.indexOf("/") + 1)) : -1;
+    if (prefix === 0) {
+      throw new Error(`${name} must not trust every hop: ${proxy} covers the whole address space`);
+    }
   }
   return proxies;
 }
