@@ -13,6 +13,7 @@ import type { Collections } from "./infrastructure/mongodb/collections.js";
 import type { MongoClient } from "mongodb";
 import { AppError } from "./shared/errors.js";
 import { registerCustomerRoutes } from "./modules/http/routes.js";
+import { stopNotificationStream } from "./modules/security/notification-stream.js";
 import { authenticateUser } from "./modules/auth/service.js";
 import { createPrettyLogStream } from "./config/logger.js";
 
@@ -79,8 +80,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     genReqId: () => randomUUID(),
     bodyLimit: 32 * 1024,
     requestTimeout: 30_000,
-    // Off by default: believing X-Forwarded-For without a proxy in front lets a client choose the
-    // address the API knows it by (registration records and the rate limiter both read it).
+    // Off by default, and never "trust everything" when on: a client can prepend an address to
+    // X-Forwarded-For, so only the configured proxies' headers may be believed (see TRUST_PROXY in
+    // config/env.ts). Registration records and the rate limiter both read the resolved address.
     trustProxy: options.config.trustProxy,
   });
 
@@ -154,6 +156,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
     request.log.error({ err: error, requestId: request.id }, "request_failed");
     return reject(500, "internal_error", "The request could not be completed.");
+  });
+
+  /**
+   * Realtime notification streams outlive every request timeout, so a closing server has to end them
+   * explicitly. `preClose` is the hook that runs before the server stops accepting connections;
+   * `stopNotificationStream` also releases the change-stream cursor it opened.
+   */
+  app.addHook("preClose", async () => {
+    await stopNotificationStream();
   });
 
   app.get("/health", async () => ({ status: "ok" }));

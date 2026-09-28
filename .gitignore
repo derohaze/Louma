@@ -5,7 +5,7 @@ cryptonel-website-main/
 .agents/
 .freebuff/
 AGENTS.md
-
+.workbuddy-ai
 # ---------------------------------------------------------------------------
 # Dependencies and build output (frontend/.gitignore covers these too, repeated
 # here so they are ignored wherever the tooling runs from).

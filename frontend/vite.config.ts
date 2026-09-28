@@ -11,7 +11,7 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
  * refresh cookie first-party and removes the need for CORS in development. The dev server proxies
  * those requests to the backend; set VITE_API_PROXY_TARGET when the API runs elsewhere.
  */
-const apiTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://127.0.0.1:3001";
+const apiTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://127.0.0.1:8000";
 
 export default defineConfig({
   tanstackStart: {
@@ -21,6 +21,7 @@ export default defineConfig({
   },
   vite: {
     server: {
+      port: 3000,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: false },
       },

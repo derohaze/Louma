@@ -10,9 +10,9 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=.env.production dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/modules/ledger/money.test.ts src/modules/security/crypto.test.ts src/modules/security/access-token.test.ts src/modules/security/totp.test.ts src/modules/geo/ipinfo.test.ts",
+    "test": "node --import tsx --test src/modules/ledger/money.test.ts src/modules/security/crypto.test.ts src/modules/security/access-token.test.ts src/modules/security/totp.test.ts src/modules/security/notification-stream.test.ts src/modules/geo/ipinfo.test.ts",
     "test:integration": "node --env-file-if-exists=.env.development --import \"data:text/javascript,import dns from 'node:dns';dns.setServers(['8.8.8.8','1.1.1.1']);\" --import tsx --test src/tests/database.integration.test.ts",
-    "reconcile:ledger": "node --env-file-if-exists=.env.production --import tsx src/scripts/reconcile-ledger.ts"
+    "reconcile:ledger": "node --env-file-if-exists=.env.production dist/scripts/reconcile-ledger.js"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

@@ -5,7 +5,7 @@ import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { ensureFeeAccount, resolveRecipient } from "../wallets/service.js";
 import { assertBalanced, calculateTransferAmounts, formatMoney, parseMoneyToMinorUnits } from "../ledger/money.js";
-import { LEDGER_AMOUNT_MAX_MINOR } from "../../shared/types.js";
+import { LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../../shared/errors.js";
 import type { PublicTransaction, TransactionDirection, TransactionRecord } from "../../shared/types.js";
 
@@ -259,7 +259,10 @@ export async function createTransfer(input: {
 
           // The password was verified before this transaction opened. Someone who changes it in the
           // meantime (the reason for changing it is usually a device they no longer trust) must not
-          // have this transfer slip through under the credential that was just replaced.
+          // have this transfer slip through under the credential that was just replaced. A snapshot
+          // read alone could not see that change, which is why a password write also bumps the
+          // wallet's financialVersion (see setTransferPassword): it conflicts with the guard above,
+          // this transaction retries, and the comparison here then reads the new credential.
           const credentialNow = await input.collections.transferPasswordCredentials.findOne(
             { ownerUserId: input.ownerUserId },
             { session, projection: { changedAt: 1 } },
@@ -281,7 +284,7 @@ export async function createTransfer(input: {
           maybeAbort({ abortSignal: input.abortSignal, point: "after_sender_debit" });
 
           const receiverCredit = await input.collections.ledgerAccounts.updateOne(
-            { _id: receiverAccount._id, accountType: "wallet", balanceMinor: { $lte: LEDGER_AMOUNT_MAX_MINOR - amounts.netAmountMinor } },
+            { _id: receiverAccount._id, accountType: "wallet", balanceMinor: { $lte: LEDGER_BALANCE_MAX_MINOR - amounts.netAmountMinor } },
             { $inc: { balanceMinor: amounts.netAmountMinor } },
             { session },
           );
@@ -290,7 +293,7 @@ export async function createTransfer(input: {
 
           if (amounts.feeMinor > 0) {
             const feeCredit = await input.collections.ledgerAccounts.updateOne(
-              { _id: feeAccount._id, accountType: "fee_revenue", balanceMinor: { $lte: LEDGER_AMOUNT_MAX_MINOR - amounts.feeMinor } },
+              { _id: feeAccount._id, accountType: "fee_revenue", balanceMinor: { $lte: LEDGER_BALANCE_MAX_MINOR - amounts.feeMinor } },
               { $inc: { balanceMinor: amounts.feeMinor } },
               { session },
             );

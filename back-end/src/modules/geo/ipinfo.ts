@@ -1,3 +1,4 @@
+import { isIPv6 } from "node:net";
 import { z } from "zod";
 
 /**
@@ -48,17 +49,70 @@ function isReservedIpv4(address: string): boolean {
   return first >= 224;
 }
 
+/**
+ * Expands an IPv6 literal into its eight 16-bit groups, or null when it is not one. A zone index is
+ * dropped and an embedded dotted-quad is folded into the last two groups, so the range checks below
+ * compare real numbers instead of string prefixes.
+ */
+function expandIpv6(address: string): number[] | null {
+  const zone = address.indexOf("%");
+  const value = (zone >= 0 ? address.slice(0, zone) : address).toLowerCase();
+  if (!isIPv6(value)) return null;
+
+  const embedded = value.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  const trailing: number[] = [];
+  let working = value;
+  if (embedded?.[1]) {
+    const octets = embedded[1].split(".").map(Number);
+    if (octets.some((octet) => octet < 0 || octet > 255)) return null;
+    trailing.push(((octets[0] ?? 0) << 8) | (octets[1] ?? 0), ((octets[2] ?? 0) << 8) | (octets[3] ?? 0));
+    working = value.slice(0, value.length - embedded[1].length).replace(/:$/, "");
+  }
+
+  const halves = working.split("::");
+  if (halves.length > 2) return null;
+  const parseGroups = (part: string): number[] | null => {
+    if (part === "") return [];
+    const groups = part.split(":").map((group) => (/^[0-9a-f]{1,4}$/.test(group) ? parseInt(group, 16) : -1));
+    return groups.some((group) => group < 0) ? null : groups;
+  };
+  const head = parseGroups(halves[0] ?? "");
+  const tail = halves.length === 2 ? parseGroups(halves[1] ?? "") : [];
+  if (head === null || tail === null) return null;
+
+  const groups = halves.length === 2
+    ? [...head, ...new Array<number>(Math.max(0, 8 - head.length - tail.length - trailing.length)).fill(0), ...tail, ...trailing]
+    : [...head, ...trailing];
+  return groups.length === 8 ? groups : null;
+}
+
+/**
+ * The IPv6 ranges a lookup service has nothing to say about. Parsing, not string prefixes, is what
+ * gets this right: `feb0::1` is inside `fe80::/10` but does not start with `fe80`, so a prefix check
+ * would have sent a non-routable address to the metered service.
+ */
+function isReservedIpv6(address: string): boolean {
+  const groups = expandIpv6(address);
+  if (!groups) return true;
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = groups;
+  // ::ffff:0:0/96 IPv4-mapped: judge the embedded IPv4 address instead.
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
+    return isReservedIpv4(`${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`);
+  }
+  // All of 0000::/8 — unspecified, loopback, IPv4-compatible — is non-global.
+  if (g0 === 0) return true;
+  if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
+  if ((g0 & 0xffc0) === 0xfe80 || (g0 & 0xffc0) === 0xfec0) return true; // fe80::/10 link-local, fec0::/10 site-local
+  if ((g0 & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+  if (g0 === 0x2001 && (g1 === 0x0db8 || g1 === 0x0002)) return true; // documentation, benchmarking
+  if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return true; // 100::/64 discard-only
+  return false;
+}
+
 export function isPublicIp(address: string): boolean {
   const value = address.trim().toLowerCase();
-  // `::ffff:203.0.113.7` is an IPv4 address wearing an IPv6 prefix.
-  const plain = value.startsWith("::ffff:") ? value.slice("::ffff:".length) : value;
-  if (!plain.includes(":")) return !isReservedIpv4(plain);
-  if (plain === "::" || plain === "::1") return false;
-  // fc00::/7 unique-local, fe80::/10 link-local, 2001:db8::/32 documentation.
-  if (plain.startsWith("fc") || plain.startsWith("fd")) return false;
-  if (plain.startsWith("fe80")) return false;
-  if (plain.startsWith("2001:db8")) return false;
-  return true;
+  if (!value.includes(":")) return !isReservedIpv4(value);
+  return !isReservedIpv6(value);
 }
 
 /**

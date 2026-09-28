@@ -1,11 +1,21 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteShorthandOptions } from "fastify";
+import type { ServerResponse } from "node:http";
 import { z } from "zod";
 import type { AuthContext } from "../../app.js";
 import * as auth from "../auth/service.js";
 import * as security from "../security/service.js";
 import * as wallets from "../wallets/service.js";
 import * as transfers from "../transfers/service.js";
-import { badRequest, forbidden, serviceUnavailable, unauthorized } from "../../shared/errors.js";
+import {
+  ensureNotificationWatcher,
+  NOTIFICATION_HEARTBEAT_FRAME,
+  notificationWatcherUnavailable,
+  registerNotificationSubscriber,
+  STREAM_HEARTBEAT_INTERVAL_MS,
+  STREAM_MAX_LIFETIME_MS,
+  STREAM_RETRY_MS,
+} from "../security/notification-stream.js";
+import { AppError, badRequest, forbidden, serviceUnavailable, unauthorized } from "../../shared/errors.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { MAX_NOTE_LENGTH } from "../../shared/types.js";
 
@@ -51,6 +61,35 @@ function getAuth(request: FastifyRequest): AuthContext {
 
 async function requireAuth(request: FastifyRequest) {
   await request.server.authenticate(request);
+}
+
+/**
+ * Writes one Server-Sent Events frame, coalescing while the socket is behind.
+ *
+ * Every notification frame carries the same meaning — "your notifications page changed" — so a
+ * client that cannot keep up does not need the backlog: while a write is still draining, further
+ * frames are dropped rather than queued. That is this endpoint's backpressure story, and it is why
+ * a slow reader costs a bounded amount of memory instead of an unbounded buffer.
+ */
+function createNotificationStreamWriter(raw: ServerResponse) {
+  let draining = false;
+  let closed = false;
+  return {
+    send: (frame: string) => {
+      if (closed || draining) return;
+      if (raw.write(frame) === false) {
+        draining = true;
+        raw.once("drain", () => {
+          draining = false;
+        });
+      }
+    },
+    end: () => {
+      if (closed) return;
+      closed = true;
+      raw.end();
+    },
+  };
 }
 
 const authenticated = { preHandler: requireAuth } satisfies RouteShorthandOptions;
@@ -146,21 +185,23 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
 
   app.get("/api/v1/security", authenticated, async (request) => security.getSecurityOverview({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }));
 
-  // Enrolment is started from the authenticated session alone; the setup only counts once the new
-  // authenticator confirms it with a code (see /2fa/confirm), so no password is collected here.
-  app.post("/api/v1/security/2fa/enable", { ...authenticated, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (request) => security.beginTwoFactorSetup({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }));
+  // Every second-factor change asks for the account password as well as the proof that change needs.
+  // A session alone must not be able to bind an authenticator (a stolen one could add a factor the
+  // owner does not hold), and a code alone must not be able to weaken the factor it proves.
+  app.post("/api/v1/security/2fa/enable", { ...authenticated, config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (request) => {
+    const body = parseBody(z.object({ password: loginPasswordSchema }).strict(), request.body);
+    return security.beginTwoFactorSetup({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body });
+  });
   app.post("/api/v1/security/2fa/confirm", authenticated, async (request) => {
     const body = parseBody(z.object({ code: totpCodeSchema }).strict(), request.body);
     return security.confirmTwoFactorSetup({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
-  // Both take one authenticator or recovery code and no password: the code is the proof that the
-  // person asking to weaken the account still holds the second factor.
   app.post("/api/v1/security/2fa/disable", authenticated, async (request) => {
-    const body = parseBody(z.object({ code: z.string().min(6).max(64) }).strict(), request.body);
+    const body = parseBody(z.object({ password: loginPasswordSchema, code: z.string().min(6).max(64) }).strict(), request.body);
     return security.disableTwoFactor({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
   app.post("/api/v1/security/2fa/recovery-codes", authenticated, async (request) => {
-    const body = parseBody(z.object({ code: z.string().min(6).max(64) }).strict(), request.body);
+    const body = parseBody(z.object({ password: loginPasswordSchema, code: z.string().min(6).max(64) }).strict(), request.body);
     return security.regenerateRecoveryCodes({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
   app.post("/api/v1/security/freeze", authenticated, async (request) => wallets.setWalletFrozen({ collections: app.collections, ownerUserId: getAuth(request).userId, frozen: true, requestId: request.id }));
@@ -172,7 +213,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   });
   app.post("/api/v1/security/transfer-password", authenticated, async (request) => {
     const body = parseBody(z.object({ currentPassword: z.string().max(128).optional(), newPassword: passwordSchema }).strict(), request.body);
-    return security.setTransferPassword({ collections: app.collections, ownerUserId: getAuth(request).userId, currentPassword: body.currentPassword, newPassword: body.newPassword, requestId: request.id });
+    return security.setTransferPassword({ collections: app.collections, mongoClient: app.mongoClient, ownerUserId: getAuth(request).userId, currentPassword: body.currentPassword, newPassword: body.newPassword, requestId: request.id });
   });
 
   app.get("/api/v1/sessions", authenticated, async (request) => ({ sessions: await auth.listSessions({ collections: app.collections, ownerUserId: getAuth(request).userId, currentSessionId: getAuth(request).sessionId }) }));
@@ -197,6 +238,82 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   app.post("/api/v1/notifications/read", authenticated, async (request) => {
     const body = parseBody(z.object({ ids: z.array(z.string().regex(/^[0-9a-f]{24}$/i)).min(1).max(50).optional() }).strict(), request.body ?? {});
     return security.markNotificationsRead({ collections: app.collections, ownerUserId: getAuth(request).userId, ids: body.ids });
+  });
+
+  /**
+   * The realtime notification channel: Server-Sent Events, one connection per open tab.
+   *
+   * The frames are only a signal, never data — a change makes the client re-read
+   * `GET /api/v1/notifications`, so this endpoint needs no read path of its own and no projection
+   * that could drift from the page the bell renders.
+   *
+   * The connection is authorized once, at open. It is deliberately short-lived for that reason (see
+   * STREAM_MAX_LIFETIME_MS): the client reconnects with a token that has to still be valid, so a
+   * revoked session stops receiving hints within one rotation instead of holding a stream open until
+   * the tab is closed.
+   */
+  app.get("/api/v1/notifications/stream", authenticated, async (request, reply) => {
+    const current = getAuth(request);
+    const writer = createNotificationStreamWriter(reply.raw);
+    // Registered before the hijack so the caps can still be answered with the API's error envelope.
+    const registered = registerNotificationSubscriber({ ownerUserId: current.userId, subscriber: writer });
+    if ("rejection" in registered) {
+      if (registered.rejection === "per_account_limit") {
+        throw new AppError(429, "stream_limit", "Too many notification streams are already open for this account. Close a Louma tab and try again.");
+      }
+      throw serviceUnavailable("stream_capacity", "Realtime notifications are at capacity. Try again shortly.");
+    }
+
+    // A stream that could never speak would strand the client on a connection it believes in, so a
+    // change stream that cannot be established is refused instead: the client then refreshes on its
+    // own slower cadence until the API can serve realtime again.
+    ensureNotificationWatcher({ collections: app.collections, log: request.log });
+    if (notificationWatcherUnavailable()) {
+      registered.unsubscribe();
+      throw serviceUnavailable("realtime_unavailable", "Realtime notifications are temporarily unavailable.");
+    }
+
+    reply.hijack();
+    const raw = reply.raw;
+    // The reply is hijacked, so the headers the global hooks set never reach the client and the CORS
+    // plugin never runs: both are repeated here. The origin is echoed only when it is one this API
+    // already trusts, because credentials travel on this request.
+    const origin = request.headers.origin;
+    raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      connection: "keep-alive",
+      "x-request-id": request.id,
+      // Tells a buffering reverse proxy to pass frames through instead of holding them.
+      "x-accel-buffering": "no",
+      ...(origin && app.config.frontendOrigins.includes(origin)
+        ? { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" }
+        : {}),
+    });
+    writer.send(`retry: ${STREAM_RETRY_MS}\n\n`);
+
+    const heartbeat = setInterval(
+      () => writer.send(NOTIFICATION_HEARTBEAT_FRAME),
+      STREAM_HEARTBEAT_INTERVAL_MS,
+    );
+    const rotation = setTimeout(() => writer.end(), STREAM_MAX_LIFETIME_MS);
+    // Neither timer may keep the process alive on its own.
+    heartbeat.unref();
+    rotation.unref();
+
+    const openedAt = Date.now();
+    raw.on("close", () => {
+      clearInterval(heartbeat);
+      clearTimeout(rotation);
+      registered.unsubscribe();
+      request.log.debug({ userId: current.userId, durationMs: Date.now() - openedAt }, "notification_stream_closed");
+    });
+    // A hijacked socket reports write failures here; without a listener an unhandled 'error' event
+    // would take the process down.
+    raw.on("error", () => raw.destroy());
+
+    request.log.debug({ userId: current.userId }, "notification_stream_opened");
+    return undefined;
   });
 
   app.post("/api/v1/auth/password", { ...authenticated, config: { rateLimit: { max: 5, timeWindow: 60_000 } }, schema: { body: { type: "object", required: ["currentPassword", "newPassword"], additionalProperties: false, properties: { currentPassword: { type: "string", minLength: 1, maxLength: 128 }, newPassword: { type: "string", minLength: 8, maxLength: 128 } } } } }, async (request) => {

@@ -4,11 +4,10 @@ import type { Transaction, Wallet } from "@/hooks/wallet-context";
 /**
  * The last confirmed snapshot of the signed-in account, kept for this tab only.
  *
- * Every wallet page mounts its own `WalletProvider`, so a navigation that had no snapshot would
- * start from an empty state and show the loading skeleton for data the tab already holds. The
- * snapshot carries nothing the page is not about to render anyway, it dies with the tab, and it is
- * dropped as soon as a session ends or a new one starts, so one account can never inherit another
- * one's history.
+ * It exists for the reload: the in-memory cache survives navigation but not a page load, and without
+ * a snapshot an F5 would show the skeleton for data the tab was already holding. The snapshot carries
+ * nothing the page is not about to render anyway, it dies with the tab, and it is dropped as soon as
+ * a session ends or a new one starts, so one account can never inherit another one's history.
  */
 export interface WalletSnapshot {
   user: ApiUser;
@@ -16,6 +15,12 @@ export interface WalletSnapshot {
   transactions: Transaction[];
   nextCursor: string | null;
   security: ApiSecurityOverview | null;
+  /**
+   * When this snapshot was written. The copy restores a screen without a skeleton, and its age is
+   * what decides whether the API is asked again — a snapshot is never trusted as fresh just because
+   * it was found. A payload written before this field existed carries no age and reads as stale.
+   */
+  savedAt: number;
 }
 
 const STORAGE_KEY = "louma.wallet.snapshot.v1";
@@ -45,7 +50,10 @@ export function readWalletSnapshot(): WalletSnapshot | null {
   if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isSnapshot(parsed) ? parsed : null;
+    if (!isSnapshot(parsed)) return null;
+    // A payload written before `savedAt` existed is still usable, it simply has no age. Reading it as
+    // perfectly stale makes the API answer it again rather than trusting a copy of unknown age.
+    return { ...parsed, savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0 };
   } catch {
     // An unreadable payload is treated as no snapshot; the next fetch overwrites it.
     return null;

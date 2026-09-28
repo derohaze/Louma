@@ -21,7 +21,8 @@ import { createTransfer } from "../modules/transfers/service.js";
  *
  * It is deliberately outside `npm test`, because it needs a real database (transactions require a
  * replica set): run it with `npm run test:integration`. Every document it creates is removed in
- * `after()`, and the shared fee account is restored to the balance it had before the run.
+ * `after()`, and the shared fee and treasury accounts are returned to the balances they had before
+ * the run — anything the test did not create is left in place.
  *
  * Funding: the customer API has no deposit endpoint yet, so the sender wallet is funded with an
  * explicit test-only mint line (one credit ledger entry plus its account projection). The assertion
@@ -41,6 +42,10 @@ let collections: Collections;
 const createdUserIds: string[] = [];
 const createdLedgerAccountIds: string[] = [];
 const createdTransactionIds: string[] = [];
+/** Treasuries this run created, so teardown removes only those and never one that already existed. */
+const createdTreasuryAccountIds: string[] = [];
+/** How much this run's funding added to the shared treasury, so teardown takes back exactly that. */
+let treasuryFundedMinor = 0;
 
 interface Account {
   userId: string;
@@ -156,12 +161,17 @@ const wrongTotpCode = () => generate({ secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
 async function fund(account: Account, amountMinor: number): Promise<void> {
   const transactionId = randomUUID();
   createdTransactionIds.push(transactionId);
-  const treasury = await collections.ledgerAccounts.findOneAndUpdate(
+  const ensured = await collections.ledgerAccounts.updateOne(
     { accountType: "system_treasury", currency: "LMA" },
     { $setOnInsert: { publicId: randomUUID(), walletId: null, accountType: "system_treasury", currency: "LMA", balanceMinor: 0, createdAt: new Date() } },
-    { upsert: true, returnDocument: "after" },
+    { upsert: true },
   );
+  const treasury = await collections.ledgerAccounts.findOne({ accountType: "system_treasury", currency: "LMA" });
   if (!treasury) throw new Error("Failed to ensure the test treasury account");
+  // A treasury the database already had belongs to the database, not to this test: record only one
+  // this run created, and remember the amount added so teardown can return the balance exactly.
+  if (ensured.upsertedId) createdTreasuryAccountIds.push(treasury.publicId);
+  treasuryFundedMinor += amountMinor;
   const now = new Date();
   await collections.ledgerEntries.insertMany(
     [
@@ -234,28 +244,32 @@ after(async () => {
       await collections.wallets.deleteMany({ ownerUserId: userId });
       await collections.users.deleteMany({ publicId: userId });
     }
+    // The fee and treasury balances are adjusted by exactly what this run contributed, computed
+    // before the lines are deleted. Replacing a live projection from a scan would erase a fee (or a
+    // funding line) another transfer added between the scan and the write; decrementing this run's
+    // own contribution atomically cannot.
+    const feeAccount = await collections.ledgerAccounts.findOne({ accountType: "fee_revenue", currency: "LMA" });
+    const feeDelta = feeAccount
+      ? (await collections.ledgerEntries.find({ ledgerAccountId: feeAccount.publicId, transactionId: { $in: createdTransactionIds } }).toArray())
+          .reduce((total, entry) => total + (entry.side === "credit" ? entry.amountMinor : -entry.amountMinor), 0)
+      : 0;
+
     for (const ledgerAccountId of createdLedgerAccountIds) {
       await collections.ledgerEntries.deleteMany({ ledgerAccountId });
       await collections.ledgerAccounts.deleteMany({ publicId: ledgerAccountId });
     }
     await collections.ledgerEntries.deleteMany({ transactionId: { $in: createdTransactionIds } });
     await collections.transactions.deleteMany({ $or: [{ publicId: { $in: createdTransactionIds } }, { transferId: { $in: createdTransactionIds } }] });
-    // The fee account outlives this test and is shared with every other transfer in the database.
-    // Restoring a snapshotted balance would erase fees another transfer earned while the suite was
-    // running, and it cannot repair drift already in the database either. Its projection is the sum
-    // of the lines that are left, so that is what is written back.
-    const feeAccount = await collections.ledgerAccounts.findOne({ accountType: "fee_revenue", currency: "LMA" });
-    if (feeAccount) {
-      const remaining = await collections.ledgerEntries.find({ ledgerAccountId: feeAccount.publicId }).toArray();
-      const entriesBalance = remaining.reduce((total, entry) => total + (entry.side === "credit" ? entry.amountMinor : -entry.amountMinor), 0);
-      if (feeAccount.balanceMinor !== entriesBalance) {
-        await collections.ledgerAccounts.updateOne({ _id: feeAccount._id }, { $set: { balanceMinor: entriesBalance } });
-      }
+
+    if (feeAccount && feeDelta !== 0) {
+      await collections.ledgerAccounts.updateOne({ _id: feeAccount._id }, { $inc: { balanceMinor: -feeDelta } });
     }
-    // The treasury is pure test infrastructure: its entries left with the funding transactions, so
-    // the account itself goes too, and the next run's `fund()` recreates it from zero. Leaving it
-    // behind would strand a projection no entries could explain.
-    await collections.ledgerAccounts.deleteMany({ accountType: "system_treasury" });
+    if (treasuryFundedMinor !== 0) {
+      await collections.ledgerAccounts.updateOne({ accountType: "system_treasury", currency: "LMA" }, { $inc: { balanceMinor: -treasuryFundedMinor } });
+    }
+    // Only treasuries this run created are removed. One that was already in the database keeps its
+    // account and its own ledger history, with the funding it received just taken back.
+    await collections.ledgerAccounts.deleteMany({ publicId: { $in: createdTreasuryAccountIds } });
     await app?.close();
     await client?.close();
   }
@@ -544,7 +558,9 @@ test("two-factor authentication gates sign-in, spends a recovery code once, and 
 
   // Enrolment is authorised by the authenticated session and proves itself with the first code, so
   // the endpoint takes no password and the secret never leaves the server unconfirmed.
-  const started = await call("POST", "/api/v1/security/2fa/enable", { token: account.accessToken });
+  // Enrolment needs the account password: a session alone must not be able to bind an authenticator.
+  assert.equal((await call("POST", "/api/v1/security/2fa/enable", { token: account.accessToken, body: { password: "WrongPassword1" } })).status, 403);
+  const started = await call("POST", "/api/v1/security/2fa/enable", { token: account.accessToken, body: { password: PASSWORD } });
   assert.equal(started.status, 200, JSON.stringify(started.body));
   const secret = started.body["secret"] as string;
   assert.ok(secret.length >= 16, "a real secret is issued for the authenticator app");
@@ -561,7 +577,7 @@ test("two-factor authentication gates sign-in, spends a recovery code once, and 
   assert.equal(enabledTwoFactor["enabled"], true);
   assert.equal(enabledTwoFactor["recoveryCodesRemaining"], 8);
   assert.equal(enabledTwoFactor["secret"], undefined, "the TOTP secret is never read back through the API");
-  assert.equal((await call("POST", "/api/v1/security/2fa/enable", { token: account.accessToken })).status, 409, "setup cannot be started twice");
+  assert.equal((await call("POST", "/api/v1/security/2fa/enable", { token: account.accessToken, body: { password: PASSWORD } })).status, 409, "setup cannot be started twice");
 
   // Signing in now returns a pending session that cannot authenticate until the code is checked.
   const login = await call("POST", "/api/v1/auth/login", { body: { email: account.email, password: PASSWORD } });
@@ -608,8 +624,10 @@ test("two-factor authentication gates sign-in, spends a recovery code once, and 
   assert.equal((afterReuse.body["twoFactor"] as { recoveryCodesRemaining: number }).recoveryCodesRemaining, 7, "the refused attempt consumed nothing");
 
   // Turning it off needs one current code and no password, and restores simple sign-in.
+  // Turning it off needs a current code *and* the account password.
   assert.equal((await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { code: await wrongTotpCode() } })).status, 403);
-  const disabled = await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { code: await totpCode(secret) } });
+  assert.equal((await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { password: "WrongPassword1", code: await totpCode(secret) } })).status, 403);
+  const disabled = await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { password: PASSWORD, code: await totpCode(secret) } });
   assert.equal(disabled.status, 200, JSON.stringify(disabled.body));
   assert.equal(disabled.body["enabled"], false);
 
@@ -903,7 +921,7 @@ test("the security overview reports this account's own protections, sessions, an
 async function assertFullReconciliation(): Promise<void> {
   // The funding correlation prefix is the one test-infrastructure exclusion: production runs pass
   // no options and check every entry strictly.
-  const result = await reconcileLedger({ collections, options: { excludeCorrelationIdPrefixes: ["smoke-funding-"] } });
+  const result = await reconcileLedger({ collections, mongoClient: client, options: { excludeCorrelationIdPrefixes: ["smoke-funding-"] } });
   assert.ok(result.ok, `ledger reconciliation must pass: ${JSON.stringify(result.issues)}`);
 }
 
@@ -1157,7 +1175,7 @@ test("internal reconciliation detects a projection that drifted from its ledger"
   await assertFullReconciliation();
 
   await collections.ledgerAccounts.updateOne({ publicId: sender.ledgerAccountId }, { $inc: { balanceMinor: 123 } });
-  const drifted = await reconcileLedger({ collections });
+  const drifted = await reconcileLedger({ collections, mongoClient: client });
   assert.equal(drifted.ok, false, "drift is detected");
   assert.ok(
     drifted.issues.some((issue) => issue.kind === "projection_mismatch" && issue.detail.includes(sender.ledgerAccountId)),

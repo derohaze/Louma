@@ -20,34 +20,42 @@ function positiveInteger(name: string, raw: string | undefined, fallback: number
   return value;
 }
 
-const mongoUri = process.env["MONGODB_URI"]?.trim();
-if (!mongoUri) throw new Error("Missing required environment variable: MONGODB_URI");
-if (!mongoUri.startsWith("mongodb://") && !mongoUri.startsWith("mongodb+srv://")) {
-  throw new Error("MONGODB_URI must use the mongodb or mongodb+srv scheme");
-}
-const mongoDatabase = process.env["MONGODB_DATABASE"]?.trim();
-if (!mongoDatabase) throw new Error("Missing required environment variable: MONGODB_DATABASE");
-
-const config = {
-  mongoUri,
-  mongoDatabase,
-  mongoConnectTimeoutMs: positiveInteger("MONGODB_CONNECT_TIMEOUT_MS", process.env["MONGODB_CONNECT_TIMEOUT_MS"], 5000),
-  mongoServerSelectionTimeoutMs: positiveInteger("MONGODB_SERVER_SELECTION_TIMEOUT_MS", process.env["MONGODB_SERVER_SELECTION_TIMEOUT_MS"], 5000),
-};
-
-const { client, db } = await connectMongo(config);
-try {
-  const collections = getCollections(db);
-  const result = await reconcileLedger({ collections });
-  if (result.ok) {
-    console.log(JSON.stringify({ ok: true, issueCount: 0 }));
-  } else {
-    console.error(JSON.stringify({ ok: false, issueCount: result.issues.length, issues: result.issues }, null, 2));
+async function main(): Promise<void> {
+  const mongoUri = process.env["MONGODB_URI"]?.trim();
+  if (!mongoUri) throw new Error("Missing required environment variable: MONGODB_URI");
+  if (!mongoUri.startsWith("mongodb://") && !mongoUri.startsWith("mongodb+srv://")) {
+    throw new Error("MONGODB_URI must use the mongodb or mongodb+srv scheme");
   }
-  process.exitCode = result.ok ? 0 : 1;
+  const mongoDatabase = process.env["MONGODB_DATABASE"]?.trim();
+  if (!mongoDatabase) throw new Error("Missing required environment variable: MONGODB_DATABASE");
+
+  const config = {
+    mongoUri,
+    mongoDatabase,
+    mongoConnectTimeoutMs: positiveInteger("MONGODB_CONNECT_TIMEOUT_MS", process.env["MONGODB_CONNECT_TIMEOUT_MS"], 5000),
+    mongoServerSelectionTimeoutMs: positiveInteger("MONGODB_SERVER_SELECTION_TIMEOUT_MS", process.env["MONGODB_SERVER_SELECTION_TIMEOUT_MS"], 5000),
+  };
+
+  const { client, db } = await connectMongo(config);
+  try {
+    const collections = getCollections(db);
+    const result = await reconcileLedger({ collections, mongoClient: client });
+    if (result.ok) {
+      console.log(JSON.stringify({ ok: true, issueCount: 0 }));
+    } else {
+      console.error(JSON.stringify({ ok: false, issueCount: result.issues.length, issues: result.issues }, null, 2));
+    }
+    process.exitCode = result.ok ? 0 : 1;
+  } finally {
+    await client.close();
+  }
+}
+
+try {
+  await main();
 } catch (error) {
+  // A missing variable or an unreachable database is a failed run (2), not a ledger discrepancy (1):
+  // automation has to be able to tell "the ledger is inconsistent" from "the check did not run".
   console.error(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
   process.exitCode = 2;
-} finally {
-  await client.close();
 }

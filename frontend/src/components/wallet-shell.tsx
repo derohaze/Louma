@@ -492,13 +492,14 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {/* A logout that never reached the API leaves the session alive: say so instead of
-                  pretending the customer is signed out. */}
+              {/* A logout whose reply was lost is reported as unconfirmed, not as a live session:
+                  the server may well have revoked it before the failure, and this tab is signed out
+                  either way. */}
               <DropdownMenuItem
                 onSelect={() =>
                   void signOut().catch((cause: unknown) =>
-                    toast.error("Could not sign you out", {
-                      description: `${messageForError(cause)} The session is still active.`,
+                    toast.error("Sign-out was not confirmed", {
+                      description: `${messageForError(cause)} This device is signed out anyway. If you are unsure, sign in again and sign out other devices.`,
                     }),
                   )
                 }

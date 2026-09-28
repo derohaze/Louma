@@ -1,5 +1,5 @@
 import argon2 from "argon2";
-import { ObjectId } from "mongodb";
+import { ObjectId, type MongoClient } from "mongodb";
 import { generateSecret, generateURI } from "otplib";
 import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
@@ -37,12 +37,14 @@ async function verifyTotpOrRecovery(input: { config: AppConfig; collections: Col
 }
 
 /**
- * Starts enrolment. No password is asked for: the caller already holds an authenticated session, and
- * the enrolment only counts once the new authenticator answers with a code, so nothing is trusted on
- * the strength of the request alone. Turning a second factor *off* is the direction that still
- * requires a code (see `disableTwoFactor`).
+ * Starts enrolment. The account password is required even though the caller already holds an
+ * authenticated session: without it a stolen session could bind an authenticator the owner does not
+ * hold, and that factor would outlive the session it was added from. The password is not the final
+ * proof — the setup only counts once the new authenticator answers with a code — but it is what
+ * stops a session alone from enrolling a device.
  */
-export async function beginTwoFactorSetup(input: { collections: Collections; config: AppConfig; ownerUserId: string }) {
+export async function beginTwoFactorSetup(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown }) {
+  await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
   const current = await input.collections.twoFactorCredentials.findOne({ ownerUserId: input.ownerUserId });
   if (current?.enabledAt) throw conflict("two_factor_already_enabled", "Two-factor authentication is already enabled.");
 
@@ -94,7 +96,10 @@ export async function confirmTwoFactorSetup(input: { collections: Collections; c
   return { enabledAt: now.toISOString(), recoveryCodes };
 }
 
-export async function disableTwoFactor(input: { collections: Collections; config: AppConfig; ownerUserId: string; code: unknown; requestId: string }) {
+export async function disableTwoFactor(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown; code: unknown; requestId: string }) {
+  // Turning the factor off weakens the account, so it asks for both what the account knows (the
+  // password) and what the account is (the authenticator or recovery code), not only the code.
+  await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
   const verification = await verifyTotpOrRecovery(input);
   if (!verification) throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
   // The delete is conditional on the recovery-code set that was verified: a code invalidated by a
@@ -105,7 +110,10 @@ export async function disableTwoFactor(input: { collections: Collections; config
   return { enabled: false };
 }
 
-export async function regenerateRecoveryCodes(input: { collections: Collections; config: AppConfig; ownerUserId: string; code: unknown; requestId: string }) {
+export async function regenerateRecoveryCodes(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown; code: unknown; requestId: string }) {
+  // Replacing every recovery code is the same class of change as disabling the factor, so it is
+  // gated the same way: the account password plus a current authenticator or recovery code.
+  await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
   const verification = await verifyTotpOrRecovery(input);
   if (!verification) throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
   const recoveryCodes = generateRecoveryCodes();
@@ -137,7 +145,7 @@ export async function verifySensitiveAction(input: { collections: Collections; c
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.action, outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed } });
 }
 
-export async function setTransferPassword(input: { collections: Collections; ownerUserId: string; currentPassword: unknown; newPassword: unknown; requestId: string }) {
+export async function setTransferPassword(input: { collections: Collections; mongoClient: MongoClient; ownerUserId: string; currentPassword: unknown; newPassword: unknown; requestId: string }) {
   if (typeof input.newPassword !== "string" || input.newPassword.length < PASSWORD_MIN_LENGTH || input.newPassword.length > PASSWORD_MAX_LENGTH || !/[A-Za-z]/.test(input.newPassword) || !/\d/.test(input.newPassword)) {
     throw badRequest("weak_password", "Use at least 8 characters, including a letter and a number.");
   }
@@ -150,22 +158,39 @@ export async function setTransferPassword(input: { collections: Collections; own
   const now = new Date();
   const passwordHash = await argon2.hash(input.newPassword, ARGON2_OPTIONS);
   /**
-   * The write is conditional on the credential that was just verified, so two requests that both
-   * checked the old password cannot both replace it: the second is told to retry rather than
-   * silently overwriting the password the first one has already set.
+   * The credential write stays conditional on the one that was just verified, so two requests that
+   * both checked the old password cannot both replace it. On its own that is not enough: a transfer
+   * holds a snapshot of this credential and never writes it, so a change landing mid-flight would not
+   * conflict with the transfer and it could settle under the credential that was just replaced.
+   * Bumping the wallet's `financialVersion` in the same transaction closes that hole — the transfer
+   * already increments that field as its guard, so the two serialize and the transfer retries, re-reads
+   * the credential from a fresh snapshot, and refuses to commit under the changed password.
    */
-  const result = existing
-    ? await input.collections.transferPasswordCredentials.updateOne(
-        { ownerUserId: input.ownerUserId, passwordHash: existing.passwordHash, changedAt: existing.changedAt },
-        { $set: { passwordHash, changedAt: now } },
-      )
-    : await input.collections.transferPasswordCredentials.updateOne(
+  const session = input.mongoClient.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const result = existing
+        ? await input.collections.transferPasswordCredentials.updateOne(
+            { ownerUserId: input.ownerUserId, passwordHash: existing.passwordHash, changedAt: existing.changedAt },
+            { $set: { passwordHash, changedAt: now } },
+            { session },
+          )
+        : await input.collections.transferPasswordCredentials.updateOne(
+            { ownerUserId: input.ownerUserId },
+            { $setOnInsert: { ownerUserId: input.ownerUserId, passwordHash, changedAt: now } },
+            { upsert: true, session },
+          );
+      const applied = existing ? result.modifiedCount === 1 : Boolean(result.upsertedId);
+      if (!applied) throw conflict("transfer_password_changed", "The transfer password changed. Try again.");
+      await input.collections.wallets.updateOne(
         { ownerUserId: input.ownerUserId },
-        { $setOnInsert: { ownerUserId: input.ownerUserId, passwordHash, changedAt: now } },
-        { upsert: true },
+        { $inc: { financialVersion: 1 } },
+        { session },
       );
-  const applied = existing ? result.modifiedCount === 1 : Boolean(result.upsertedId);
-  if (!applied) throw conflict("transfer_password_changed", "The transfer password changed. Try again.");
+    });
+  } finally {
+    await session.endSession();
+  }
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: existing ? "transfer_password_changed" : "transfer_password_set", outcome: "success", correlationId: input.requestId });
   return { enabled: true, changedAt: now.toISOString() };
 }

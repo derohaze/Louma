@@ -327,7 +327,12 @@ export async function completeTwoFactor(input: {
   const mongoSession = input.mongoClient.startSession();
   try {
     await mongoSession.withTransaction(async () => {
-      const updated = await input.collections.sessions.updateOne({ _id: session._id, status: "pending_two_factor", refreshTokenHash: tokenHash, twoFactorAttempts: { $lt: 5 } }, { $set: { status: "active", previousRefreshTokenHash: tokenHash, refreshTokenHash: hashToken(nextRefreshToken), lastActiveAt: now, expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS) } }, { session: mongoSession });
+      // The pending cookie is deliberately not carried into `previousRefreshTokenHash`. That field
+      // exists so a real rotation can recognise the token it just displaced; a challenge's cookie was
+      // never an active credential, and keeping it there would make the pending cookie itself a
+      // "recently displaced" token for the refresh grace window — a stolen challenge cookie could be
+      // replayed within 30 seconds to mint active tokens without the second factor.
+      const updated = await input.collections.sessions.updateOne({ _id: session._id, status: "pending_two_factor", refreshTokenHash: tokenHash, twoFactorAttempts: { $lt: 5 } }, { $set: { status: "active", previousRefreshTokenHash: null, refreshTokenHash: hashToken(nextRefreshToken), lastActiveAt: now, expiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS) } }, { session: mongoSession });
       if (updated.modifiedCount !== 1) throw unauthorized();
       if (remainingRecoveryCodes.length !== credential.recoveryCodeHashes.length) {
         const recoveryUpdate = await input.collections.twoFactorCredentials.updateOne({ _id: credential._id, recoveryCodeHashes: credential.recoveryCodeHashes }, { $set: { recoveryCodeHashes: remainingRecoveryCodes, updatedAt: now } }, { session: mongoSession });
