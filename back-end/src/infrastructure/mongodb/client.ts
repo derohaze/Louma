@@ -6,7 +6,10 @@ import type { AppConfig } from "../../config/env.js";
  * interface so database-only tooling (the ledger reconciler) can connect without holding the
  * application's secrets — tokens and keys are not required to read the ledger.
  */
-export type MongoConnectionConfig = Pick<AppConfig, "mongoUri" | "mongoDatabase" | "mongoConnectTimeoutMs" | "mongoServerSelectionTimeoutMs">;
+export type MongoConnectionConfig = Pick<
+  AppConfig,
+  "mongoUri" | "mongoDatabase" | "mongoConnectTimeoutMs" | "mongoServerSelectionTimeoutMs" | "mongoMaxPoolSize"
+>;
 
 /**
  * Timeouts come from `MONGODB_CONNECT_TIMEOUT_MS` / `MONGODB_SERVER_SELECTION_TIMEOUT_MS`
@@ -17,7 +20,7 @@ export type MongoConnectionConfig = Pick<AppConfig, "mongoUri" | "mongoDatabase"
 export async function connectMongo(config: MongoConnectionConfig, overrides: MongoClientOptions = {}) {
   const client = new MongoClient(config.mongoUri, {
     appName: "louma-customer-backend",
-    maxPoolSize: 20,
+    maxPoolSize: config.mongoMaxPoolSize,
     minPoolSize: 0,
     serverSelectionTimeoutMS: config.mongoServerSelectionTimeoutMs,
     connectTimeoutMS: config.mongoConnectTimeoutMs,

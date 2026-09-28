@@ -14,6 +14,7 @@ import type { MongoClient } from "mongodb";
 import { AppError } from "./shared/errors.js";
 import { registerCustomerRoutes } from "./modules/http/routes.js";
 import { stopNotificationStream } from "./modules/security/notification-stream.js";
+import { assertCsrfToken, CSRF_HEADER, isStateChangingMethod, sessionCsrfToken } from "./modules/security/csrf.js";
 import { authenticateUser } from "./modules/auth/service.js";
 import { createPrettyLogStream } from "./config/logger.js";
 
@@ -97,6 +98,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       authorization: request.headers.authorization,
     });
     request.auth = authenticated;
+    /**
+     * Every state-changing request this session makes has to carry the token derived for that
+     * session, so a request replayed by another site is refused even when the browser still holds a
+     * usable cookie. It is checked here, where every authenticated route already passes, rather than
+     * per route: a route added later is covered by having a session at all. Reads are exempt — they
+     * change nothing and their answer is not readable by another origin. See modules/security/csrf.
+     */
+    if (isStateChangingMethod(request.method)) {
+      assertCsrfToken({
+        config: app.config,
+        expected: sessionCsrfToken(app.config, authenticated.sessionId),
+        provided: request.headers[CSRF_HEADER],
+      });
+    }
     return authenticated;
   });
 

@@ -65,6 +65,16 @@ interface Account {
 let requestIp = 0;
 const nextIp = () => `10.0.0.${(requestIp++ % 250) + 1}`;
 
+/**
+ * The CSRF tokens the suite holds, mirroring what a browser does with them.
+ *
+ * A state-changing request has to carry the token derived for its scope, so the suite keeps the one
+ * each session was issued — recorded from the response that minted it, exactly as the wallet stores
+ * it — and uses the pre-session token for the requests that run before a session exists.
+ */
+let preauthCsrfTokenValue = "";
+const csrfByAccessToken = new Map<string, string>();
+
 async function call(
   method: "GET" | "POST" | "PATCH" | "DELETE",
   url: string,
@@ -74,6 +84,10 @@ async function call(
   if (options.token) headers["authorization"] = `Bearer ${options.token}`;
   if (options.cookie) headers["cookie"] = options.cookie;
   if (options.idempotencyKey) headers["idempotency-key"] = options.idempotencyKey;
+  if (method !== "GET") {
+    const token = options.token ? csrfByAccessToken.get(options.token) : undefined;
+    headers["x-csrf-token"] = token ?? preauthCsrfTokenValue;
+  }
   const response = await app.inject({
     method,
     url,
@@ -84,6 +98,10 @@ async function call(
   const setCookie = response.headers["set-cookie"];
   // A 204 (logout, revoke session) carries no payload, so an empty body is not an error here.
   const body = response.payload.length ? (response.json() as Record<string, unknown>) : {};
+  // Whatever session this response started or rotated is now the one this suite can act as.
+  if (typeof body["accessToken"] === "string" && typeof body["csrfToken"] === "string") {
+    csrfByAccessToken.set(body["accessToken"], body["csrfToken"]);
+  }
   return {
     status: response.statusCode,
     body,
@@ -230,6 +248,10 @@ before(async () => {
   collections = getCollections(connection.db);
   await ensureDatabaseIndexes(connection.db);
   app = await buildApp({ config, collections, mongoClient: client, logger: false });
+  // The token a first-time visitor is handed, before any session exists.
+  const csrf = await call("GET", "/api/v1/auth/csrf");
+  assert.equal(csrf.status, 200, JSON.stringify(csrf.body));
+  preauthCsrfTokenValue = csrf.body["csrfToken"] as string;
 });
 
 after(async () => {
@@ -480,6 +502,33 @@ test("each side of a transfer sees its own balance and nothing else", async () =
   assert.equal((await call("GET", `/api/v1/transactions/${transferId}`, { token: sender.accessToken })).status, 200, "the transfer id resolves");
   assert.equal((await call("GET", `/api/v1/transactions/${transferId}`, { token: stranger.accessToken })).status, 404, "another account sees nothing");
   await assertLedgerConsistency();
+});
+
+/**
+ * The CSRF token is the only thing separating a request the wallet made from one another site made
+ * on the customer's behalf with a cookie the browser attached by itself, so the endpoint has to
+ * refuse the request that does not carry it. The suite's own helper always sends one; this is the
+ * request that comes from somewhere else.
+ */
+test("a state-changing request without its CSRF token is refused", async () => {
+  const account = await register("csrf-absent");
+  const response = await app.inject({
+    method: "PATCH",
+    url: "/api/v1/me",
+    headers: { authorization: `Bearer ${account.accessToken}` },
+    payload: { displayName: "No token" },
+    remoteAddress: nextIp(),
+  });
+  assert.equal(response.statusCode, 403, response.payload);
+  assert.equal((response.json() as { error: { code: string } }).error.code, "csrf_token_invalid");
+
+  // The same request with the token the session was issued is accepted, which is what makes the
+  // rejection above a CSRF decision rather than the route failing for another reason.
+  const accepted = await call("PATCH", "/api/v1/me", {
+    token: account.accessToken,
+    body: { displayName: "Has token" },
+  });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
 });
 
 test("a suspended account cannot keep using the session it already had", async () => {

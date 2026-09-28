@@ -9,9 +9,12 @@ import {
 } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 import {
+  ApiError,
   api,
   clearAccessToken,
+  clearSessionHint,
   completeTwoFactor,
+  hasSessionHint,
   login,
   messageForError,
   register,
@@ -35,17 +38,28 @@ function AuthIcon({
  * Sends an already-signed-in visitor straight to the dashboard: the session lives in an httpOnly
  * refresh cookie, so a returning visitor would otherwise see the sign-in form before the API
  * answers.
+ *
+ * The probe is skipped when this browser never held a session: without a session the check can
+ * only fail (401 logged out, 502 backend down), and the browser logs the failed request to the
+ * console even though the rejection is caught. Only an authoritative 401 clears the session —
+ * a transport or server fault keeps the hint so the next visit probes again.
  */
 function useRedirectWhenAuthed() {
   const navigate = useNavigate();
   useEffect(() => {
+    if (!hasSessionHint()) return;
     let active = true;
     void api
       .get("/api/v1/me")
       .then(() => {
         if (active) void navigate({ to: "/" });
       })
-      .catch(() => clearAccessToken());
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 401) {
+          clearAccessToken();
+          clearSessionHint();
+        }
+      });
     return () => {
       active = false;
     };
@@ -186,7 +200,7 @@ function AuthShell({
         <div className="mt-8 w-full max-w-[340px]">{children}</div>
         <p className="mt-8 text-center text-[13px] text-[#6E6E77]">{footer}</p>
       </div>
-      <div className="relative hidden overflow-hidden rounded-l-[24px] lg:block">
+      <div className="relative hidden overflow-hidden rounded-tl-[24px] lg:block">
         <ShowcaseVisual />
       </div>
     </div>
@@ -426,7 +440,12 @@ export function ForgotPasswordContent() {
             // The API owns the outcome: until an email provider is configured it refuses the
             // request, and that message is what the visitor is shown.
             void api
-              .post<void>("/api/v1/auth/forgot-password", { email: email.trim() }, { auth: false })
+              .post<void>(
+                "/api/v1/auth/forgot-password",
+                { email: email.trim() },
+                // Password recovery runs before a session exists, so it carries the pre-session token.
+                { auth: false, csrf: "preauth" },
+              )
               .then(() => setSent(true))
               .catch((cause: unknown) => setError(messageForError(cause)))
               .finally(() => setBusy(false));

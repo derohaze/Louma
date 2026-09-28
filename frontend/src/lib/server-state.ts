@@ -4,6 +4,7 @@ import {
   api,
   type ApiNotification,
   type ApiSecurityOverview,
+  type ApiSession,
   type ApiTransaction,
   type ApiUser,
   type ApiWallet,
@@ -68,6 +69,7 @@ export const serverStateKeys = {
   profile: ["account", "profile"] as const,
   transactions: ["account", "transactions", ACCOUNT_PAGE_SIZE] as const,
   security: ["account", "security"] as const,
+  sessions: ["account", "sessions"] as const,
   notifications: ["notifications", NOTIFICATION_PAGE_SIZE] as const,
 };
 
@@ -75,12 +77,15 @@ export const serverStateFreshness = {
   profileMs: 60_000,
   transactionsMs: 30_000,
   securityMs: 60_000,
+  /** The device list and the session count on the security overview are the same fact, read twice. */
+  sessionsMs: 60_000,
   notificationsMs: 30_000,
 } as const;
 
 export const accountFetchers = {
   profile: () => api.get<AccountProfile>("/api/v1/me"),
   security: () => api.get<ApiSecurityOverview>("/api/v1/security"),
+  sessions: () => api.get<{ sessions: ApiSession[] }>("/api/v1/sessions"),
   transactions: (cursor: string | null) =>
     api.get<TransactionPage>(
       `/api/v1/transactions?limit=${ACCOUNT_PAGE_SIZE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,

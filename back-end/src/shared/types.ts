@@ -3,7 +3,20 @@ import type { ObjectId } from "mongodb";
 export const CURRENCY = "LMA";
 export const MONEY_DECIMALS = 4;
 export const MONEY_SCALE = 10_000;
-export const MAX_TRANSFER_MINOR = 10_000_000_000;
+/**
+ * The largest amount a single transfer may carry, in minor units.
+ *
+ * There is no longer a product ceiling here: a wallet must be able to move any amount it can hold,
+ * so the only bound left is the one the arithmetic itself imposes. Money is an exact integer of
+ * minor units, and a JavaScript number — and therefore a BSON number — represents every integer up
+ * to 2^53 exactly.
+ *
+ * This is the largest whole amount below that boundary. Stopping at a whole amount leaves slack for
+ * the fee's rounding step (it adds half a minor unit before dividing), so every intermediate the
+ * money arithmetic produces — the fee, the recipient's net, each ledger line — stays an exact
+ * integer rather than relying on a rounding that is itself unrepresentable.
+ */
+export const MAX_TRANSFER_MINOR = Math.floor(Number.MAX_SAFE_INTEGER / MONEY_SCALE) * MONEY_SCALE;
 export const MIN_TRANSFER_MINOR = 1;
 export const FEE_PERCENT = 1;
 export const MAX_NOTE_LENGTH = 240;
@@ -136,6 +149,12 @@ export interface TransactionRecord {
   receiverUserId: string;
   senderWalletId: string;
   receiverWalletId: string;
+  /**
+   * The account ids on both sides, in the order the history index reads them. The wallet asks for
+   * one account's history as a single page across both directions, and a list of the participants
+   * answers that from one index instead of an `$or` over two whose halves have to be sorted together.
+   */
+  participants: string[];
   senderAddress: string;
   receiverAddress: string;
   amountMinor: number;
@@ -199,15 +218,6 @@ export interface TransferPasswordCredentialRecord {
   ownerUserId: string;
   passwordHash: string;
   changedAt: Date;
-}
-
-export interface PasswordResetTokenRecord {
-  _id: ObjectId;
-  ownerUserId: string;
-  tokenHash: string;
-  createdAt: Date;
-  expiresAt: Date;
-  usedAt: Date | null;
 }
 
 export interface NotificationRecord {

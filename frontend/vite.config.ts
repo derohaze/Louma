@@ -10,8 +10,13 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
  * The customer app talks to the Louma API on the same origin (`/api/v1/...`), which keeps the
  * refresh cookie first-party and removes the need for CORS in development. The dev server proxies
  * those requests to the backend; set VITE_API_PROXY_TARGET when the API runs elsewhere.
+ *
+ * The default is the port `back-end/.env.development` actually runs on (`LOUMA_API_PORT=8000`), not
+ * the backend's own default of 3001: a dev setup where the proxy points at a port nothing listens on
+ * looks exactly like a broken API from the browser, and the frontend has no environment file of its
+ * own to override it in.
  */
-const apiTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://127.0.0.1:3001";
+const apiTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://127.0.0.1:8000";
 
 export default defineConfig({
   tanstackStart: {
