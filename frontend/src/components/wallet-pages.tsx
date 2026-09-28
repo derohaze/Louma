@@ -100,9 +100,10 @@ export function TransferContent() {
       setAmount("");
       setNote("");
       setTransferPasswordInput("");
-      await refresh();
-      // This transfer notified both sides: let the bell pick its notice up.
+      // This transfer notified both sides: the bell is told before the account read, because that read
+      // now rejects when its fetch fails, and a failed one must not withhold the notice behind it.
       refreshNotifications();
+      await refresh();
     } catch (cause) {
       setError(messageForError(cause));
     } finally {

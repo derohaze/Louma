@@ -275,6 +275,20 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
    */
   app.get("/api/v1/notifications/stream", authenticated, async (request, reply) => {
     const current = getAuth(request);
+
+    // A stream that could never speak would strand the client on a connection it believes in, so a
+    // change stream that cannot be established is refused instead: the client then refreshes on its
+    // own slower cadence until the API can serve realtime again.
+    //
+    // This runs before the connection is registered, because a watcher that cannot start ends every
+    // stream that is already open: a writer this route has not committed to yet must not be one of
+    // them, or its response would be closed before the SSE headers were written and the client would
+    // get a broken 200 instead of the 503 it falls back on.
+    ensureNotificationWatcher({ collections: app.collections, log: request.log });
+    if (notificationWatcherUnavailable()) {
+      throw serviceUnavailable("realtime_unavailable", "Realtime notifications are temporarily unavailable.");
+    }
+
     const writer = createNotificationStreamWriter(reply.raw);
     // Registered before the hijack so the caps can still be answered with the API's error envelope.
     const registered = registerNotificationSubscriber({ ownerUserId: current.userId, subscriber: writer });
@@ -283,15 +297,6 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
         throw new AppError(429, "stream_limit", "Too many notification streams are already open for this account. Close a Louma tab and try again.");
       }
       throw serviceUnavailable("stream_capacity", "Realtime notifications are at capacity. Try again shortly.");
-    }
-
-    // A stream that could never speak would strand the client on a connection it believes in, so a
-    // change stream that cannot be established is refused instead: the client then refreshes on its
-    // own slower cadence until the API can serve realtime again.
-    ensureNotificationWatcher({ collections: app.collections, log: request.log });
-    if (notificationWatcherUnavailable()) {
-      registered.unsubscribe();
-      throw serviceUnavailable("realtime_unavailable", "Realtime notifications are temporarily unavailable.");
     }
 
     reply.hijack();

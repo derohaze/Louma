@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { buildApp } from "../../app.js";
+import { loadConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import {
   ensureNotificationWatcher,
@@ -138,6 +140,52 @@ test("a watcher that cannot start ends the streams it was opened for", async () 
   );
 
   await stopNotificationStream();
+});
+
+/**
+ * What the endpoint answers is what the client's fallback keys off, and the ordering inside it
+ * matters: a start that fails synchronously must not close a response the route has not written yet,
+ * and the request must still be refused the way the client degrades on. The app is built against the
+ * same stub rather than a live replica set, because the refusal is decided before anything touches
+ * the database.
+ */
+test("a stream request is refused with 503 while the watcher cannot start", async () => {
+  // A clean slate: the test above left the watcher waiting out its backoff, and a request refused
+  // because of that backoff would say nothing about the ordering exercised here.
+  await stopNotificationStream();
+  assert.equal(notificationWatcherUnavailable(), false, "the request below starts a watcher");
+
+  const app = await buildApp({
+    config: loadConfig({
+      MONGODB_URI: "mongodb://127.0.0.1:27017/louma",
+      MONGODB_DATABASE: "louma",
+      ACCESS_TOKEN_SECRET: Buffer.alloc(32, 1).toString("base64"),
+      APP_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString("base64"),
+    }),
+    collections: failingCollections,
+    mongoClient: {} as never,
+    logger: false,
+  });
+  // The route is behind the session pre-handler, which reads the database. The session is not what
+  // this test is about, so the decorator is replaced.
+  app.authenticate = async (request) => {
+    const auth = { userId: "user-watcher-down", sessionId: "session-1" };
+    request.auth = auth;
+    return auth;
+  };
+
+  try {
+    const response = await app.inject({ method: "GET", url: "/api/v1/notifications/stream" });
+    assert.equal(response.statusCode, 503, "the client is told to degrade, not handed a dead stream");
+    assert.equal(response.json().error.code, "realtime_unavailable");
+    assert.equal(
+      notificationWatcherUnavailable(),
+      true,
+      "the failed start is recorded, so the next attempt is refused the same way",
+    );
+  } finally {
+    await app.close();
+  }
 });
 
 test("one broken socket does not stop the other streams of the account", async () => {

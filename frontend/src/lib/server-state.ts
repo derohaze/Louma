@@ -142,6 +142,11 @@ export function refetchAccount(
  * The snapshot's age is carried into the cache rather than reset, so an old payload is displayed and
  * immediately re-asked for instead of being trusted for a freshness window it never earned. A
  * snapshot written by an earlier release has no age at all, which reads as perfectly stale.
+ *
+ * A key the cache already holds a newer answer for is left alone: the screens that read these keys
+ * fetch as soon as they mount, so the transactions and the security overview can answer before
+ * `/me` does — the profile gate deliberately waits for the server — and seeding over them would
+ * rewind the page somebody is already reading. See `seedUnlessNewer`.
  */
 export function hydrateAccountCache(
   queryClient: QueryClient,
@@ -150,7 +155,8 @@ export function hydrateAccountCache(
 ): boolean {
   if (snapshot.user.id !== accountUserId) return false;
   const { savedAt: updatedAt } = snapshot;
-  queryClient.setQueryData(
+  seedUnlessNewer(
+    queryClient,
     serverStateKeys.transactions,
     {
       pages: [
@@ -161,12 +167,51 @@ export function hydrateAccountCache(
       ],
       pageParams: [null],
     } satisfies InfiniteData<TransactionPage, string | null>,
-    { updatedAt },
+    updatedAt,
   );
   if (snapshot.security) {
-    queryClient.setQueryData(serverStateKeys.security, snapshot.security, { updatedAt });
+    seedUnlessNewer(queryClient, serverStateKeys.security, snapshot.security, updatedAt);
   }
   return true;
+}
+
+/**
+ * Writes one cache entry from the snapshot unless the cache already holds a newer answer.
+ *
+ * A mounted screen fetches as soon as it renders, so the answer for the transactions and for the
+ * security overview can arrive before `/me` does. Seeding those keys afterwards would replace the
+ * fresher answer with the snapshot's older copy, and nothing would ask again for a while: a hidden
+ * tab does not refetch on focus, so the customer would read the older list until an explicit refresh
+ * or a reconnect. An entry the cache knows nothing about (`dataUpdatedAt` 0), or one holding data no
+ * newer than the snapshot, is still seeded — the tab cache is mirrored after every change, so the
+ * copy it holds is never newer than the data it was written from.
+ */
+function seedUnlessNewer<TData>(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  data: TData,
+  updatedAt: number,
+): void {
+  const cached = queryClient.getQueryState(queryKey);
+  if (cached && cached.dataUpdatedAt > updatedAt) return;
+  queryClient.setQueryData(queryKey, data, { updatedAt });
+}
+
+/**
+ * Drops every session-scoped object from the cache and re-reads the ones that are mounted.
+ *
+ * This is for a sign-out the API did not confirm. The server revokes the session and then answers,
+ * so a lost reply leaves the revocation unknown and neither outcome may be assumed. A reset takes the
+ * data off the screens that are rendering it, which a removal does not: the mounted query keeps
+ * holding its last result. The refetch that follows then asks the API which session is actually
+ * live — a revoked one answers 401, which is the rejection path that ends the tab, while a session
+ * that merely hit a transport failure is rebuilt. The account prefix and the notification list are
+ * both session-scoped: the bell holds one account's private notices just as the wallet holds its
+ * private transactions.
+ */
+export function resetSessionCache(queryClient: QueryClient): void {
+  void queryClient.resetQueries({ queryKey: serverStateKeys.account });
+  void queryClient.resetQueries({ queryKey: serverStateKeys.notifications });
 }
 
 /**
