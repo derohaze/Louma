@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowDownLeft01Icon,
@@ -9,7 +10,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api, messageForError, type ApiNotification } from "@/lib/api";
-import { useWallet } from "@/hooks/wallet-context";
+import {
+  accountFetchers,
+  hasBrowserSession,
+  serverStateFreshness,
+  serverStateKeys,
+  type NotificationPage,
+} from "@/lib/server-state";
+import { subscribeToNotificationChanges } from "@/lib/notification-stream";
 import { dateText } from "@/lib/wallet-format";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
@@ -22,29 +30,60 @@ const kindIcons: Record<string, IconData> = {
 };
 
 /**
- * The bell reads the account's notifications from the API. Nothing is invented: when the account
- * has no notifications the panel says so instead of showing placeholder tasks.
+ * The bell reads the account's notifications, and nothing is invented: when the account has none,
+ * the panel says so instead of showing placeholder tasks.
+ *
+ * The list is a shared cache entry, so the bell is not a data owner either — it re-reads the API only
+ * when the realtime channel reports a change, when the last read has gone stale and the tab is looked
+ * at again, or when the owner asks for it. Reliability comes from the push channel; this screen only
+ * decides what a "something changed" signal means for the page it renders.
  */
 export function WalletNotifications() {
-  const { notificationsRevision } = useWallet();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState<ApiNotification[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [markingRead, setMarkingRead] = useState(false);
+  const [actionError, setActionError] = useState("");
+  /** A failure of "load older" alone, kept apart from the panel-wide error so it cannot hide the list. */
+  const [pageError, setPageError] = useState("");
+
+  const query = useInfiniteQuery<
+    NotificationPage,
+    Error,
+    InfiniteData<NotificationPage, string | null>,
+    typeof serverStateKeys.notifications,
+    string | null
+  >({
+    queryKey: serverStateKeys.notifications,
+    queryFn: ({ pageParam }) => accountFetchers.notifications(pageParam),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    staleTime: serverStateFreshness.notificationsMs,
+    enabled: hasBrowserSession,
+  });
+
+  const pages = query.data?.pages;
+  const notifications = useMemo<ApiNotification[]>(
+    () => (pages ?? []).flatMap((page) => page.notifications),
+    [pages],
+  );
   /**
-   * The count comes from the server, not from the loaded page: the panel asks for twenty notices,
+   * The count comes from the server, not from the loaded pages: the panel asks for twenty notices,
    * and an account with more unread than that would show a badge that can never reach zero.
    */
-  const [unreadCount, setUnreadCount] = useState(0);
-  /** Cursor of the next older page, so notices beyond the first twenty stay reachable. */
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [error, setError] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const unreadCount = pages?.[0]?.unread ?? 0;
+  const nextCursor = pages?.at(-1)?.nextCursor ?? null;
+
   /**
-   * The badge slide-in must only play when the unread count changes in place
-   * (a new notification). Every route renders its own shell, so navigation
-   * remounts this button — playing the enter animation on mount makes the
-   * badge look like it jumps on every page change. The count the first load
-   * reports is therefore the baseline, and only a later change animates.
+   * A failed read is shown in place of the list only when there is no list to show. A background
+   * refresh that fails must not hide the notices the owner was already reading.
+   */
+  const readError = query.error && !query.data ? messageForError(query.error) : "";
+  const error = actionError || readError;
+
+  /**
+   * The badge slide-in must only play when the unread count changes in place (a new notification).
+   * The count the first read reports is therefore the baseline, and only a later change animates.
    */
   const [canAnimate, setCanAnimate] = useState(false);
   const initialCount = useRef<number | null>(null);
@@ -52,85 +91,115 @@ export function WalletNotifications() {
     const frame = requestAnimationFrame(() => setCanAnimate(true));
     return () => cancelAnimationFrame(frame);
   }, []);
+  useEffect(() => {
+    if (initialCount.current !== null || !pages) return;
+    initialCount.current = unreadCount;
+  }, [pages, unreadCount]);
 
-  const load = useCallback(async () => {
-    try {
-      const response = await api.get<{
-        notifications: ApiNotification[];
-        unread: number;
-        nextCursor: string | null;
-      }>("/api/v1/notifications?limit=20");
-      setNotifications(response.notifications);
-      setNextCursor(response.nextCursor);
-      setUnreadCount(response.unread);
-      if (initialCount.current === null) initialCount.current = response.unread;
-      setError("");
-    } catch (cause) {
-      setError(messageForError(cause));
-    } finally {
-      setLoaded(true);
+  /**
+   * A refresh must not interleave with a page fetch. The refresh replaces the loaded pages; an older
+   * page still in flight was requested for the list as it was, so appending its result to the
+   * replaced list would skip every notice between them while the cursor moved past them. A refresh
+   * that arrives while a page is loading is therefore queued and run once the page has landed.
+   */
+  const pageFetchInFlight = useRef(false);
+  const queuedRefresh = useRef<(() => void) | null>(null);
+
+  const runOrQueueRefresh = useCallback((action: () => void) => {
+    if (pageFetchInFlight.current) {
+      queuedRefresh.current = action;
+      return;
     }
+    action();
   }, []);
+
+  const refreshNow = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: serverStateKeys.notifications });
+  }, [queryClient]);
+
+  /**
+   * The server pushes a frame when a notice is written for this account. That frame carries no
+   * notice, so the signal is answered by re-reading the canonical page — one request, shared by every
+   * mounted bell, instead of the poll this used to be.
+   */
+  useEffect(
+    () => subscribeToNotificationChanges(() => runOrQueueRefresh(refreshNow)),
+    [runOrQueueRefresh, refreshNow],
+  );
+
+  /**
+   * Coming back to the tab re-reads the badge, but only once the last read has gone stale. This is
+   * the same rule the panel uses when it opens: freshness is the push channel's job, so these are a
+   * safety net for a stream that is down, not a schedule.
+   */
+  const refreshIfStale = useCallback(() => {
+    runOrQueueRefresh(() => {
+      void queryClient.refetchQueries(
+        { queryKey: serverStateKeys.notifications, stale: true },
+        { cancelRefetch: false },
+      );
+    });
+  }, [queryClient, runOrQueueRefresh]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshIfStale();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [refreshIfStale]);
 
   /**
    * Appends the next older page. Without it the panel could only ever show the newest twenty while
-   * "mark all as read" acknowledged notices the owner had no way to open.
+   * "mark all as read" acknowledged notices the owner had no way to open. A failed page is reported
+   * locally and leaves the list — and the retry — in place.
    */
   const loadOlder = useCallback(async () => {
-    if (!nextCursor) return;
+    if (pageFetchInFlight.current) return;
+    pageFetchInFlight.current = true;
     setLoadingOlder(true);
+    setPageError("");
     try {
-      const response = await api.get<{
-        notifications: ApiNotification[];
-        unread: number;
-        nextCursor: string | null;
-      }>(`/api/v1/notifications?limit=20&cursor=${encodeURIComponent(nextCursor)}`);
-      setNotifications((previous) => [...previous, ...response.notifications]);
-      setNextCursor(response.nextCursor);
-      setUnreadCount(response.unread);
-      setError("");
+      // `cancelRefetch` cancels a refresh that started before this page did, so the page is appended
+      // to the list it was requested against rather than to one a refresh replaced underneath it.
+      await query.fetchNextPage({ cancelRefetch: true });
     } catch (cause) {
-      setError(messageForError(cause));
+      setPageError(messageForError(cause));
     } finally {
+      pageFetchInFlight.current = false;
       setLoadingOlder(false);
+      const queued = queuedRefresh.current;
+      queuedRefresh.current = null;
+      queued?.();
     }
-  }, [nextCursor]);
-
-  /**
-   * The badge follows the server, so the list reloads on mount, whenever this tab did something that
-   * can produce a notice (a transfer), and when the window is focused again.
-   */
-  useEffect(() => {
-    void load();
-  }, [load, notificationsRevision]);
-
-  useEffect(() => {
-    const onFocus = () => void load();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [load]);
-
-  /** The badge is only as fresh as the last read, so the list reloads whenever the panel opens. */
-  useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
+  }, [query]);
 
   /** Clearing the badge is the only way to acknowledge a notice: they carry no action of their own. */
   const markAllRead = useCallback(async () => {
+    setMarkingRead(true);
+    setActionError("");
     try {
       await api.post<{ read: number; unread: number }>("/api/v1/notifications/read", {});
-      setError("");
-      await load();
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.notifications });
     } catch (cause) {
-      setError(messageForError(cause));
+      setActionError(messageForError(cause));
+    } finally {
+      setMarkingRead(false);
     }
-  }, [load]);
+  }, [queryClient]);
 
   /** Flipping `data-animate` alone must not start the slide-in, so the count has to actually differ. */
   const badgeChanged = initialCount.current !== null && unreadCount !== initialCount.current;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) refreshIfStale();
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
@@ -145,10 +214,8 @@ export function WalletNotifications() {
            * the wrapper slides in diagonally while the dot pops independently,
            * so the bell button itself never moves. `key` replays the enter
            * animation whenever the unread count changes (new notification).
-           * `data-animate` stays false on mount so route changes (which remount
-           * the shell) render the badge statically instead of replaying it.
-           * It arms only when the count differs from the mount count, so the
-           * rAF flip alone never starts the slide-in.
+           * `data-animate` stays false on mount so route changes render the
+           * badge statically instead of replaying it.
            */}
           <span
             aria-hidden
@@ -174,16 +241,18 @@ export function WalletNotifications() {
             {unreadCount > 0 && (
               <button
                 type="button"
+                disabled={markingRead}
                 onClick={() => void markAllRead()}
-                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700"
+                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
               >
                 Mark all as read
               </button>
             )}
             <button
               type="button"
-              onClick={() => void load()}
-              className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+              className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
             >
               Refresh
             </button>
@@ -225,20 +294,25 @@ export function WalletNotifications() {
             </div>
           ) : (
             <p className="py-6 text-sm text-gray-500">
-              {loaded
-                ? "You are all caught up. Transfer and security notices appear here."
-                : "Loading notifications…"}
+              {query.isPending
+                ? "Loading notifications…"
+                : "You are all caught up. Transfer and security notices appear here."}
             </p>
           )}
-          {nextCursor && !error && (
+          {nextCursor && (
             <div className="border-t border-gray-100 py-3 text-center">
+              {pageError && <p className="pb-2 text-[13px] text-destructive">{pageError}</p>}
               <button
                 type="button"
                 disabled={loadingOlder}
                 onClick={() => void loadOlder()}
                 className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
               >
-                {loadingOlder ? "Loading older notices…" : "Load older notices"}
+                {loadingOlder
+                  ? "Loading older notices…"
+                  : pageError
+                    ? "Try again"
+                    : "Load older notices"}
               </button>
             </div>
           )}

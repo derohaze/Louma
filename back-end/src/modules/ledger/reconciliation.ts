@@ -1,3 +1,4 @@
+import type { ClientSession, MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { ReconciliationIssue } from "../../shared/types.js";
 
@@ -7,8 +8,10 @@ import type { ReconciliationIssue } from "../../shared/types.js";
  * discovering the discrepancy first. Every check is a plain read-model scan — the tool never writes,
  * so running it is always safe.
  *
- * The batch sizes are bounded on purpose: this must never load a whole collection into memory,
- * including on a database that has grown for years.
+ * The work is bounded on purpose: this must not build a set or map sized like the collections, and
+ * it must not load a whole collection into memory, including on a database that has grown for years.
+ * The cross-collection checks are therefore aggregations — the server walks the joins and only the
+ * failures cross into this process.
  */
 
 const SCAN_BATCH_SIZE = 500;
@@ -27,12 +30,20 @@ function normalSideMultiplier(accountType: string): 1 | -1 {
 
 /**
  * Recomputes one account's balance from its immutable ledger entries. This is the arithmetic the
- * projection is required to match: the signed sum of entries on the account's normal side.
+ * projection is required to match: the signed sum of entries on the account's normal side. It keeps
+ * one running total and one cursor, never a list of entries.
  */
-async function ledgerDerivedBalance(collections: Collections, account: { publicId: string; accountType: string }): Promise<number> {
+async function ledgerDerivedBalance(
+  collections: Collections,
+  account: { publicId: string; accountType: string },
+  session: ClientSession | undefined,
+): Promise<number> {
   const multiplier = normalSideMultiplier(account.accountType);
   let total = 0;
-  const cursor = collections.ledgerEntries.find({ ledgerAccountId: account.publicId }, { batchSize: SCAN_BATCH_SIZE });
+  const cursor = collections.ledgerEntries.find(
+    { ledgerAccountId: account.publicId },
+    session ? { batchSize: SCAN_BATCH_SIZE, session } : { batchSize: SCAN_BATCH_SIZE },
+  );
   while (await cursor.hasNext()) {
     const entry = await cursor.next();
     if (!entry) break;
@@ -47,16 +58,19 @@ async function ledgerDerivedBalance(collections: Collections, account: { publicI
  * negative projection. Returns one issue per account that fails; the same account can therefore
  * appear more than once across the two checks.
  */
-export async function reconcileAccountProjections(input: { collections: Collections }): Promise<ReconciliationIssue[]> {
+export async function reconcileAccountProjections(input: { collections: Collections; session?: ClientSession }): Promise<ReconciliationIssue[]> {
   const issues: ReconciliationIssue[] = [];
-  let cursor = input.collections.ledgerAccounts.find({}, { batchSize: SCAN_BATCH_SIZE });
+  let cursor = input.collections.ledgerAccounts.find(
+    {},
+    input.session ? { batchSize: SCAN_BATCH_SIZE, session: input.session } : { batchSize: SCAN_BATCH_SIZE },
+  );
   while (await cursor.hasNext()) {
     const account = await cursor.next();
     if (!account) break;
     if (account.balanceMinor < 0) {
       issues.push({ kind: "negative_balance", severity: "critical", detail: `Account ${account.publicId} (${account.accountType}) has a negative projection: ${account.balanceMinor}` });
     }
-    const derived = await ledgerDerivedBalance(input.collections, account);
+    const derived = await ledgerDerivedBalance(input.collections, account, input.session);
     if (derived !== account.balanceMinor) {
       issues.push({ kind: "projection_mismatch", severity: "critical", detail: `Account ${account.publicId} (${account.accountType}) projection ${account.balanceMinor} != ledger-derived ${derived}` });
     }
@@ -80,89 +94,140 @@ function isExcludedEntry(entry: { correlationId: string }, prefixes: string[] | 
   return prefixes !== undefined && prefixes.some((prefix) => entry.correlationId.startsWith(prefix));
 }
 
+/** One entry whose transaction or account reference does not resolve (or disagrees on currency). */
+interface BrokenEntry {
+  publicId: string;
+  transactionId: string;
+  ledgerAccountId: string;
+  currency: string;
+  correlationId: string;
+  hasTransaction: boolean;
+  accountCurrency?: string | undefined;
+}
+
+/** One transaction whose lines are missing, unbalanced, or in the wrong currency. */
+interface BrokenTransaction {
+  publicId: string;
+  currency: string;
+  lineCount: number;
+  debits: number;
+  credits: number;
+  balanced: boolean;
+}
+
 /**
  * Checks the transactions/entries relationship: every transaction has balanced entries, every entry
  * references an existing transaction and account, transaction ids are unique, and both collections
  * speak the same single currency.
+ *
+ * The joins run on the server. Keeping every transaction id and per-transaction total in this process
+ * — the previous approach — would grow without bound on a ledger that has accumulated for years, and
+ * a maintenance job that dies of memory exhaustion is worse than one that runs slowly.
  */
-export async function reconcileLedgerTransactions(input: { collections: Collections; options?: ReconcileOptions }): Promise<ReconciliationIssue[]> {
+export async function reconcileLedgerTransactions(input: {
+  collections: Collections;
+  options?: ReconcileOptions;
+  session?: ClientSession;
+}): Promise<ReconciliationIssue[]> {
   const issues: ReconciliationIssue[] = [];
+  const { collections } = input;
+  const session = input.session ? { session: input.session } : {};
 
-  // Transaction ids and currencies, plus the set every entry is validated against.
-  const transactionIds = new Set<string>();
-  const currencyByTransaction = new Map<string, string>();
-  let seenDuplicate = false;
-  let txCursor = input.collections.transactions.find({}, { batchSize: SCAN_BATCH_SIZE, projection: { publicId: 1, currency: 1 } });
-  while (await txCursor.hasNext()) {
-    const transaction = await txCursor.next();
-    if (!transaction) break;
-    if (transactionIds.has(transaction.publicId)) {
-      if (!seenDuplicate) {
-        issues.push({ kind: "duplicate_transaction", severity: "critical", detail: `Transaction publicId ${transaction.publicId} exists more than once` });
-        seenDuplicate = true;
-      }
-      continue;
-    }
-    transactionIds.add(transaction.publicId);
-    currencyByTransaction.set(transaction.publicId, transaction.currency);
+  // Duplicate transaction ids. A unique index should make this impossible, but the check is the
+  // point, and `$group` performs it without this process holding every id.
+  const duplicates = await collections.transactions
+    .aggregate<{ _id: string }>(
+      [
+        { $group: { _id: "$publicId", count: { $sum: 1 } } },
+        { $match: { count: { $gt: 1 } } },
+        { $limit: 1 },
+        { $project: { _id: 1 } },
+      ],
+      { batchSize: SCAN_BATCH_SIZE, ...session },
+    )
+    .toArray();
+  for (const duplicate of duplicates) {
+    issues.push({ kind: "duplicate_transaction", severity: "critical", detail: `Transaction publicId ${duplicate._id} exists more than once` });
   }
-  await txCursor.close();
 
-  // Accounts: publicId -> currency, for reference validation.
-  const accountCurrencies = new Map<string, string>();
-  let accountCursor = input.collections.ledgerAccounts.find({}, { batchSize: SCAN_BATCH_SIZE, projection: { publicId: 1, currency: 1 } });
-  while (await accountCursor.hasNext()) {
-    const account = await accountCursor.next();
-    if (!account) break;
-    accountCurrencies.set(account.publicId, account.currency);
-  }
-  await accountCursor.close();
-
-  // Entries: sum them per transaction, and check their references.
-  const debitTotalByTransaction = new Map<string, number>();
-  const creditTotalByTransaction = new Map<string, number>();
-  const lineCountByTransaction = new Map<string, number>();
-  let entryCursor = input.collections.ledgerEntries.find({}, { batchSize: SCAN_BATCH_SIZE });
-  while (await entryCursor.hasNext()) {
-    const entry = await entryCursor.next();
+  // Entries whose transaction does not exist, whose account does not exist, or whose currency
+  // disagrees with that account. `$lookup` resolves the references on the server; only failing
+  // entries are returned.
+  const brokenEntries = collections.ledgerEntries.aggregate<BrokenEntry>(
+    [
+      { $lookup: { from: "transactions", localField: "transactionId", foreignField: "publicId", as: "transaction" } },
+      { $lookup: { from: "ledger_accounts", localField: "ledgerAccountId", foreignField: "publicId", as: "account" } },
+      {
+        $project: {
+          publicId: 1,
+          transactionId: 1,
+          ledgerAccountId: 1,
+          currency: 1,
+          correlationId: 1,
+          hasTransaction: { $gt: [{ $size: "$transaction" }, 0] },
+          accountCurrency: { $arrayElemAt: ["$account.currency", 0] },
+        },
+      },
+      {
+        $match: {
+          $or: [
+            { hasTransaction: false },
+            { accountCurrency: { $exists: false } },
+            { $expr: { $ne: ["$currency", "$accountCurrency"] } },
+          ],
+        },
+      },
+    ],
+    { batchSize: SCAN_BATCH_SIZE, ...session },
+  );
+  while (await brokenEntries.hasNext()) {
+    const entry = await brokenEntries.next();
     if (!entry) break;
-
-    if (!transactionIds.has(entry.transactionId) && !isExcludedEntry(entry, input.options?.excludeCorrelationIdPrefixes)) {
+    if (!entry.hasTransaction && !isExcludedEntry(entry, input.options?.excludeCorrelationIdPrefixes)) {
       issues.push({ kind: "orphan_entry", severity: "critical", detail: `Ledger entry ${entry.publicId} references missing transaction ${entry.transactionId}` });
     }
-    const accountCurrency = accountCurrencies.get(entry.ledgerAccountId);
-    if (accountCurrency === undefined) {
+    if (entry.accountCurrency === undefined) {
       issues.push({ kind: "invalid_reference", severity: "critical", detail: `Ledger entry ${entry.publicId} references missing account ${entry.ledgerAccountId}` });
-    } else if (accountCurrency !== entry.currency) {
-      issues.push({ kind: "currency_mismatch", severity: "critical", detail: `Ledger entry ${entry.publicId} is ${entry.currency} but account ${entry.ledgerAccountId} holds ${accountCurrency}` });
+    } else if (entry.accountCurrency !== entry.currency) {
+      issues.push({ kind: "currency_mismatch", severity: "critical", detail: `Ledger entry ${entry.publicId} is ${entry.currency} but account ${entry.ledgerAccountId} holds ${entry.accountCurrency}` });
     }
-
-    debitTotalByTransaction.set(entry.transactionId, (debitTotalByTransaction.get(entry.transactionId) ?? 0) + (entry.side === "debit" ? entry.amountMinor : 0));
-    creditTotalByTransaction.set(entry.transactionId, (creditTotalByTransaction.get(entry.transactionId) ?? 0) + (entry.side === "credit" ? entry.amountMinor : 0));
-    lineCountByTransaction.set(entry.transactionId, (lineCountByTransaction.get(entry.transactionId) ?? 0) + 1);
   }
-  await entryCursor.close();
+  await brokenEntries.close();
 
-  // Every transaction must exist, be balanced, single-currency, and carry at least two lines.
-  let txCursor2 = input.collections.transactions.find({}, { batchSize: SCAN_BATCH_SIZE });
-  while (await txCursor2.hasNext()) {
-    const transaction = await txCursor2.next();
+  // Every transaction must exist, be balanced, single-currency, and carry at least two lines. The
+  // line totals are summed by the database, per transaction, so no totals map is kept here.
+  const brokenTransactions = collections.transactions.aggregate<BrokenTransaction>(
+    [
+      { $lookup: { from: "ledger_entries", localField: "publicId", foreignField: "transactionId", as: "lines" } },
+      {
+        $project: {
+          publicId: 1,
+          currency: 1,
+          lineCount: { $size: "$lines" },
+          debits: { $sum: { $map: { input: "$lines", as: "line", in: { $cond: [{ $eq: ["$$line.side", "debit"] }, "$$line.amountMinor", 0] } } } },
+          credits: { $sum: { $map: { input: "$lines", as: "line", in: { $cond: [{ $eq: ["$$line.side", "credit"] }, "$$line.amountMinor", 0] } } } },
+        },
+      },
+      { $addFields: { balanced: { $eq: ["$debits", "$credits"] } } },
+      { $match: { $or: [{ lineCount: 0 }, { currency: { $ne: "LMA" } }, { balanced: false }] } },
+    ],
+    { batchSize: SCAN_BATCH_SIZE, ...session },
+  );
+  while (await brokenTransactions.hasNext()) {
+    const transaction = await brokenTransactions.next();
     if (!transaction) break;
-    const lines = lineCountByTransaction.get(transaction.publicId) ?? 0;
-    if (lines === 0) {
+    if (transaction.lineCount === 0) {
       issues.push({ kind: "empty_transaction", severity: "critical", detail: `Transaction ${transaction.publicId} has no ledger entries` });
       continue;
     }
     if (transaction.currency !== "LMA") {
       issues.push({ kind: "currency_mismatch", severity: "critical", detail: `Transaction ${transaction.publicId} is in ${transaction.currency}, not LMA` });
     }
-    const debits = debitTotalByTransaction.get(transaction.publicId) ?? 0;
-    const credits = creditTotalByTransaction.get(transaction.publicId) ?? 0;
-    if (debits !== credits) {
-      issues.push({ kind: "unbalanced_transaction", severity: "critical", detail: `Transaction ${transaction.publicId} debits ${debits} != credits ${credits}` });
+    if (!transaction.balanced) {
+      issues.push({ kind: "unbalanced_transaction", severity: "critical", detail: `Transaction ${transaction.publicId} debits ${transaction.debits} != credits ${transaction.credits}` });
     }
   }
-  await txCursor2.close();
+  await brokenTransactions.close();
 
   return issues;
 }
@@ -171,12 +236,30 @@ export async function reconcileLedgerTransactions(input: { collections: Collecti
  * Full internal reconciliation: account projections plus the transaction/entry graph. Intended for
  * operational runs (CLI, scheduled job, admin tooling); the customer API surface never calls it.
  * Defaults are strict — production runs must pass no options.
+ *
+ * Every read shares one snapshot, so a transfer that commits between the scans cannot present as an
+ * otherwise-sound ledger having a projection mismatch, an orphaned entry, or an empty transaction.
+ * A snapshot session is used outside a transaction deliberately: the scans are read-only and may run
+ * for as long as the ledger is large, which a transaction's lifetime would not permit.
  */
-export async function reconcileLedger(input: { collections: Collections; options?: ReconcileOptions }): Promise<{ ok: boolean; issues: ReconciliationIssue[] }> {
-  const [projectionIssues, transactionIssues] = await Promise.all([
-    reconcileAccountProjections(input),
-    reconcileLedgerTransactions(input),
-  ]);
-  const issues = [...projectionIssues, ...transactionIssues];
-  return { ok: issues.length === 0, issues };
+export async function reconcileLedger(input: {
+  collections: Collections;
+  options?: ReconcileOptions;
+  mongoClient?: MongoClient;
+}): Promise<{ ok: boolean; issues: ReconciliationIssue[] }> {
+  const session = input.mongoClient?.startSession({ snapshot: true });
+  try {
+    const projectionIssues = await reconcileAccountProjections(session ? { collections: input.collections, session } : { collections: input.collections });
+    // Sequential, not concurrent: a session is a single coherent channel, and the snapshot holds
+    // whichever order the scans run in.
+    const transactionIssues = await reconcileLedgerTransactions({
+      collections: input.collections,
+      ...(input.options ? { options: input.options } : {}),
+      ...(session ? { session } : {}),
+    });
+    const issues = [...projectionIssues, ...transactionIssues];
+    return { ok: issues.length === 0, issues };
+  } finally {
+    await session?.endSession();
+  }
 }

@@ -32,6 +32,14 @@ export type SystemAccountType = "fee_revenue" | "system_treasury";
 export const LEDGER_AMOUNT_MAX_MINOR = MAX_TRANSFER_MINOR;
 
 /**
+ * The largest value an account projection may hold, in minor units. Unlike a single ledger line
+ * (bounded by `LEDGER_AMOUNT_MAX_MINOR`, the largest movement the product can produce), a projection
+ * accumulates every movement that lands on the account, so it is bounded by the exact-integer range
+ * instead: a wallet or the fee account must not hit a ceiling just because it has been used a lot.
+ */
+export const LEDGER_BALANCE_MAX_MINOR = Number.MAX_SAFE_INTEGER;
+
+/**
  * Where an account signed up from: the connecting address, captured with the account, plus whatever
  * the ipinfo.io lookup reports for it moments later. The country a person *chooses* is a different
  * field (`profile.country`), because a chosen country and an observed country are not the same fact.

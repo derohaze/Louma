@@ -139,6 +139,35 @@ async function refreshAccessToken(): Promise<string> {
   return refreshInFlight;
 }
 
+/**
+ * Opens the realtime notification stream.
+ *
+ * It authenticates exactly like every other call — the bearer header plus the refresh cookie — and
+ * never puts a token in the query string, where it would end up in access logs, proxies, and browser
+ * history. That rules out `EventSource`, which cannot send headers, so the connection is a plain
+ * `fetch` whose body is read as a stream; the reconnect loop that `EventSource` would have provided
+ * lives in `lib/notification-stream.ts`.
+ *
+ * The access token is refreshed once here, like any other request: the stream is authorized at open
+ * only, so an expired token must be replaced rather than surfaced as a broken connection.
+ */
+export async function openNotificationStream(signal: AbortSignal): Promise<Response> {
+  const request = (bearer: string) =>
+    fetch("/api/v1/notifications/stream", {
+      method: "GET",
+      headers: { Accept: "text/event-stream", Authorization: `Bearer ${bearer}` },
+      credentials: "include",
+      signal,
+    });
+
+  let token = accessToken;
+  if (!token) token = await refreshAccessToken();
+  const response = await request(token);
+  if (response.status !== 401) return response;
+  accessToken = null;
+  return request(await refreshAccessToken());
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (options.auth === false) return send<T>(path, options, null);
   let token = accessToken;

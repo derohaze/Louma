@@ -1,5 +1,5 @@
 import { MongoServerError, type Db, type Document } from "mongodb";
-import { LEDGER_AMOUNT_MAX_MINOR } from "../../shared/types.js";
+import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 
 const schemas: Record<string, Document> = {
   users: {
@@ -35,9 +35,9 @@ const schemas: Record<string, Document> = {
         walletId: { bsonType: ["string", "null"] },
         accountType: { enum: ["wallet", "fee_revenue", "system_treasury"] },
         currency: { enum: ["LMA"] },
-        // Bounded to the largest movement the product can produce: the projection can never
-        // leave the exact-integer safe range, whatever is added up inside it.
-        balanceMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR },
+        // A projection is cumulative, so it is bounded by the exact-integer range rather than by
+        // the size of one movement: the bound only has to keep the number inside the safe range.
+        balanceMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_BALANCE_MAX_MINOR },
         createdAt: { bsonType: "date" },
       },
       allOf: [
@@ -55,7 +55,8 @@ const schemas: Record<string, Document> = {
     $jsonSchema: { bsonType: "object", required: ["publicId", "transactionId", "lineNumber", "walletId", "ledgerAccountId", "side", "amountMinor", "currency", "correlationId", "createdAt"], properties: { publicId: { bsonType: "string" }, transactionId: { bsonType: "string" }, lineNumber: { bsonType: "int", minimum: 1 }, walletId: { bsonType: ["string", "null"] }, ledgerAccountId: { bsonType: "string" }, side: { enum: ["debit", "credit"] }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, correlationId: { bsonType: "string" }, createdAt: { bsonType: "date" } } },
   },
   transactions: {
-    $jsonSchema: { bsonType: "object", required: ["publicId", "transferId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "status", "type", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor", "correlationId", "createdAt", "completedAt"], properties: { publicId: { bsonType: "string" }, transferId: { bsonType: "string" }, idempotencyKey: { bsonType: "string" }, requestFingerprint: { bsonType: "string" }, correlationId: { bsonType: "string" }, balanceAfterMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, feeMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR }, netAmountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, status: { enum: ["completed"] }, type: { enum: ["transfer"] }, createdAt: { bsonType: "date" }, completedAt: { bsonType: "date" } } },
+    $jsonSchema: { bsonType: "object", required: ["publicId", "transferId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "status", "type", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor", "correlationId", "createdAt", "completedAt"], properties: { publicId: { bsonType: "string" }, transferId: { bsonType: "string" }, idempotencyKey: { bsonType: "string" }, requestFingerprint: { bsonType: "string" }, correlationId: { bsonType: "string" },        // The sender's running balance, bounded like every other projection rather than like a line.
+        balanceAfterMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_BALANCE_MAX_MINOR }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, feeMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR }, netAmountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, status: { enum: ["completed"] }, type: { enum: ["transfer"] }, createdAt: { bsonType: "date" }, completedAt: { bsonType: "date" } } },
   },
   sessions: {
     $jsonSchema: { bsonType: "object", required: ["publicId", "ownerUserId", "refreshTokenHash", "previousRefreshTokenHash", "status", "twoFactorAttempts", "createdAt", "lastActiveAt", "expiresAt", "revokedAt"], properties: { publicId: { bsonType: "string" }, ownerUserId: { bsonType: "string" }, refreshTokenHash: { bsonType: ["string", "null"] }, previousRefreshTokenHash: { bsonType: ["string", "null"] }, status: { enum: ["active", "pending_two_factor", "revoked"] }, twoFactorAttempts: { bsonType: "int", minimum: 0 }, expiresAt: { bsonType: "date" } } },
@@ -87,6 +88,33 @@ async function ensureCollection(db: Db, name: string, validator: Document): Prom
 }
 
 export async function ensureDatabaseIndexes(db: Db): Promise<void> {
+  // Wallets written by an earlier release have no `financialVersion` (or the custom-address fields),
+  // while the validator below requires them. Without this backfill a strict validator would reject
+  // the first update to such a wallet — a custom-address change is the one that only touches the
+  // address fields — leaving the account permanently unchangeable. One pipeline update sets every
+  // missing field at once, so the resulting document satisfies the validator even on a database
+  // where a stricter validator is already installed.
+  await db.collection("wallets").updateMany(
+    {
+      $or: [
+        { financialVersion: { $exists: false } },
+        { customAddressChangedAt: { $exists: false } },
+        { customAddress: { $exists: false } },
+        { customAddressNormalized: { $exists: false } },
+      ],
+    },
+    [
+      {
+        $set: {
+          financialVersion: { $ifNull: ["$financialVersion", 0] },
+          customAddressChangedAt: { $ifNull: ["$customAddressChangedAt", null] },
+          customAddress: { $ifNull: ["$customAddress", null] },
+          customAddressNormalized: { $ifNull: ["$customAddressNormalized", null] },
+        },
+      },
+    ],
+  );
+
   for (const [name, validator] of Object.entries(schemas)) await ensureCollection(db, name, validator);
 
   await Promise.all([

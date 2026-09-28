@@ -22,11 +22,12 @@ export interface AppConfig {
   ipinfoToken: string | null;
   ipinfoTimeoutMs: number;
   /**
-   * Whether `X-Forwarded-For` may be believed. False unless the deployment sits behind a proxy that
-   * overwrites the header: with it on and no such proxy, a client picks its own address — and with
-   * that, the rate limiter's idea of who it is talking to.
+   * The proxies whose `X-Forwarded-*` headers may be believed, by address or CIDR, or false when the
+   * API terminates connections itself. A trusted *proxy*, never "any": believing every hop lets a
+   * client prepend an address to `X-Forwarded-For` and choose the one the API stores at registration
+   * and rate-limits by.
    */
-  trustProxy: boolean;
+  trustProxy: boolean | string[];
 }
 
 function required(name: string, values: NodeJS.ProcessEnv): string {
@@ -72,6 +73,25 @@ function parseOrigins(raw: string): string[] {
     }
     return origin;
   });
+}
+
+/**
+ * Parses the trusted-proxy list. Only specific proxies may be named: `true` and `*` mean "believe
+ * every hop", which is exactly the setting a client can forge, so they are rejected rather than
+ * silently reinterpreted. An empty value disables proxy trust, which is the safe default.
+ */
+function parseTrustedProxies(name: string, values: NodeJS.ProcessEnv): boolean | string[] {
+  const raw = values[name]?.trim();
+  if (!raw || raw === "false") return false;
+  if (raw === "true" || raw === "*") {
+    throw new Error(`${name} must name the proxy addresses or CIDRs (for example 10.0.0.0/8), not every hop`);
+  }
+  const proxies = raw.split(",").map((entry) => entry.trim()).filter(Boolean);
+  if (proxies.length === 0) return false;
+  for (const proxy of proxies) {
+    if (!/^[0-9a-fA-F:.]+(\/\d{1,3})?$/.test(proxy)) throw new Error(`${name} must contain only IP addresses or CIDRs`);
+  }
+  return proxies;
 }
 
 function logLevel(raw: string): LogLevel {
@@ -131,6 +151,6 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     logLevel: logLevel(values["LOG_LEVEL"] ?? (isProduction ? "info" : "debug")),
     ipinfoToken: optionalString("IPINFO_TOKEN", values),
     ipinfoTimeoutMs: positiveInteger("IPINFO_TIMEOUT_MS", values["IPINFO_TIMEOUT_MS"] ?? "2500"),
-    trustProxy: values["TRUST_PROXY"] === "true",
+    trustProxy: parseTrustedProxies("TRUST_PROXY", values),
   };
 }

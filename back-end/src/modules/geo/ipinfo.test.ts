@@ -81,6 +81,7 @@ test("only routable addresses are looked up", () => {
     "1.1.1.1",
     "::ffff:8.8.8.8",
     "2001:4860:4860::8888",
+    "2606:4700:4700::1111",
   ]) {
     assert.equal(isPublicIp(address), true, address);
   }
@@ -102,7 +103,12 @@ test("only routable addresses are looked up", () => {
     "fc00::1",
     "fd12:3456::1",
     "fe80::1",
+    "feb0::1",
+    "fec0::1",
+    "ff02::1",
     "2001:db8::1",
+    "2001:2::1",
+    "100::1",
     "::ffff:10.0.0.1",
     "not-an-ip",
     "10.0.0.256",
