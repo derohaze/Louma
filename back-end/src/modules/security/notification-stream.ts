@@ -216,9 +216,14 @@ async function runWatcher(input: { collections: Collections; log: FastifyBaseLog
  * Without this the endpoint would answer 200 and then never speak, which is the worst of both
  * worlds: the client holds a connection, believes realtime works, and never falls back. Reporting it
  * lets the client degrade on its own terms.
+ *
+ * The recorded backoff is the signal rather than an in-flight start, because `watch()` can fail
+ * synchronously: that failure and this check then happen on the same tick, before the start promise
+ * has settled, and the caller would otherwise be told a watcher was on its way. A start that is
+ * still connecting has not recorded a backoff and is not mistaken for a failed one.
  */
 export function notificationWatcherUnavailable(): boolean {
-  return !watcher && !watcherStart && Date.now() < watcherRetryAt;
+  return !watcher && Date.now() < watcherRetryAt;
 }
 
 export function ensureNotificationWatcher(input: { collections: Collections; log: FastifyBaseLogger }): void {

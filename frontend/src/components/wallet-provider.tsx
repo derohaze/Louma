@@ -27,6 +27,7 @@ import {
   hasBrowserSession,
   hydrateAccountCache,
   refetchAccount,
+  resetSessionCache,
   serverStateFreshness,
   serverStateKeys,
   type AccountProfile,
@@ -194,13 +195,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * the tab first while still holding a live cookie would tell the customer they are signed out and
    * then bounce them in again.
    *
-   * A failed request is therefore rethrown with the session left intact, so the caller reports an
-   * unconfirmed sign-out instead of a completed one. When the revocation did happen but its reply
-   * was lost, the next request is rejected against the revoked session and the rejection handler
-   * below ends this tab, so the stale wallet cannot outlive the first API call.
+   * A failed request is not proof that the session survived, and the tab cannot go on showing one
+   * account's private data while that is undecided. The snapshot and the realtime channel go, and the
+   * account is dropped from the cache and re-read from the API: a revoked session answers 401 to that
+   * read, which is the rejection handler below, so the tab ends exactly as if the sign-out had been
+   * confirmed — only without a promise the server never made — while a session that merely hit a
+   * transport failure is rebuilt. The caller is told the sign-out was not confirmed either way,
+   * because this tab is not the authority on it.
    */
   const signOut = useCallback(async () => {
-    await endSession();
+    try {
+      await endSession();
+    } catch (cause) {
+      clearWalletSnapshot();
+      stopNotificationStream();
+      resetSessionCache(queryClient);
+      throw cause;
+    }
     clearAccessToken();
     clearWalletSnapshot();
     // The cache is a copy of one account's server state: none of it may survive into the next session
