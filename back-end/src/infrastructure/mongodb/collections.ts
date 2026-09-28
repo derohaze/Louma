@@ -3,7 +3,6 @@ import type {
   LedgerAccountRecord,
   LedgerEntryRecord,
   NotificationRecord,
-  PasswordResetTokenRecord,
   SecurityEventRecord,
   SessionRecord,
   TransactionRecord,
@@ -23,7 +22,6 @@ export interface Collections {
   securityEvents: Collection<SecurityEventRecord>;
   twoFactorCredentials: Collection<TwoFactorCredentialRecord>;
   transferPasswordCredentials: Collection<TransferPasswordCredentialRecord>;
-  passwordResetTokens: Collection<PasswordResetTokenRecord>;
   notifications: Collection<NotificationRecord>;
 }
 
@@ -38,7 +36,6 @@ export function getCollections(db: Db): Collections {
     securityEvents: db.collection<SecurityEventRecord>("security_events"),
     twoFactorCredentials: db.collection<TwoFactorCredentialRecord>("two_factor_credentials"),
     transferPasswordCredentials: db.collection<TransferPasswordCredentialRecord>("transfer_password_credentials"),
-    passwordResetTokens: db.collection<PasswordResetTokenRecord>("password_reset_tokens"),
     notifications: db.collection<NotificationRecord>("notifications"),
   };
 }

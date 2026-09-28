@@ -46,9 +46,15 @@ test("rejects non-string amounts instead of coercing them", () => {
   assert.throws(() => parseMoneyToMinorUnits(null), isAppError("invalid_amount"));
 });
 
-test("enforces the maximum transfer amount", () => {
-  assert.equal(parseMoneyToMinorUnits("1000000.0000"), MAX_TRANSFER_MINOR);
-  assert.throws(() => parseMoneyToMinorUnits("1000000.0001"), isAppError("invalid_amount"));
+test("the only transfer ceiling is what the integer arithmetic holds exactly", () => {
+  // The bound is the exact-integer range, not a product rule: the largest amount is accepted and one
+  // minor unit above it is refused, while a million LMA — the old cap — is an ordinary amount.
+  assert.equal(parseMoneyToMinorUnits(formatMoney(MAX_TRANSFER_MINOR)), MAX_TRANSFER_MINOR);
+  assert.throws(() => parseMoneyToMinorUnits("900719925474.0001"), isAppError("invalid_amount"));
+  assert.equal(parseMoneyToMinorUnits("1000000.0000"), 10_000_000_000);
+  // Beyond the ceiling the number itself, not the rule, is what fails: the digit string parses to a
+  // value a double cannot hold exactly, and the units are refused before any money is derived.
+  assert.throws(() => parseMoneyToMinorUnits("999999999999.9999"), isAppError("invalid_amount"));
 });
 
 test("computes the 1% fee rounded to the nearest minor unit", () => {
@@ -118,11 +124,15 @@ test("a debit grows the normal side and a credit shrinks it", () => {
 
 test("the maximum transfer keeps its fee and net inside exact integer bounds", () => {
   const amounts = calculateTransferAmounts(MAX_TRANSFER_MINOR);
-  assert.equal(amounts.feeMinor, 100_000_000); // 1% of 1,000,000.0000, exact
-  assert.equal(amounts.netAmountMinor, 9_900_000_000);
+  // 1% of the exact-integer ceiling. Every value stays an exact integer, which is the whole reason
+  // the ceiling is derived from 2^53 rather than chosen for the product.
+  assert.equal(amounts.feeMinor, 90_071_992_547_400);
+  assert.equal(amounts.netAmountMinor, 8_917_127_262_192_600);
   assert.ok(Number.isSafeInteger(amounts.feeMinor));
   assert.ok(Number.isSafeInteger(amounts.netAmountMinor));
+  assert.ok(Number.isSafeInteger(amounts.feeMinor + amounts.netAmountMinor));
   assert.equal(amounts.feeMinor + amounts.netAmountMinor, MAX_TRANSFER_MINOR);
+  assert.ok(amounts.amountMinor <= Number.MAX_SAFE_INTEGER);
 });
 
 test("formatting refuses values that could not have come from the money arithmetic", () => {

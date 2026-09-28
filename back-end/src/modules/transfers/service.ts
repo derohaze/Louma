@@ -203,6 +203,7 @@ export async function createTransfer(input: {
     receiverUserId: recipientWallet.ownerUserId,
     senderWalletId: senderWallet.publicId,
     receiverWalletId: recipientWallet.publicId,
+    participants: [input.ownerUserId, recipientWallet.ownerUserId],
     senderAddress: senderWallet.customAddress ?? senderWallet.address,
     receiverAddress: recipientWallet.customAddress ?? recipientWallet.address,
     amountMinor: amounts.amountMinor,
@@ -412,7 +413,7 @@ export async function getTransaction(input: { collections: Collections; ownerUse
 
 export async function listTransactions(input: { collections: Collections; ownerUserId: string; cursor: string | undefined; limit: number | undefined; direction: "sent" | "received" | "all" | undefined }) {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), MAX_PAGE_SIZE);
-  const ownerFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : input.direction === "received" ? { receiverUserId: input.ownerUserId } : { $or: [{ senderUserId: input.ownerUserId }, { receiverUserId: input.ownerUserId }] };
+  const ownerFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : input.direction === "received" ? { receiverUserId: input.ownerUserId } : { participants: input.ownerUserId };
   const filter: Record<string, unknown> = { ...ownerFilter };
   if (input.cursor) {
     const cursor = await input.collections.transactions.findOne({ publicId: input.cursor, ...ownerFilter }, { projection: { createdAt: 1, publicId: 1 } });

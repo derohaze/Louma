@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
 import {
   AlertCircleIcon,
@@ -32,6 +33,13 @@ import {
 } from "@/lib/validation";
 import { useWallet, type Session } from "@/hooks/wallet-context";
 import { api, messageForError } from "@/lib/api";
+import {
+  accountFetchers,
+  hasBrowserSession,
+  refetchAccount,
+  serverStateFreshness,
+  serverStateKeys,
+} from "@/lib/server-state";
 import { securityDevices, securityFeature, securityFreezeWallet } from "@/lib/security-catalog";
 import { dateText } from "@/lib/wallet-format";
 import { CopyButton, Icon, PageHeader } from "./wallet-shell";
@@ -695,49 +703,43 @@ export function FreezeWalletContent() {
   );
 }
 
-/** Every device signed in to the wallet, with a revoke action per row. */
+/**
+ * Every device signed in to the wallet, with a revoke action per row.
+ *
+ * The list is read from the shared cache like every other piece of server state, not fetched by this
+ * component: the page renders more than once per visit, and an effect that fetches on mount would
+ * ask the API once per render — the same list, milliseconds apart. A query is read through its key,
+ * so concurrent readers join one request, and a revoke only has to refresh the entry instead of
+ * keeping a private copy in step with it.
+ */
 export function DevicesContent() {
   const page = securityDevices;
   const { refreshSecurity } = useWallet();
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const sessionsQuery = useQuery({
+    queryKey: serverStateKeys.sessions,
+    queryFn: accountFetchers.sessions,
+    staleTime: serverStateFreshness.sessionsMs,
+    enabled: hasBrowserSession,
+  });
+  const sessions = sessionsQuery.data?.sessions ?? [];
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const load = async () => {
-    const response = await api.get<{ sessions: Session[] }>("/api/v1/sessions");
-    setSessions(response.sessions);
-  };
-  useEffect(() => {
-    let active = true;
-    void api
-      .get<{ sessions: Session[] }>("/api/v1/sessions")
-      .then((response) => {
-        if (active) setSessions(response.sessions);
-      })
-      .catch((cause: unknown) => {
-        if (active) setError(messageForError(cause));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const [actionError, setActionError] = useState("");
+  const load = () => refetchAccount(queryClient, [serverStateKeys.sessions]);
   const otherSessions = sessions.filter((session) => !session.current);
   const revoke = async (session: Session) => {
-    setError("");
+    setActionError("");
     try {
       await api.delete(`/api/v1/sessions/${encodeURIComponent(session.id)}`);
       await load();
       await refreshSecurity();
       setMessage(`${session.device} signed out.`);
     } catch (cause) {
-      setError(messageForError(cause));
+      setActionError(messageForError(cause));
     }
   };
   const revokeOthers = async () => {
-    setError("");
+    setActionError("");
     let removed = 0;
     for (const session of otherSessions) {
       try {
@@ -752,11 +754,14 @@ export function DevicesContent() {
       await refreshSecurity();
     } catch (cause) {
       // The devices were revoked; only the list behind them could not be re-read.
-      setError(messageForError(cause));
+      setActionError(messageForError(cause));
       return;
     }
     setMessage(`${removed} other session(s) signed out.`);
   };
+  const loading = sessionsQuery.isPending;
+  // An action that failed is reported as it happened; a list that could not be read reports itself.
+  const error = actionError || (sessionsQuery.error ? messageForError(sessionsQuery.error) : "");
   return (
     <>
       <PageHeader title={page.title} subtitle={page.description} />

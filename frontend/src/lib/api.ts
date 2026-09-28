@@ -79,11 +79,117 @@ export class ApiError extends Error {
 let accessToken: string | null = null;
 let refreshInFlight: Promise<string> | null = null;
 
+/**
+ * The CSRF token this page holds for the signed-in session.
+ *
+ * The API refuses a state-changing request that does not carry the token derived for the scope it
+ * belongs to, so this lives in memory exactly like the access token: the server mints it with every
+ * response that starts or rotates a session, and a rejected page simply asks for a new one.
+ */
+const CSRF_HEADER = "X-CSRF-Token";
+const CSRF_COOKIE = "louma_csrf";
+let sessionCsrfToken: string | null = null;
+/** One in-flight request for the pre-session token, so a burst of requests asks for it once. */
+let preauthRequest: Promise<string> | null = null;
+
+/** Which token a request must carry: the session's, the pre-session one, or none for a read. */
+type CsrfScope = "session" | "preauth" | "none";
+
+function readCsrfCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${CSRF_COOKIE}=([^;]+)`));
+  return match?.[1] ?? null;
+}
+
+/**
+ * The token for the requests that run before a session exists: signing in, refreshing.
+ *
+ * A browser that has visited before already holds it in the cookie the API set, which is what lets a
+ * reload put a token on its very first request without an extra round trip; a first visit asks for
+ * one. The cookie is readable by design — this page has to send the value back — and it is not a
+ * credential on its own: the API only accepts it alongside a request that carries it.
+ */
+async function preauthCsrfToken(): Promise<string> {
+  const fromCookie = readCsrfCookie();
+  if (fromCookie) return fromCookie;
+  if (!preauthRequest) {
+    preauthRequest = send<{ csrfToken: string }>(
+      "/api/v1/auth/csrf",
+      { method: "GET", auth: false, csrf: "none" },
+      null,
+    )
+      .then((response) => response.csrfToken)
+      .finally(() => {
+        preauthRequest = null;
+      });
+  }
+  return preauthRequest;
+}
+
+/**
+ * The token for one request. A session scope without one falls back to the pre-session token so the
+ * request still proves where it came from and the API answers with a refusal the page can act on,
+ * rather than the request failing before it is sent.
+ */
+async function csrfTokenFor(scope: Exclude<CsrfScope, "none">): Promise<string> {
+  if (scope === "preauth") return preauthCsrfToken();
+  return sessionCsrfToken ?? (await preauthCsrfToken());
+}
+
+/** Records the token minted with a new or rotated session, replacing whatever the tab held. */
+export function acceptSessionCsrfToken(token: string | null): void {
+  sessionCsrfToken = token;
+}
+
+/**
+ * Best-effort UX hint: whether this browser has ever held a session. The refresh cookie is
+ * httpOnly so JS cannot read it, and a speculative `/me` + `refresh` probe on every public auth
+ * page visit fires a failing request (401 logged out, 502 backend down) that the browser still
+ * logs to the console even when caught. The hint lets those pages skip the probe when no session
+ * can exist. It is never an auth decision — the server stays authoritative, and forcing or
+ * clearing it only adds or skips one speculative request.
+ */
+const SESSION_HINT_KEY = "louma:has-session";
+
+function readSessionHint(): boolean {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return true;
+    return window.localStorage.getItem(SESSION_HINT_KEY) === "1";
+  } catch {
+    return true;
+  }
+}
+
+function writeSessionHint(): void {
+  try {
+    window.localStorage?.setItem(SESSION_HINT_KEY, "1");
+  } catch {
+    // A hint that cannot be stored only costs one speculative request; never break auth for it.
+  }
+}
+
+export function hasSessionHint(): boolean {
+  return readSessionHint();
+}
+
+export function clearSessionHint(): void {
+  try {
+    window.localStorage?.removeItem(SESSION_HINT_KEY);
+  } catch {
+    // See writeSessionHint: storage failure must not affect the session.
+  }
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   idempotencyKey?: string;
   auth?: boolean;
+  /**
+   * Which CSRF token this request carries. Read requests need none; anything else defaults to the
+   * session's, and the endpoints that run before a session exists ask for the pre-session one.
+   */
+  csrf?: CsrfScope;
 }
 
 async function decodeResponse<T>(response: Response): Promise<T> {
@@ -104,12 +210,15 @@ async function decodeResponse<T>(response: Response): Promise<T> {
 }
 
 async function send<T>(path: string, options: RequestOptions, bearer: string | null): Promise<T> {
+  const method = options.method ?? "GET";
   const headers = new Headers();
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
+  const csrf = options.csrf ?? (method === "GET" ? "none" : "session");
+  if (csrf !== "none") headers.set(CSRF_HEADER, await csrfTokenFor(csrf));
   const response = await fetch(path, {
-    method: options.method ?? "GET",
+    method,
     headers,
     credentials: "include",
     ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
@@ -119,17 +228,26 @@ async function send<T>(path: string, options: RequestOptions, bearer: string | n
 
 async function refreshAccessToken(): Promise<string> {
   if (!refreshInFlight) {
-    refreshInFlight = send<{ accessToken: string }>(
+    // The refresh runs before any session token exists in memory — after a reload this page holds
+    // none — so it authenticates itself with the pre-session token.
+    refreshInFlight = send<{ accessToken: string; csrfToken: string }>(
       "/api/v1/auth/refresh",
-      { method: "POST", auth: false },
+      { method: "POST", auth: false, csrf: "preauth" },
       null,
     )
-      .then(({ accessToken: token }) => {
+      .then(({ accessToken: token, csrfToken }) => {
         accessToken = token;
+        sessionCsrfToken = csrfToken;
+        writeSessionHint();
         return token;
       })
       .catch((error: unknown) => {
         accessToken = null;
+        // Only an authoritative rejection proves the session is gone: a transport or server
+        // fault must keep the hint so a later visit still probes once the backend recovers.
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          clearSessionHint();
+        }
         throw error;
       })
       .finally(() => {
@@ -188,11 +306,16 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
  */
 export function acceptAccessToken(token: string | null): void {
   accessToken = token;
+  // A new session gets a new CSRF token with its first response; the previous session's must not be
+  // carried into it.
+  sessionCsrfToken = null;
+  if (token) writeSessionHint();
   clearWalletSnapshot();
 }
 
 export function clearAccessToken(): void {
   accessToken = null;
+  sessionCsrfToken = null;
 }
 
 export const api = {
@@ -200,7 +323,7 @@ export const api = {
   post: <T>(
     path: string,
     body?: unknown,
-    options: Pick<RequestOptions, "auth" | "idempotencyKey"> = {},
+    options: Pick<RequestOptions, "auth" | "idempotencyKey" | "csrf"> = {},
   ) => apiRequest<T>(path, { method: "POST", ...(body === undefined ? {} : { body }), ...options }),
   patch: <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "PATCH", body }),
   delete: <T>(path: string) => apiRequest<T>(path, { method: "DELETE" }),
@@ -215,9 +338,11 @@ export async function login(input: { email: string; password: string }) {
     user: ApiUser;
     accessToken: string | null;
     sessionId: string;
+    csrfToken: string;
     requiresTwoFactor: boolean;
-  }>("/api/v1/auth/login", input, { auth: false });
+  }>("/api/v1/auth/login", input, { auth: false, csrf: "preauth" });
   acceptAccessToken(response.accessToken);
+  acceptSessionCsrfToken(response.csrfToken);
   return response;
 }
 
@@ -227,18 +352,21 @@ export async function register(input: { email: string; password: string; display
     wallet: { id: string; address: string };
     accessToken: string;
     sessionId: string;
-  }>("/api/v1/auth/register", input, { auth: false });
+    csrfToken: string;
+  }>("/api/v1/auth/register", input, { auth: false, csrf: "preauth" });
   acceptAccessToken(response.accessToken);
+  acceptSessionCsrfToken(response.csrfToken);
   return response;
 }
 
 export async function completeTwoFactor(input: { sessionId: string; code: string }) {
-  const response = await api.post<{ accessToken: string; user: ApiUser }>(
+  const response = await api.post<{ accessToken: string; user: ApiUser; csrfToken: string }>(
     "/api/v1/auth/2fa/verify",
     input,
-    { auth: false },
+    { auth: false, csrf: "preauth" },
   );
   acceptAccessToken(response.accessToken);
+  acceptSessionCsrfToken(response.csrfToken);
   return response;
 }
 
@@ -247,5 +375,6 @@ export async function logout(): Promise<void> {
     await api.post<void>("/api/v1/auth/logout");
   } finally {
     clearAccessToken();
+    clearSessionHint();
   }
 }

@@ -1,4 +1,4 @@
-import { moneyFromMinorUnits, moneyToMinorUnits } from "@/lib/wallet-format";
+import { MAX_TRANSFER_MINOR, moneyFromMinorUnits, moneyToMinorUnits } from "@/lib/wallet-format";
 
 /**
  * Every rule the wallet applies to what someone types, in one module with no UI imports. The forms
@@ -8,8 +8,8 @@ import { moneyFromMinorUnits, moneyToMinorUnits } from "@/lib/wallet-format";
 /** Upper bounds for every free-text field, so nothing unbounded can reach a request body. */
 export const LIMITS = {
   amountDecimals: 4,
-  minAmount: 0.0001,
-  maxAmount: 1_000_000,
+  /** One minor unit: the smallest amount the money arithmetic can represent. */
+  minAmountMinor: 1,
   minPasswordLength: 8,
   maxPasswordLength: 128,
   maxNoteLength: 240,
@@ -67,21 +67,20 @@ export interface AmountCheck {
 
 /**
  * Amounts arrive as text. Only plain decimal numbers are accepted: signs, exponents, and thousands
- * separators are rejected rather than guessed at, and the result is capped by `max` (the balance).
+ * separators are rejected rather than guessed at, and the result is capped by real money rather than
+ * by a product rule: the caller passes the balance it is spending from, and the default is the
+ * largest amount the money arithmetic can carry exactly.
+ *
+ * Both bounds are integer minor units, so the comparison never goes through a floating-point value.
  */
 export const parseAmount = (
   raw: string,
   options: {
-    min?: number;
-    max?: number;
-    /**
-     * Upper bound in integer minor units. Used where the limit is real money (an account balance),
-     * so the comparison never goes through a floating-point value.
-     */
+    minMinor?: number;
     maxMinor?: number;
   } = {},
 ): AmountCheck => {
-  const { min = LIMITS.minAmount, max = LIMITS.maxAmount, maxMinor } = options;
+  const { minMinor = LIMITS.minAmountMinor, maxMinor = MAX_TRANSFER_MINOR } = options;
   const text = raw.trim();
   if (!text) return { ok: false, value: "0", error: "Enter an amount." };
   if (!new RegExp(`^\\d+(\\.\\d{1,${LIMITS.amountDecimals}})?$`).test(text)) {
@@ -94,11 +93,10 @@ export const parseAmount = (
     return { ok: false, value: "0", error: "Enter a positive amount, with up to four decimals." };
   }
   if (minor <= 0) return { ok: false, value: "0", error: "Enter an amount greater than zero." };
-  if (minor < moneyToMinorUnits(min.toFixed(LIMITS.amountDecimals))) {
+  if (minor < minMinor) {
     return { ok: false, value: "0", error: "That amount is too small to send." };
   }
-  const ceiling = maxMinor ?? moneyToMinorUnits(max.toFixed(LIMITS.amountDecimals));
-  if (minor > ceiling) {
+  if (minor > maxMinor) {
     return { ok: false, value: "0", error: "That amount is more than you can send." };
   }
   return { ok: true, value: moneyFromMinorUnits(minor), error: "" };

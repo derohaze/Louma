@@ -1,6 +1,22 @@
 import { MongoServerError, type Db, type Document } from "mongodb";
 import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 
+/**
+ * How long each append-only log is kept.
+ *
+ * Notifications and security events are written on every transfer and every sign-in, and neither is
+ * ever read as a whole: the bell pages one account's notices, and the security page shows one
+ * account's recent events. Without a retention window both grow for the life of the deployment and
+ * the collections become the largest thing in the database. A TTL index lets the server delete them
+ * as it goes — no job to schedule, and no read path has to know the window.
+ *
+ * These are retention decisions, not technical limits: changing one changes how far back a customer
+ * can scroll, and shortening it deletes what is already older than the new window.
+ */
+const NOTIFICATION_RETENTION_DAYS = 90;
+const SECURITY_EVENT_RETENTION_DAYS = 180;
+const DAY_MS = 24 * 60 * 60;
+
 const schemas: Record<string, Document> = {
   users: {
     $jsonSchema: {
@@ -55,7 +71,7 @@ const schemas: Record<string, Document> = {
     $jsonSchema: { bsonType: "object", required: ["publicId", "transactionId", "lineNumber", "walletId", "ledgerAccountId", "side", "amountMinor", "currency", "correlationId", "createdAt"], properties: { publicId: { bsonType: "string" }, transactionId: { bsonType: "string" }, lineNumber: { bsonType: "int", minimum: 1 }, walletId: { bsonType: ["string", "null"] }, ledgerAccountId: { bsonType: "string" }, side: { enum: ["debit", "credit"] }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, correlationId: { bsonType: "string" }, createdAt: { bsonType: "date" } } },
   },
   transactions: {
-    $jsonSchema: { bsonType: "object", required: ["publicId", "transferId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "status", "type", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor", "correlationId", "createdAt", "completedAt"], properties: { publicId: { bsonType: "string" }, transferId: { bsonType: "string" }, idempotencyKey: { bsonType: "string" }, requestFingerprint: { bsonType: "string" }, correlationId: { bsonType: "string" },        // The sender's running balance, bounded like every other projection rather than like a line.
+    $jsonSchema: { bsonType: "object", required: ["publicId", "transferId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "status", "type", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor", "correlationId", "createdAt", "completedAt"], properties: { publicId: { bsonType: "string" }, transferId: { bsonType: "string" }, idempotencyKey: { bsonType: "string" }, requestFingerprint: { bsonType: "string" }, correlationId: { bsonType: "string" }, participants: { bsonType: "array", minItems: 2, items: { bsonType: "string" } },        // The sender's running balance, bounded like every other projection rather than like a line.
         balanceAfterMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_BALANCE_MAX_MINOR }, amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, feeMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR }, netAmountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR }, currency: { enum: ["LMA"] }, status: { enum: ["completed"] }, type: { enum: ["transfer"] }, createdAt: { bsonType: "date" }, completedAt: { bsonType: "date" } } },
   },
   sessions: {
@@ -70,20 +86,32 @@ const schemas: Record<string, Document> = {
   transfer_password_credentials: {
     $jsonSchema: { bsonType: "object", required: ["ownerUserId", "passwordHash", "changedAt"], properties: { ownerUserId: { bsonType: "string" }, passwordHash: { bsonType: "string" }, changedAt: { bsonType: "date" } } },
   },
-  password_reset_tokens: {
-    $jsonSchema: { bsonType: "object", required: ["ownerUserId", "tokenHash", "createdAt", "expiresAt", "usedAt"], properties: { ownerUserId: { bsonType: "string" }, tokenHash: { bsonType: "string" }, expiresAt: { bsonType: "date" } } },
-  },
   notifications: {
     $jsonSchema: { bsonType: "object", required: ["ownerUserId", "kind", "title", "body", "readAt", "createdAt"], properties: { ownerUserId: { bsonType: "string" }, kind: { bsonType: "string" }, title: { bsonType: "string" }, body: { bsonType: "string" }, readAt: { bsonType: ["date", "null"] }, createdAt: { bsonType: "date" } } },
   },
 };
 
+async function applyValidator(db: Db, name: string, validator: Document): Promise<void> {
+  await db.command({ collMod: name, validator, validationLevel: "strict", validationAction: "error" });
+}
+
 async function ensureCollection(db: Db, name: string, validator: Document): Promise<void> {
+  const [existing] = await db.listCollections({ name }, { nameOnly: false }).toArray();
+  if (existing) {
+    // `collMod` is a metadata write that takes the collection's lock, and every process applies the
+    // same schema at boot: re-sending an unchanged validator is pure cost on every deploy and every
+    // restart. Both sides of this comparison are produced by this module, so a string comparison is
+    // enough to tell "the same schema" from "a schema that changed".
+    if (JSON.stringify(existing.options?.["validator"] ?? null) === JSON.stringify(validator)) return;
+    await applyValidator(db, name, validator);
+    return;
+  }
   try {
     await db.createCollection(name, { validator, validationLevel: "strict", validationAction: "error" });
   } catch (error) {
+    // Another process created it between the listing above and this call.
     if (!(error instanceof MongoServerError) || error.code !== 48) throw error;
-    await db.command({ collMod: name, validator, validationLevel: "strict", validationAction: "error" });
+    await applyValidator(db, name, validator);
   }
 }
 
@@ -135,6 +163,11 @@ export async function ensureDatabaseIndexes(db: Db): Promise<void> {
     db.collection("transactions").createIndex({ senderUserId: 1, idempotencyKey: 1 }, { unique: true, name: "transactions_idempotency_unique" }),
     db.collection("transactions").createIndex({ senderUserId: 1, createdAt: -1, publicId: -1 }, { name: "transactions_sender_history" }),
     db.collection("transactions").createIndex({ receiverUserId: 1, createdAt: -1, publicId: -1 }, { name: "transactions_receiver_history" }),
+    // One index for the history as the wallet asks for it: both directions in one page, in one order.
+    // The previous shape had to answer that with an `$or` over the two indexes above, which the
+    // server resolves by fetching both halves and sorting them in memory — the cost grew with the
+    // account's history instead of with the page.
+    db.collection("transactions").createIndex({ participants: 1, createdAt: -1, publicId: -1 }, { name: "transactions_participants_history" }),
     db.collection("sessions").createIndex({ publicId: 1 }, { unique: true, name: "sessions_public_id_unique" }),
     db.collection("sessions").createIndex({ ownerUserId: 1, status: 1, lastActiveAt: -1 }, { name: "sessions_owner_active" }),
     db.collection("sessions").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "sessions_expire_at" }),
@@ -142,8 +175,24 @@ export async function ensureDatabaseIndexes(db: Db): Promise<void> {
     db.collection("security_events").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "security_events_owner_history" }),
     db.collection("two_factor_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "two_factor_owner_unique" }),
     db.collection("transfer_password_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "transfer_password_owner_unique" }),
-    db.collection("password_reset_tokens").createIndex({ tokenHash: 1 }, { unique: true, name: "password_reset_hash_unique" }),
-    db.collection("password_reset_tokens").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "password_reset_expire_at" }),
     db.collection("notifications").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "notifications_owner_history" }),
+    db.collection("notifications").createIndex({ createdAt: 1 }, { expireAfterSeconds: NOTIFICATION_RETENTION_DAYS * DAY_MS, name: "notifications_retain" }),
+    db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: SECURITY_EVENT_RETENTION_DAYS * DAY_MS, name: "security_events_retain" }),
   ]);
+
+  /**
+   * Transactions written before the participant list existed are filled in once.
+   *
+   * The match is `participants: null`, which in MongoDB is also true when the field is simply not
+   * there — and it is an equality on the leading key of the history index created just above, so
+   * this reads that index instead of the collection: on this boot and on every boot after it, when
+   * there is nothing left to match. A partial index cannot do this job: `$exists: false` is not a
+   * supported partial filter expression, and the value written is exactly what the record already
+   * implies, so a run that overlaps another is harmless.
+   */
+  await db
+    .collection("transactions")
+    .updateMany({ participants: null }, [{ $set: { participants: ["$senderUserId", "$receiverUserId"] } }], {
+      hint: "transactions_participants_history",
+    });
 }

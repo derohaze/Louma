@@ -9,6 +9,7 @@ import {
 import {
   ApiError,
   clearAccessToken,
+  clearSessionHint,
   logout as endSession,
   messageForError,
   type ApiSecurityOverview,
@@ -213,12 +214,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw cause;
     }
     clearAccessToken();
-    clearWalletSnapshot();
-    // The cache is a copy of one account's server state: none of it may survive into the next session
-    // this tab starts, and the realtime channel was authorized for the session that just ended.
-    clearAccountCache(queryClient);
+    clearSessionHint();
     stopNotificationStream();
-    await navigate({ to: "/login", replace: true });
+    // In-flight reads are cancelled and the wallet screens are unmounted before their cache
+    // is dropped: clearing the cache while they are still mounted makes the observers refetch
+    // with no token, forcing a doomed refresh against the revoked cookie (a 401 the browser
+    // logs even though it is caught).
+    await queryClient.cancelQueries();
+    try {
+      await navigate({ to: "/login", replace: true });
+    } finally {
+      clearWalletSnapshot();
+      // The cache is a copy of one account's server state: none of it may survive into the next session
+      // this tab starts, and the realtime channel was authorized for the session that just ended.
+      clearAccountCache(queryClient);
+    }
   }, [navigate, queryClient]);
 
   /**
@@ -231,11 +241,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return;
     if (handledRejection.current) return;
     handledRejection.current = true;
-    clearAccessToken();
-    clearWalletSnapshot();
-    clearAccountCache(queryClient);
-    stopNotificationStream();
-    void navigate({ to: "/login", replace: true });
+    // Same ordering as signOut: unmount the wallet screens before dropping their cache, so no
+    // still-mounted observer refetches with no token and fires a doomed refresh.
+    void (async () => {
+      clearAccessToken();
+      clearSessionHint();
+      stopNotificationStream();
+      await queryClient.cancelQueries();
+      try {
+        await navigate({ to: "/login", replace: true });
+      } finally {
+        clearWalletSnapshot();
+        clearAccountCache(queryClient);
+      }
+    })();
   }, [profile.error, navigate, queryClient]);
 
   /**

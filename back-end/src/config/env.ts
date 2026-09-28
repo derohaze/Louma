@@ -10,6 +10,15 @@ export interface AppConfig {
   mongoDatabase: string;
   mongoConnectTimeoutMs: number;
   mongoServerSelectionTimeoutMs: number;
+  /**
+   * Connections one API process keeps open to the cluster.
+   *
+   * Sized per process, and the fleet multiplies it: twenty processes of twenty is four hundred
+   * connections, which is the number the cluster's own connection limit has to be planned against.
+   * It is configuration rather than a constant because the right value is a property of the database
+   * and the workload, and it is exactly the knob a capacity measurement tunes.
+   */
+  mongoMaxPoolSize: number;
   accessTokenSecret: Buffer;
   encryptionKey: Buffer;
   frontendOrigins: string[];
@@ -148,6 +157,7 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     mongoDatabase: required("MONGODB_DATABASE", values),
     mongoConnectTimeoutMs: positiveInteger("MONGODB_CONNECT_TIMEOUT_MS", values["MONGODB_CONNECT_TIMEOUT_MS"] ?? "5000"),
     mongoServerSelectionTimeoutMs: positiveInteger("MONGODB_SERVER_SELECTION_TIMEOUT_MS", values["MONGODB_SERVER_SELECTION_TIMEOUT_MS"] ?? "5000"),
+    mongoMaxPoolSize: positiveInteger("MONGODB_MAX_POOL_SIZE", values["MONGODB_MAX_POOL_SIZE"] ?? "20"),
     accessTokenSecret: decodeKey("ACCESS_TOKEN_SECRET", required("ACCESS_TOKEN_SECRET", values)),
     encryptionKey: decodeKey("APP_ENCRYPTION_KEY", required("APP_ENCRYPTION_KEY", values)),
     frontendOrigins: parseOrigins(rawOrigins),

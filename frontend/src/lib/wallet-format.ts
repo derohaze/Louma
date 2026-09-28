@@ -4,6 +4,16 @@ export const MONEY_DECIMALS = 4;
 export const MONEY_SCALE = 10_000;
 const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.(\d{1,4}))?$/;
 
+/**
+ * The largest amount a single transfer may carry, in minor units — mirrors the backend's ceiling.
+ *
+ * There is no product limit: a wallet may move any amount it can hold, so the only bound is the
+ * exact-integer range four-decimal money is stored in — the largest whole amount that range holds.
+ * The two sides derive it the same way so a form never accepts an amount the API would refuse, or
+ * refuses one it would have moved.
+ */
+export const MAX_TRANSFER_MINOR = Math.floor(Number.MAX_SAFE_INTEGER / MONEY_SCALE) * MONEY_SCALE;
+
 export function moneyToMinorUnits(value: string | number): number {
   const text = typeof value === "number" ? value.toFixed(MONEY_DECIMALS) : value.trim();
   const match = MONEY_PATTERN.exec(text);
