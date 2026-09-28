@@ -1,9 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import {
+  ensureNotificationWatcher,
   MAX_STREAMS_PER_ACCOUNT,
   NOTIFICATIONS_CHANGED_FRAME,
   notificationStreamStats,
+  notificationWatcherUnavailable,
   publishNotificationChange,
   registerNotificationSubscriber,
   stopNotificationStream,
@@ -100,6 +103,40 @@ test("shutdown closes every open stream", async () => {
 
   // Streams that closed after the shutdown release without touching the cleared registry.
   registerNotificationSubscriber({ ownerUserId: "user-c", subscriber: fakeStream().subscriber });
+  await stopNotificationStream();
+});
+
+/**
+ * The change stream is a replica-set-only feature, so its failure is staged here rather than in the
+ * integration suite: a `watch()` that throws stands in for a deployment where the watcher cannot
+ * start, which is exactly the case the endpoint has to degrade for.
+ */
+const failingCollections = {
+  notifications: {
+    watch: () => {
+      throw new Error("a change stream needs a replica set");
+    },
+  },
+} as unknown as Collections;
+
+const quietLog = { warn: () => undefined } as unknown as Parameters<typeof ensureNotificationWatcher>[0]["log"];
+
+test("a watcher that cannot start ends the streams it was opened for", async () => {
+  const stream = fakeStream();
+  registerNotificationSubscriber({ ownerUserId: "user-watcher-down", subscriber: stream.subscriber });
+
+  ensureNotificationWatcher({ collections: failingCollections, log: quietLog });
+  // The watcher runs on its own promise, so let the failure settle before asserting on it.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(stream.isEnded(), true, "a stream whose hints can never arrive is closed instead");
+  assert.deepEqual(notificationStreamStats(), { total: 0, accounts: 0 }, "the registry is released");
+  assert.equal(
+    notificationWatcherUnavailable(),
+    true,
+    "the next attempt is refused with 503 until the backoff ends, so the client degrades",
+  );
+
   await stopNotificationStream();
 });
 

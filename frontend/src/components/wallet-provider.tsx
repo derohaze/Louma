@@ -15,7 +15,12 @@ import {
 } from "@/lib/api";
 import { WalletContext, type Transaction } from "@/hooks/wallet-context";
 import { useIsomorphicLayoutEffect } from "@/hooks/use-isomorphic-layout-effect";
-import { clearWalletSnapshot, readWalletSnapshot, writeWalletSnapshot } from "@/lib/wallet-cache";
+import {
+  clearWalletSnapshot,
+  readWalletSnapshot,
+  writeWalletSnapshot,
+  type WalletSnapshot,
+} from "@/lib/wallet-cache";
 import {
   accountFetchers,
   clearAccountCache,
@@ -43,19 +48,6 @@ import { startNotificationStream, stopNotificationStream } from "@/lib/notificat
 export function WalletProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-
-  /**
-   * Restores this tab's last snapshot before the browser paints, so a page the tab already visited
-   * reopens with its data instead of the skeleton. The account itself is not restored — see
-   * `hydrateAccountCache` — so a reload still waits for the session check. It cannot seed the cache
-   * during the first render: the server answers with the loading state, and a first client render
-   * that already held data would be a hydration mismatch. A layout effect keeps that first render
-   * identical and still swaps the snapshot in before anything is painted.
-   */
-  useIsomorphicLayoutEffect(() => {
-    const snapshot = readWalletSnapshot();
-    if (snapshot) hydrateAccountCache(queryClient, snapshot);
-  }, [queryClient]);
 
   const profile = useQuery<AccountProfile>({
     queryKey: serverStateKeys.profile,
@@ -94,6 +86,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     staleTime: serverStateFreshness.securityMs,
     enabled: hasBrowserSession,
   });
+
+  /**
+   * Restores this tab's last snapshot, so a page the tab already visited reopens with its data
+   * instead of the skeleton. The account itself is not restored — see `hydrateAccountCache` — so a
+   * reload still waits for the session check.
+   *
+   * The snapshot is applied when the API has confirmed which account is signed in, not on mount.
+   * The refresh cookie is shared between tabs, so signing in as somebody else in another tab
+   * leaves this one holding a snapshot of the previous account; seeding it before `/me` answered
+   * would show that account's history under the new profile and write the mixture back. It cannot
+   * be seeded during the first render either: the server answers with the loading state, and a
+   * first client render that already held data would be a hydration mismatch. A layout effect runs
+   * before the browser paints, so the data is in place for the same frame that opens the gate.
+   */
+  const snapshotRef = useRef<WalletSnapshot | null | undefined>(undefined);
+  const hydratedAccountId = useRef<string | null>(null);
+  useIsomorphicLayoutEffect(() => {
+    if (snapshotRef.current === undefined) snapshotRef.current = readWalletSnapshot();
+    const snapshot = snapshotRef.current;
+    const confirmedUserId = profile.data?.user.id ?? null;
+    if (!snapshot || !confirmedUserId) return;
+    if (hydratedAccountId.current === confirmedUserId) return;
+    hydratedAccountId.current = confirmedUserId;
+    if (hydrateAccountCache(queryClient, snapshot, confirmedUserId)) return;
+    // Written for an account this tab is no longer signed in as, so it is not this session's to show.
+    clearWalletSnapshot();
+    snapshotRef.current = null;
+  }, [queryClient, profile.data]);
 
   const user = profile.data?.user ?? null;
   const wallet = profile.data?.wallet ?? null;
@@ -168,21 +188,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [transactions]);
 
   /**
-   * Ends the session on the server, then clears this tab whatever the reply was. The server revokes
-   * the session before it writes its audit record, so a failed or lost response does not prove the
-   * session survived — and continuing to show an authenticated wallet on that assumption is the
-   * worse mistake. The failure is rethrown after the local state is gone, so the caller can report
-   * that the server did not confirm the sign-out, without the wallet staying open.
+   * Ends the session on the server, and only then clears this tab. The revocation is what ends the
+   * session: the refresh cookie and the server's session record outlive anything this tab does, and
+   * the sign-in page sends an already-authenticated visitor straight back to the wallet. Clearing
+   * the tab first while still holding a live cookie would tell the customer they are signed out and
+   * then bounce them in again.
+   *
+   * A failed request is therefore rethrown with the session left intact, so the caller reports an
+   * unconfirmed sign-out instead of a completed one. When the revocation did happen but its reply
+   * was lost, the next request is rejected against the revoked session and the rejection handler
+   * below ends this tab, so the stale wallet cannot outlive the first API call.
    */
   const signOut = useCallback(async () => {
-    let failure: unknown;
-    let failed = false;
-    try {
-      await endSession();
-    } catch (error) {
-      failed = true;
-      failure = error;
-    }
+    await endSession();
     clearAccessToken();
     clearWalletSnapshot();
     // The cache is a copy of one account's server state: none of it may survive into the next session
@@ -190,7 +208,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     clearAccountCache(queryClient);
     stopNotificationStream();
     await navigate({ to: "/login", replace: true });
-    if (failed) throw failure;
   }, [navigate, queryClient]);
 
   /**

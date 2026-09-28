@@ -134,7 +134,12 @@ export async function reconcileLedgerTransactions(input: {
   const session = input.session ? { session: input.session } : {};
 
   // Duplicate transaction ids. A unique index should make this impossible, but the check is the
-  // point, and `$group` performs it without this process holding every id.
+  // point, and `$group` performs it without this process holding every id. The grouping state does
+  // live on the server, and a healthy ledger — the case this check runs against by definition —
+  // groups every id before the `$match` can drop the lot, so spilling is requested explicitly
+  // rather than left to a deployment's `allowDiskUseByDefault`. Running out of memory here would
+  // fail the one job that is supposed to notice a problem first.
+  const spill = { allowDiskUse: true } as const;
   const duplicates = await collections.transactions
     .aggregate<{ _id: string }>(
       [
@@ -143,7 +148,7 @@ export async function reconcileLedgerTransactions(input: {
         { $limit: 1 },
         { $project: { _id: 1 } },
       ],
-      { batchSize: SCAN_BATCH_SIZE, ...session },
+      { batchSize: SCAN_BATCH_SIZE, ...spill, ...session },
     )
     .toArray();
   for (const duplicate of duplicates) {
@@ -178,7 +183,7 @@ export async function reconcileLedgerTransactions(input: {
         },
       },
     ],
-    { batchSize: SCAN_BATCH_SIZE, ...session },
+    { batchSize: SCAN_BATCH_SIZE, ...spill, ...session },
   );
   while (await brokenEntries.hasNext()) {
     const entry = await brokenEntries.next();
@@ -211,7 +216,7 @@ export async function reconcileLedgerTransactions(input: {
       { $addFields: { balanced: { $eq: ["$debits", "$credits"] } } },
       { $match: { $or: [{ lineCount: 0 }, { currency: { $ne: "LMA" } }, { balanced: false }] } },
     ],
-    { batchSize: SCAN_BATCH_SIZE, ...session },
+    { batchSize: SCAN_BATCH_SIZE, ...spill, ...session },
   );
   while (await brokenTransactions.hasNext()) {
     const transaction = await brokenTransactions.next();

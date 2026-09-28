@@ -134,6 +134,26 @@ function publishToEveryone(): void {
   for (const ownerUserId of [...subscribers.keys()]) publishNotificationChange(ownerUserId);
 }
 
+/**
+ * Ends every open stream and forgets it. Used when nothing behind the connections can speak any
+ * more: a socket that stays open while its hints can never arrive is worse than a closed one,
+ * because the client believes realtime works and never falls back. The close handlers that follow
+ * release through the registry that has already been cleared, which they are written to tolerate.
+ */
+function endAllSubscribers(): void {
+  for (const set of subscribers.values()) {
+    for (const subscriber of set) {
+      // One broken socket must not keep the others open.
+      try {
+        subscriber.end();
+      } catch {
+        /* ignored */
+      }
+    }
+  }
+  subscribers.clear();
+}
+
 async function runWatcher(input: { collections: Collections; log: FastifyBaseLogger }): Promise<void> {
   let cursor: ChangeStream<NotificationRecord> | null = null;
   try {
@@ -175,6 +195,11 @@ async function runWatcher(input: { collections: Collections; log: FastifyBaseLog
     input.log.warn({ err: error }, "notification_stream_watcher_stopped");
     watcher = null;
     watcherRetryAt = Date.now() + WATCHER_RETRY_DELAY_MS;
+    // The streams that are already open were promised realtime by the endpoint, and a first
+    // iteration can fail here long after that 200 was written. Ending them makes each client
+    // reconnect, and the reconnect meets `notificationWatcherUnavailable()` and falls back to its
+    // slower refresh cadence — instead of holding a socket that heartbeats and never carries a hint.
+    if (subscribers.size > 0) endAllSubscribers();
   }
 }
 
@@ -233,10 +258,7 @@ async function releaseWatcher(): Promise<void> {
 export async function stopNotificationStream(): Promise<void> {
   shuttingDown = true;
   try {
-    for (const set of subscribers.values()) {
-      for (const subscriber of set) subscriber.end();
-    }
-    subscribers.clear();
+    endAllSubscribers();
     await releaseWatcher();
   } finally {
     watcherRan = false;

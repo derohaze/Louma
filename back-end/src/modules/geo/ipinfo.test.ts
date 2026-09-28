@@ -82,6 +82,9 @@ test("only routable addresses are looked up", () => {
     "::ffff:8.8.8.8",
     "2001:4860:4860::8888",
     "2606:4700:4700::1111",
+    // An embedded quad behind a `::` compression: the compression must survive being split apart.
+    "2001:4860::8.8.8.8",
+    "2606:4700::1111:8.8.8.8",
   ]) {
     assert.equal(isPublicIp(address), true, address);
   }
@@ -110,6 +113,7 @@ test("only routable addresses are looked up", () => {
     "2001:2::1",
     "100::1",
     "::ffff:10.0.0.1",
+    "fe80::8.8.8.8",
     "not-an-ip",
     "10.0.0.256",
   ]) {

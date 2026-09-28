@@ -9,6 +9,7 @@ import * as transfers from "../transfers/service.js";
 import {
   ensureNotificationWatcher,
   NOTIFICATION_HEARTBEAT_FRAME,
+  NOTIFICATIONS_CHANGED_FRAME,
   notificationWatcherUnavailable,
   registerNotificationSubscriber,
   STREAM_HEARTBEAT_INTERVAL_MS,
@@ -70,23 +71,43 @@ async function requireAuth(request: FastifyRequest) {
  * client that cannot keep up does not need the backlog: while a write is still draining, further
  * frames are dropped rather than queued. That is this endpoint's backpressure story, and it is why
  * a slow reader costs a bounded amount of memory instead of an unbounded buffer.
+ *
+ * Dropping the frames themselves is safe; forgetting that one arrived is not. A dropped change hint
+ * would leave that reader with no reason to re-read its page until the next reconnect, so one is
+ * remembered and written as soon as the socket drains. Heartbeats are not remembered: they carry no
+ * information, and a buffer that filled up will carry the next one anyway.
  */
 function createNotificationStreamWriter(raw: ServerResponse) {
   let draining = false;
   let closed = false;
+  let changePending = false;
+
+  const write = (frame: string): void => {
+    if (closed) return;
+    if (raw.write(frame) === false) {
+      draining = true;
+      raw.once("drain", () => {
+        draining = false;
+        if (!changePending) return;
+        changePending = false;
+        write(NOTIFICATIONS_CHANGED_FRAME);
+      });
+    }
+  };
+
   return {
     send: (frame: string) => {
-      if (closed || draining) return;
-      if (raw.write(frame) === false) {
-        draining = true;
-        raw.once("drain", () => {
-          draining = false;
-        });
+      if (closed) return;
+      if (draining) {
+        if (frame === NOTIFICATIONS_CHANGED_FRAME) changePending = true;
+        return;
       }
+      write(frame);
     },
     end: () => {
       if (closed) return;
       closed = true;
+      changePending = false;
       raw.end();
     },
   };
