@@ -102,7 +102,16 @@ async function ensureCollection(db: Db, name: string, validator: Document): Prom
     // same schema at boot: re-sending an unchanged validator is pure cost on every deploy and every
     // restart. Both sides of this comparison are produced by this module, so a string comparison is
     // enough to tell "the same schema" from "a schema that changed".
-    if (JSON.stringify(existing.options?.["validator"] ?? null) === JSON.stringify(validator)) return;
+    //
+    // The validator alone is not the whole enforcement story: a collection whose level or action was
+    // relaxed (for example `moderate`/`warn` during an incident) compares equal here yet keeps
+    // accepting records the application expects MongoDB to reject. Startup previously reapplied
+    // `strict`/`error`, so those settings are checked before skipping `collMod`.
+    if (
+      JSON.stringify(existing.options?.["validator"] ?? null) === JSON.stringify(validator) &&
+      (existing.options?.["validationLevel"] ?? "strict") === "strict" &&
+      (existing.options?.["validationAction"] ?? "error") === "error"
+    ) return;
     await applyValidator(db, name, validator);
     return;
   }
@@ -115,7 +124,44 @@ async function ensureCollection(db: Db, name: string, validator: Document): Prom
   }
 }
 
-export async function ensureDatabaseIndexes(db: Db): Promise<void> {
+export interface EnsureDatabaseIndexesOptions {
+  /**
+   * Whether the retention TTL indexes may be created. Deleting notifications older than 90 days and
+   * security events older than 180 days destroys customer-visible history — including unread
+   * notices — on first install against a database that already holds older records, with no archive
+   * and no delete reporting on the notification stream. The rollout is therefore explicit: an
+   * operator enables `RETENTION_TTL_ENABLED` only after existing history has been archived or its
+   * deletion accepted. Until then the collections keep growing, which is the safe direction.
+   */
+  retentionTtlEnabled?: boolean;
+}
+
+/** One backfill write touches at most this many documents, so startup never holds one unbounded op. */
+const PARTICIPANT_BACKFILL_BATCH_SIZE = 500;
+
+async function backfillTransactionParticipants(db: Db): Promise<void> {
+  // Bounded batches instead of one unbounded `updateMany`: on a database with many legacy
+  // transactions a single multi-million-document write must finish before the API listens, and
+  // several instances starting together multiply that work. Each batch is small and idempotent —
+  // the value written is what the record already implies — so overlapping runs are harmless, and
+  // the read path's legacy fallback (see listTransactions) keeps un-backfilled rows visible.
+  for (;;) {
+    const batch = await db
+      .collection("transactions")
+      .find({ participants: null }, { projection: { _id: 1 } })
+      .limit(PARTICIPANT_BACKFILL_BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) return;
+    await db
+      .collection("transactions")
+      .updateMany({ _id: { $in: batch.map((doc) => doc._id) } }, [
+        { $set: { participants: ["$senderUserId", "$receiverUserId"] } },
+      ]);
+    if (batch.length < PARTICIPANT_BACKFILL_BATCH_SIZE) return;
+  }
+}
+
+export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndexesOptions = {}): Promise<void> {
   // Wallets written by an earlier release have no `financialVersion` (or the custom-address fields),
   // while the validator below requires them. Without this backfill a strict validator would reject
   // the first update to such a wallet — a custom-address change is the one that only touches the
@@ -176,23 +222,17 @@ export async function ensureDatabaseIndexes(db: Db): Promise<void> {
     db.collection("two_factor_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "two_factor_owner_unique" }),
     db.collection("transfer_password_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "transfer_password_owner_unique" }),
     db.collection("notifications").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "notifications_owner_history" }),
-    db.collection("notifications").createIndex({ createdAt: 1 }, { expireAfterSeconds: NOTIFICATION_RETENTION_DAYS * DAY_MS, name: "notifications_retain" }),
-    db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: SECURITY_EVENT_RETENTION_DAYS * DAY_MS, name: "security_events_retain" }),
+    ...(options.retentionTtlEnabled
+      ? [
+          // Unread notices are never eligible for expiry: only a notice the customer has seen
+          // (`readAt` set) may age out. Expiring unread notices would silently delete information
+          // the customer was never shown.
+          db.collection("notifications").createIndex({ createdAt: 1 }, { expireAfterSeconds: NOTIFICATION_RETENTION_DAYS * DAY_MS, name: "notifications_retain", partialFilterExpression: { readAt: { $type: "date" } } }),
+          db.collection("security_events").createIndex({ createdAt: 1 }, { expireAfterSeconds: SECURITY_EVENT_RETENTION_DAYS * DAY_MS, name: "security_events_retain" }),
+        ]
+      : []),
   ]);
 
-  /**
-   * Transactions written before the participant list existed are filled in once.
-   *
-   * The match is `participants: null`, which in MongoDB is also true when the field is simply not
-   * there — and it is an equality on the leading key of the history index created just above, so
-   * this reads that index instead of the collection: on this boot and on every boot after it, when
-   * there is nothing left to match. A partial index cannot do this job: `$exists: false` is not a
-   * supported partial filter expression, and the value written is exactly what the record already
-   * implies, so a run that overlaps another is harmless.
-   */
-  await db
-    .collection("transactions")
-    .updateMany({ participants: null }, [{ $set: { participants: ["$senderUserId", "$receiverUserId"] } }], {
-      hint: "transactions_participants_history",
-    });
+  // Transactions written before the participant list existed are filled in, in bounded batches.
+  await backfillTransactionParticipants(db);
 }

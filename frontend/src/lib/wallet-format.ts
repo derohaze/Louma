@@ -29,17 +29,38 @@ export function moneyFromMinorUnits(minor: number): string {
   return `${Math.floor(minor / MONEY_SCALE)}.${String(minor % MONEY_SCALE).padStart(MONEY_DECIMALS, "0")}`;
 }
 
+/** Exact minor-unit parsing without the safe-integer ceiling, for aggregating many valid amounts. */
+function minorUnitsBigInt(value: string | number): bigint {
+  const text = typeof value === "number" ? value.toFixed(MONEY_DECIMALS) : value.trim();
+  const match = MONEY_PATTERN.exec(text);
+  if (!match) throw new RangeError("Invalid LMA amount");
+  // Destructured with a default: the pattern above guarantees a leading whole part, but the
+  // compiler cannot see that, and BigInt (unlike Number) refuses `undefined`.
+  const [whole = "0", fraction = ""] = text.split(".");
+  const minor = BigInt(whole) * BigInt(MONEY_SCALE) + BigInt(fraction.padEnd(MONEY_DECIMALS, "0"));
+  if (minor < 0n) throw new RangeError("Invalid LMA amount");
+  return minor;
+}
+
+function stringFromMinorUnits(minor: bigint): string {
+  if (minor < 0n) throw new RangeError("Invalid LMA amount");
+  return `${(minor / BigInt(MONEY_SCALE)).toString()}.${(minor % BigInt(MONEY_SCALE)).toString().padStart(MONEY_DECIMALS, "0")}`;
+}
+
 export function sumMoney(values: readonly (string | number)[]): string {
-  // The generic parameter is explicit: without it TypeScript picks the array's own element type as
-  // the accumulator, and the sum is typed `string | number`.
-  return moneyFromMinorUnits(
-    values.reduce<number>((sum, value) => sum + moneyToMinorUnits(value), 0),
+  // A single transfer is bounded by the safe-integer range, but a wallet's received total is not:
+  // two individually valid transfers can sum past Number.MAX_SAFE_INTEGER in minor units. Summing
+  // in BigInt keeps the overview rendering instead of throwing on the accumulated total.
+  return stringFromMinorUnits(
+    values.reduce<bigint>((sum, value) => sum + minorUnitsBigInt(value), 0n),
   );
 }
 
 /** Convert to a chart coordinate only; all wallet totals are summed in integer minor units first. */
 export function moneyChartValue(value: string | number): number {
-  return moneyToMinorUnits(value) / MONEY_SCALE;
+  // Totals from sumMoney can exceed the safe-integer range, so this parses exactly and converts
+  // once: the chart coordinate is approximate by design, but it must never throw on a real total.
+  return Number(minorUnitsBigInt(value)) / MONEY_SCALE;
 }
 
 function groupedMoneyValue(value: string | number): string {

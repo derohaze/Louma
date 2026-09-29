@@ -71,11 +71,15 @@ function setAuthResponseCookie(app: FastifyInstance, reply: FastifyReply, refres
  * value planted by a sibling origin is worth nothing.
  */
 function setCsrfCookie(app: FastifyInstance, reply: FastifyReply, token: string) {
+  // Path `/` (not `/api/v1`): the page reads this cookie from `document.cookie` on routes such as
+  // `/login` and `/`, where a narrower path would hide it and force another `/auth/csrf` round trip
+  // on every page load. Readable by design (see above); it is only ever accepted alongside a request
+  // that carries it back, so wider visibility grants no capability.
   return reply.setCookie(CSRF_COOKIE, token, {
     httpOnly: false,
     secure: app.config.cookieSecure,
     sameSite: app.config.cookieSameSite,
-    path: "/api/v1",
+    path: "/",
     maxAge: Math.floor(30 * 24 * 60 * 60),
   } as never);
 }

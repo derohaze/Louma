@@ -27,6 +27,12 @@ export interface AppConfig {
   rateLimitMax: number;
   rateLimitWindowMs: number;
   logLevel: LogLevel;
+  /**
+   * Whether startup may create the retention TTL indexes on notifications and security events.
+   * Off by default: enabling deletion of customer-visible history is an explicit rollout decision
+   * (see ensureDatabaseIndexes), not something a fresh boot should do on its own.
+   */
+  retentionTtlEnabled: boolean;
   /** ipinfo.io token for signup geolocation. Null disables the lookup; the IP itself is still stored. */
   ipinfoToken: string | null;
   ipinfoTimeoutMs: number;
@@ -151,8 +157,9 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     host: values["HOST"] ?? "127.0.0.1",
     // Not `PORT`: that name is commonly exported by unrelated tools in the same shell, and
     // `node --env-file` never overrides an inherited variable, so a stray value would win over
-    // this component's own configuration file.
-    port: positiveInteger("LOUMA_API_PORT", values["LOUMA_API_PORT"] ?? "3001"),
+    // this component's own configuration file. The fallback matches the frontend dev proxy default
+    // so a backend started without its environment file still answers where the proxy sends `/api`.
+    port: positiveInteger("LOUMA_API_PORT", values["LOUMA_API_PORT"] ?? "8000"),
     mongoUri,
     mongoDatabase: required("MONGODB_DATABASE", values),
     mongoConnectTimeoutMs: positiveInteger("MONGODB_CONNECT_TIMEOUT_MS", values["MONGODB_CONNECT_TIMEOUT_MS"] ?? "5000"),
@@ -166,6 +173,7 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitMax: positiveInteger("RATE_LIMIT_MAX", values["RATE_LIMIT_MAX"] ?? "120"),
     rateLimitWindowMs: positiveInteger("RATE_LIMIT_WINDOW_MS", values["RATE_LIMIT_WINDOW_MS"] ?? "60000"),
     logLevel: logLevel(values["LOG_LEVEL"] ?? (isProduction ? "info" : "debug")),
+    retentionTtlEnabled: (values["RETENTION_TTL_ENABLED"] ?? "false").trim() === "true",
     ipinfoToken: optionalString("IPINFO_TOKEN", values),
     ipinfoTimeoutMs: positiveInteger("IPINFO_TIMEOUT_MS", values["IPINFO_TIMEOUT_MS"] ?? "2500"),
     trustProxy: parseTrustedProxies("TRUST_PROXY", values),

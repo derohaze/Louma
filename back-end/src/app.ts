@@ -120,7 +120,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     origin: options.config.frontendOrigins,
     credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
+    // X-CSRF-Token must be listed: every state-changing request sends it (see
+    // modules/security/csrf.ts), and a cross-origin page's preflight is refused
+    // before the token check runs when the header is not allowlisted.
+    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-CSRF-Token"],
     exposedHeaders: ["x-request-id"],
     strictPreflight: true,
   });

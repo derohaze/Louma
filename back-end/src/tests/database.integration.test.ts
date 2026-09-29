@@ -531,6 +531,40 @@ test("a state-changing request without its CSRF token is refused", async () => {
   assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
 });
 
+/**
+ * The pre-session endpoints (register, login, refresh, 2FA verify) are the ones a cross-site form
+ * can reach with only a cookie, so they carry their own CSRF guard rather than the session guard
+ * above. The suite helper always sends a token, which would keep passing if that guard were
+ * removed — this is the headerless request that must still be refused.
+ */
+test("a pre-session request without its CSRF token is refused", async () => {
+  // Deliberately invalid bodies: the guard runs before validation, so a missing token is refused
+  // with 403 and nothing is written — no account, no session, no audit row to clean up.
+  const invalidBody = { email: "not-an-email", password: PASSWORD, displayName: "No token" };
+  for (const url of ["/api/v1/auth/register", "/api/v1/auth/login"]) {
+    const response = await app.inject({
+      method: "POST",
+      url,
+      payload: invalidBody,
+      remoteAddress: nextIp(),
+    });
+    assert.equal(response.statusCode, 403, `${url}: ${response.payload}`);
+    assert.equal((response.json() as { error: { code: string } }).error.code, "csrf_token_invalid");
+  }
+
+  // The same request with the pre-session token passes the guard and fails later on validation
+  // (400, still nothing written), which is what makes the rejection above a CSRF decision rather
+  // than the route failing for another reason.
+  const guarded = await app.inject({
+    method: "POST",
+    url: "/api/v1/auth/register",
+    headers: { "x-csrf-token": preauthCsrfTokenValue },
+    payload: invalidBody,
+    remoteAddress: nextIp(),
+  });
+  assert.equal(guarded.statusCode, 400, guarded.payload);
+});
+
 test("a suspended account cannot keep using the session it already had", async () => {
   const account = await register("suspended");
   assert.equal((await call("GET", "/api/v1/me", { token: account.accessToken })).status, 200);
