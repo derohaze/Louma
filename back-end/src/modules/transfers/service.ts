@@ -413,7 +413,11 @@ export async function getTransaction(input: { collections: Collections; ownerUse
 
 export async function listTransactions(input: { collections: Collections; ownerUserId: string; cursor: string | undefined; limit: number | undefined; direction: "sent" | "received" | "all" | undefined }) {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), MAX_PAGE_SIZE);
-  const ownerFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : input.direction === "received" ? { receiverUserId: input.ownerUserId } : { participants: input.ownerUserId };
+  // `participants` is not a required schema field, so a transfer written by an older process after
+  // this process's startup backfill has no participant list. Reading only that field would silently
+  // drop such a transfer from both sides' combined history until the next backfill, so the `all`
+  // direction keeps a legacy fallback on the sender/receiver pair the record always implies.
+  const ownerFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : input.direction === "received" ? { receiverUserId: input.ownerUserId } : { $or: [{ participants: input.ownerUserId }, { senderUserId: input.ownerUserId }, { receiverUserId: input.ownerUserId }] };
   const filter: Record<string, unknown> = { ...ownerFilter };
   if (input.cursor) {
     const cursor = await input.collections.transactions.findOne({ publicId: input.cursor, ...ownerFilter }, { projection: { createdAt: 1, publicId: 1 } });

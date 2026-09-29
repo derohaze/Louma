@@ -14,7 +14,6 @@ import {
   clearAccessToken,
   clearSessionHint,
   completeTwoFactor,
-  hasSessionHint,
   login,
   messageForError,
   register,
@@ -39,15 +38,15 @@ function AuthIcon({
  * refresh cookie, so a returning visitor would otherwise see the sign-in form before the API
  * answers.
  *
- * The probe is skipped when this browser never held a session: without a session the check can
- * only fail (401 logged out, 502 backend down), and the browser logs the failed request to the
- * console even though the rejection is caught. Only an authoritative 401 clears the session —
- * a transport or server fault keeps the hint so the next visit probes again.
+ * An absent local-storage hint is not conclusive: a visitor whose session predates the hint holds
+ * a valid refresh cookie but no hint, and skipping the probe would strand them on the sign-in
+ * form. The probe therefore always runs; a failed probe is still caught and ignored, and only an
+ * authoritative 401 clears the session — a transport or server fault keeps the hint so the next
+ * visit probes again.
  */
 function useRedirectWhenAuthed() {
   const navigate = useNavigate();
   useEffect(() => {
-    if (!hasSessionHint()) return;
     let active = true;
     void api
       .get("/api/v1/me")

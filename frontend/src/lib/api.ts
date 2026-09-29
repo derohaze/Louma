@@ -90,7 +90,13 @@ const CSRF_HEADER = "X-CSRF-Token";
 const CSRF_COOKIE = "louma_csrf";
 let sessionCsrfToken: string | null = null;
 /** One in-flight request for the pre-session token, so a burst of requests asks for it once. */
-let preauthRequest: Promise<string> | null = null;
+let preauthRequest: Promise<string | null> | null = null;
+/**
+ * True once the API answered the bootstrap with 404: a backend from before the CSRF release has no
+ * `/auth/csrf`, and it also expects no token, so requests go headerless instead of failing the
+ * bootstrap on every call. Reset on a CSRF rejection in case the backend changed under this tab.
+ */
+let preauthUnsupported = false;
 
 /** Which token a request must carry: the session's, the pre-session one, or none for a read. */
 type CsrfScope = "session" | "preauth" | "none";
@@ -109,9 +115,12 @@ function readCsrfCookie(): string | null {
  * one. The cookie is readable by design — this page has to send the value back — and it is not a
  * credential on its own: the API only accepts it alongside a request that carries it.
  */
-async function preauthCsrfToken(): Promise<string> {
+async function preauthCsrfToken(): Promise<string | null> {
   const fromCookie = readCsrfCookie();
   if (fromCookie) return fromCookie;
+  // A backend from before the CSRF release has no bootstrap endpoint and expects no header: going
+  // headerless keeps the new page working against it instead of failing every mutation at bootstrap.
+  if (preauthUnsupported) return null;
   if (!preauthRequest) {
     preauthRequest = send<{ csrfToken: string }>(
       "/api/v1/auth/csrf",
@@ -119,6 +128,13 @@ async function preauthCsrfToken(): Promise<string> {
       null,
     )
       .then((response) => response.csrfToken)
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) {
+          preauthUnsupported = true;
+          return null;
+        }
+        throw error;
+      })
       .finally(() => {
         preauthRequest = null;
       });
@@ -129,11 +145,22 @@ async function preauthCsrfToken(): Promise<string> {
 /**
  * The token for one request. A session scope without one falls back to the pre-session token so the
  * request still proves where it came from and the API answers with a refusal the page can act on,
- * rather than the request failing before it is sent.
+ * rather than the request failing before it is sent. Null when the backend predates CSRF entirely.
  */
-async function csrfTokenFor(scope: Exclude<CsrfScope, "none">): Promise<string> {
+async function csrfTokenFor(scope: Exclude<CsrfScope, "none">): Promise<string | null> {
   if (scope === "preauth") return preauthCsrfToken();
   return sessionCsrfToken ?? (await preauthCsrfToken());
+}
+
+/** Drops a possibly stale pre-session token (for example after the server's keys rotated). */
+function forgetPreauthCsrfToken(): void {
+  preauthRequest = null;
+  preauthUnsupported = false;
+  try {
+    if (typeof document !== "undefined") document.cookie = `${CSRF_COOKIE}=; Max-Age=0; path=/`;
+  } catch {
+    // Clearing the cache is best-effort; the retry below re-bootstraps either way.
+  }
 }
 
 /** Records the token minted with a new or rotated session, replacing whatever the tab held. */
@@ -216,7 +243,11 @@ async function send<T>(path: string, options: RequestOptions, bearer: string | n
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
   const csrf = options.csrf ?? (method === "GET" ? "none" : "session");
-  if (csrf !== "none") headers.set(CSRF_HEADER, await csrfTokenFor(csrf));
+  if (csrf !== "none") {
+    const token = await csrfTokenFor(csrf);
+    // Null only against a pre-CSRF backend, which expects no header at all.
+    if (token) headers.set(CSRF_HEADER, token);
+  }
   const response = await fetch(path, {
     method,
     headers,
@@ -287,12 +318,39 @@ export async function openNotificationStream(signal: AbortSignal): Promise<Respo
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if (options.auth === false) return send<T>(path, options, null);
+  if (options.auth === false) {
+    try {
+      return await send<T>(path, options, null);
+    } catch (error) {
+      // A tab that crossed the CSRF rollout (or a key rotation) holds a stale cached token while
+      // the server moved on. Re-bootstrap once and retry rather than failing until a manual reload.
+      if (
+        error instanceof ApiError &&
+        error.status === 403 &&
+        error.code === "csrf_token_invalid"
+      ) {
+        sessionCsrfToken = null;
+        forgetPreauthCsrfToken();
+        return send<T>(path, options, null);
+      }
+      throw error;
+    }
+  }
   let token = accessToken;
   if (!token) token = await refreshAccessToken();
   try {
     return await send<T>(path, options, token);
   } catch (error) {
+    if (error instanceof ApiError && error.status === 403 && error.code === "csrf_token_invalid") {
+      // The session token this tab holds is stale (rollout crossing, key rotation, or a newer
+      // session from another tab). Refresh mints the current session's token — re-bootstrapping
+      // the pre-session token first when needed — and the request is retried once with it.
+      sessionCsrfToken = null;
+      forgetPreauthCsrfToken();
+      accessToken = null;
+      token = await refreshAccessToken();
+      return send<T>(path, options, token);
+    }
     if (!(error instanceof ApiError) || error.status !== 401) throw error;
     accessToken = null;
     token = await refreshAccessToken();
