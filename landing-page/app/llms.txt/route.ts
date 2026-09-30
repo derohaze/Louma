@@ -1,0 +1,65 @@
+import { getBlogPosts } from '@/lib/blog';
+import { siteConfig } from '@/lib/site';
+
+export async function GET(): Promise<Response> {
+  const posts = await getBlogPosts();
+  const lines = [
+    '# Louma',
+    '',
+    '> Louma is a digital wallet for holding, sending, and receiving LMA, with mining rewards, a full transaction history, custom receiving addresses, and a built-in security centre.',
+    '',
+    `- Website: ${siteConfig.url}`,
+    `- Features: ${siteConfig.url}/features`,
+    `- About: ${siteConfig.url}/about`,
+    `- Blog: ${siteConfig.url}/blog`,
+    `- Blog RSS: ${siteConfig.url}/blog/rss.xml`,
+    `- Pricing: ${siteConfig.url}/pricing`,
+    `- Integrations: ${siteConfig.url}/sponsors`,
+    `- Sitemap: ${siteConfig.url}/sitemap.xml`,
+    `- Terms: ${siteConfig.url}/terms`,
+    `- Privacy: ${siteConfig.url}/privacy`,
+    '',
+    '## What is Louma?',
+    '',
+    'Louma is a digital wallet for LMA. It keeps your balance, receiving addresses, transfers, mining rewards, and transaction history in one place, with a security centre for protecting the account.',
+    '',
+    '## Who is Louma for?',
+    '',
+    'Louma is for anyone who wants to hold and move LMA without juggling separate tools — one wallet for balance, transfers, mining, and history.',
+    '',
+    '## Core Features',
+    '',
+    '- Overview: live balance and recent activity at a glance',
+    '- Wallet: your balance and receiving address',
+    '- Custom address: a memorable receiving address with its own QR code',
+    '- Transfers: send and receive LMA, with a clear confirmation step',
+    '- Mining: earn LMA against a live rate and mining cycle',
+    '- Transaction history: search and filter every transfer you have made or received',
+    '- Security centre: password, active sessions, and account protection controls',
+    '- Profile and settings: account details, preferences, and appearance',
+    '',
+    '## Wallet Security',
+    '',
+    'Louma keeps account protection inside the product rather than in a support queue: a security centre for password and session management, a clear confirmation on every outgoing transfer, and a transaction history you can audit at any time.',
+    '',
+    '## Direct Answers',
+    '',
+    '- What is Louma? A digital wallet for holding, sending, and receiving LMA.',
+    '- Who made Louma? Louma is an independent digital wallet.',
+    '- What currency does Louma use? LMA.',
+    '- Can I earn in Louma? Yes. Mining rewards accrue LMA against a live rate and cycle.',
+    '- Does Louma keep a transaction history? Yes. Every transfer is recorded and searchable.',
+    '- Can I use my own receiving address? Yes. Louma supports a custom receiving address with a QR code.',
+    '',
+    '## Blog',
+    '',
+    ...posts.map((post) => `- [${post.data.title}](${siteConfig.url}${post.url}): ${post.data.description ?? 'Louma digital wallet article.'}`),
+  ];
+
+  return new Response(lines.join('\n'), {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600, s-maxage=86400',
+    },
+  });
+}

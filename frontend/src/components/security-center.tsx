@@ -138,7 +138,7 @@ export function SecurityCenterContent() {
               <div className="min-w-0 flex-1">
                 <Link
                   to={feature.href}
-                  className="text-sm font-semibold transition-colors hover:text-primary"
+                  className="text-sm font-semibold transition-colors hover:text-primary-soft"
                 >
                   {feature.title}
                 </Link>
@@ -174,7 +174,7 @@ export function SecurityCenterContent() {
             <div className="min-w-0 flex-1">
               <Link
                 to={control.href}
-                className="text-sm font-semibold transition-colors hover:text-primary"
+                className="text-sm font-semibold transition-colors hover:text-primary-soft"
               >
                 {control.title}
               </Link>

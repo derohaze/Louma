@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   api,
+  type ApiMiningState,
   type ApiNotification,
   type ApiSecurityOverview,
   type ApiSession,
@@ -69,6 +70,7 @@ export const serverStateKeys = {
   profile: ["account", "profile"] as const,
   transactions: ["account", "transactions", ACCOUNT_PAGE_SIZE] as const,
   security: ["account", "security"] as const,
+  mining: ["account", "mining"] as const,
   sessions: ["account", "sessions"] as const,
   notifications: ["notifications", NOTIFICATION_PAGE_SIZE] as const,
 };
@@ -77,6 +79,11 @@ export const serverStateFreshness = {
   profileMs: 60_000,
   transactionsMs: 30_000,
   securityMs: 60_000,
+  /**
+   * Short, because mining state is live: the page renders between reads from the last authoritative
+   * answer, and this window is how long that answer may be reused before the server is asked again.
+   */
+  miningMs: 15_000,
   /** The device list and the session count on the security overview are the same fact, read twice. */
   sessionsMs: 60_000,
   notificationsMs: 30_000,
@@ -85,6 +92,7 @@ export const serverStateFreshness = {
 export const accountFetchers = {
   profile: () => api.get<AccountProfile>("/api/v1/me"),
   security: () => api.get<ApiSecurityOverview>("/api/v1/security"),
+  mining: () => api.get<ApiMiningState>("/api/v1/mining/state"),
   sessions: () => api.get<{ sessions: ApiSession[] }>("/api/v1/sessions"),
   transactions: (cursor: string | null) =>
     api.get<TransactionPage>(

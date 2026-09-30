@@ -2,6 +2,8 @@ import type { Collection, Db } from "mongodb";
 import type {
   LedgerAccountRecord,
   LedgerEntryRecord,
+  MiningSessionRecord,
+  MiningSettlementRecord,
   NotificationRecord,
   SecurityEventRecord,
   SessionRecord,
@@ -23,6 +25,8 @@ export interface Collections {
   twoFactorCredentials: Collection<TwoFactorCredentialRecord>;
   transferPasswordCredentials: Collection<TransferPasswordCredentialRecord>;
   notifications: Collection<NotificationRecord>;
+  miningSessions: Collection<MiningSessionRecord>;
+  miningSettlements: Collection<MiningSettlementRecord>;
 }
 
 export function getCollections(db: Db): Collections {
@@ -37,5 +41,7 @@ export function getCollections(db: Db): Collections {
     twoFactorCredentials: db.collection<TwoFactorCredentialRecord>("two_factor_credentials"),
     transferPasswordCredentials: db.collection<TransferPasswordCredentialRecord>("transfer_password_credentials"),
     notifications: db.collection<NotificationRecord>("notifications"),
+    miningSessions: db.collection<MiningSessionRecord>("mining_sessions"),
+    miningSettlements: db.collection<MiningSettlementRecord>("mining_settlements"),
   };
 }

@@ -11,7 +11,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useWallet } from "@/hooks/wallet-context";
+import { useTheme } from "@/hooks/use-theme";
 import { settingsPage } from "@/lib/settings-pages";
 import { dateText } from "@/lib/wallet-format";
 import { CopyButton, PageHeader } from "./wallet-shell";
@@ -20,11 +22,26 @@ import { FactList, FormMessage, Panel } from "./security-ui";
 export function AccountContent() {
   const page = settingsPage("/settings");
   const { user, wallet } = useWallet();
+  const { isDark, toggle } = useTheme();
   const [message, setMessage] = useState("");
   return (
     <>
       <PageHeader title={page.title} subtitle={page.description} />
       <div className="space-y-4">
+        <Panel
+          title="Appearance"
+          description="Choose how the dashboard looks on this device."
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold">Dark mode</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Switch the dashboard to a darker color scheme.
+              </p>
+            </div>
+            <Switch checked={isDark} onCheckedChange={toggle} aria-label="Dark mode" />
+          </div>
+        </Panel>
         <Panel title="Wallet identity" description="Details tied to this wallet account.">
           <FactList
             items={[

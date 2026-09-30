@@ -338,6 +338,126 @@ test("the declared indexes required by the query patterns exist", async () => {
   }
 });
 
+test("retention rollout migrates a previous-release index, and the disabled path removes TTL indexes", async () => {
+  // A database started by the previous release holds `notifications_retain` without the partial
+  // filter. Enabling retention must replace that definition instead of wedging startup on the
+  // conflicting index options.
+  await db.collection("notifications").dropIndex("notifications_retain").catch(() => undefined);
+  await db.collection("security_events").dropIndex("security_events_retain").catch(() => undefined);
+  await db.collection("notifications").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60, name: "notifications_retain" });
+
+  await ensureDatabaseIndexes(db, { retentionTtlEnabled: true });
+
+  const migrated = (await db.collection("notifications").listIndexes().toArray()).find((index) => index.name === "notifications_retain");
+  assert.ok(migrated, "the retention index exists after the enabled run");
+  assert.deepEqual(
+    migrated.partialFilterExpression,
+    { readAt: { $type: "date" } },
+    "the previous-release definition was replaced with the read-only-expiry filter",
+  );
+  assert.ok(
+    (await db.collection("security_events").listIndexes().toArray()).some((index) => index.name === "security_events_retain"),
+    "the security-events retention index exists after the enabled run",
+  );
+
+  // Leaving the flag off must reconcile, not just skip creation: otherwise MongoDB keeps deleting
+  // old notifications (including unread ones) and security events while the operator believes
+  // retention is off.
+  await ensureDatabaseIndexes(db);
+
+  assert.ok(
+    !(await db.collection("notifications").listIndexes().toArray()).some((index) => index.name === "notifications_retain"),
+    "the disabled run removes the notifications TTL index",
+  );
+  assert.ok(
+    !(await db.collection("security_events").listIndexes().toArray()).some((index) => index.name === "security_events_retain"),
+    "the disabled run removes the security-events TTL index",
+  );
+});
+
+test("startup backfills legacy transactions across batches and keeps them visible in combined history", async () => {
+  const sender = await register("backfill-sender");
+  const receiver = await register("backfill-receiver");
+  // More than one backfill batch, so the test proves the loop continues past a full batch.
+  const legacyCount = 520;
+  const now = Date.now();
+  /**
+   * The journal rows this test writes directly carry no ledger lines — the exact pre-release shape
+   * the backfill migrates, and the exact shape `assertFullReconciliation` reports as an
+   * `empty_transaction`. They are therefore this test's data to remove, and they are removed in this
+   * test's own `finally` rather than left to the suite teardown: the teardown runs only after every
+   * test, so the reconciliation checks of the tests that follow would already have scanned them (and
+   * reported five hundred phantom integrity failures for a fixture that was never a real movement).
+   *
+   * Ownership is explicit and order-independent: the rows share a run-unique `correlationId` that
+   * marks them as this test's seed, and their ids are remembered so the deletion is exact. `finally`
+   * makes the removal happen on the assertion-failure and thrown-exception paths too.
+   */
+  const seedTag = `backfill-seed-${randomUUID()}`;
+  const seededPublicIds = Array.from({ length: legacyCount }, () => randomUUID());
+  try {
+    await collections.transactions.insertMany(
+      seededPublicIds.map((publicId, index) => ({
+        publicId,
+        transferId: randomUUID(),
+        senderUserId: sender.userId,
+        receiverUserId: receiver.userId,
+        senderWalletId: sender.walletId,
+        receiverWalletId: receiver.walletId,
+        senderAddress: sender.address,
+        receiverAddress: receiver.address,
+        amountMinor: 10_000,
+        feeMinor: 100,
+        netAmountMinor: 9_900,
+        currency: "LMA",
+        status: "completed",
+        type: "transfer",
+        note: "",
+        idempotencyKey: randomUUID(),
+        requestFingerprint: randomUUID(),
+        correlationId: seedTag,
+        balanceAfterMinor: 0,
+        createdAt: new Date(now - index * 1_000),
+        completedAt: new Date(now - index * 1_000),
+      })) as never,
+    );
+    assert.equal(
+      await collections.transactions.countDocuments({ senderUserId: sender.userId, participants: null } as never),
+      legacyCount,
+      "the seeded rows look like pre-participant releases",
+    );
+
+    await ensureDatabaseIndexes(db);
+
+    assert.equal(
+      await collections.transactions.countDocuments({ senderUserId: sender.userId, participants: null } as never),
+      0,
+      "every legacy row was backfilled, including the rows past the first batch",
+    );
+    const sample = await collections.transactions.findOne({ senderUserId: sender.userId });
+    assert.deepEqual(sample?.participants, [sender.userId, receiver.userId]);
+
+    // The combined history serves both representations through one merged page order.
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await call("GET", `/api/v1/transactions?limit=50${cursor ? `&cursor=${cursor}` : ""}`, { token: sender.accessToken });
+      assert.equal(page.status, 200, JSON.stringify(page.body));
+      const items = page.body["transactions"] as Array<{ id: string; createdAt: string }>;
+      assert.ok(items.length > 0, "a followed cursor never returns an empty page");
+      seen.push(...items.map((item) => item.id));
+      cursor = page.body["nextCursor"] as string | null;
+    } while (cursor);
+    assert.equal(seen.length, legacyCount, "paging visits every backfilled transfer exactly once");
+    assert.equal(new Set(seen).size, legacyCount);
+  } finally {
+    // Both handles together: the remembered ids keep the deletion exact, and the tag catches any row
+    // the insert wrote before an interruption. Nothing here is explained by a real ledger entry, so
+    // nothing here has to survive the test.
+    await collections.transactions.deleteMany({ $or: [{ publicId: { $in: seededPublicIds } }, { correlationId: seedTag }] });
+  }
+});
+
 test("a transfer moves LMA through the ledger, applies the 1% fee, and stays balanced", async () => {
   const sender = await register("sender");
   const receiver = await register("receiver");
@@ -706,9 +826,10 @@ test("two-factor authentication gates sign-in, spends a recovery code once, and 
   const afterReuse = await call("GET", "/api/v1/security", { token: twoFactorToken });
   assert.equal((afterReuse.body["twoFactor"] as { recoveryCodesRemaining: number }).recoveryCodesRemaining, 7, "the refused attempt consumed nothing");
 
-  // Turning it off needs one current code and no password, and restores simple sign-in.
-  // Turning it off needs a current code *and* the account password.
-  assert.equal((await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { code: await wrongTotpCode() } })).status, 403);
+  // Turning it off needs a current code *and* the account password: a wrong code is refused, and so
+  // is a wrong password even alongside a good code. Both requests therefore carry the password — a
+  // body that omits it never reaches the code check, and would be answered as a malformed request.
+  assert.equal((await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { password: PASSWORD, code: await wrongTotpCode() } })).status, 403);
   assert.equal((await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { password: "WrongPassword1", code: await totpCode(secret) } })).status, 403);
   const disabled = await call("POST", "/api/v1/security/2fa/disable", { token: twoFactorToken, body: { password: PASSWORD, code: await totpCode(secret) } });
   assert.equal(disabled.status, 200, JSON.stringify(disabled.body));

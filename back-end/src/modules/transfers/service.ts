@@ -2,8 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
 import type { MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import type { AppConfig } from "../../config/env.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { ensureFeeAccount, resolveRecipient } from "../wallets/service.js";
+import { settleMiningForOwner } from "../mining/service.js";
 import { assertBalanced, calculateTransferAmounts, formatMoney, parseMoneyToMinorUnits } from "../ledger/money.js";
 import { LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../../shared/errors.js";
@@ -129,6 +131,12 @@ async function checkTransferPassword(input: { collections: Collections; ownerUse
 export async function createTransfer(input: {
   collections: Collections;
   mongoClient: MongoClient;
+  /**
+   * Present on the HTTP path. A transfer spends the wallet's balance, and mined LMA only reaches that
+   * balance once it is settled, so the sender's running cycle is settled before the spend is
+   * evaluated. Optional so a direct caller that runs no mining (tests, tooling) is unaffected.
+   */
+  config?: Pick<AppConfig, "mining">;
   ownerUserId: string;
   recipientAddress: unknown;
   amount: unknown;
@@ -184,6 +192,19 @@ export async function createTransfer(input: {
     input.collections.ledgerAccounts.findOne({ walletId: recipientWallet.publicId, accountType: "wallet", currency: "LMA" }),
   ]);
   if (!senderAccount || !receiverAccount) throw new Error("Wallet ledger account is missing");
+  // Settle the sender's mined reward first: the balance this transfer is checked against must
+  // include everything the account has actually earned, and the displayed number is never an input.
+  if (input.config) {
+    await settleMiningForOwner({
+      collections: input.collections,
+      mongoClient: input.mongoClient,
+      config: input.config,
+      ownerUserId: input.ownerUserId,
+      wallet: senderWallet,
+      walletAccount: senderAccount,
+      correlationId: input.requestId,
+    });
+  }
   const feeAccountPublicId = await ensureFeeAccount(input.collections);
   const feeAccount = await input.collections.ledgerAccounts.findOne({ publicId: feeAccountPublicId, accountType: "fee_revenue", currency: "LMA" });
   if (!feeAccount) throw new Error("Fee revenue ledger account is missing");
@@ -413,19 +434,61 @@ export async function getTransaction(input: { collections: Collections; ownerUse
 
 export async function listTransactions(input: { collections: Collections; ownerUserId: string; cursor: string | undefined; limit: number | undefined; direction: "sent" | "received" | "all" | undefined }) {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), MAX_PAGE_SIZE);
+  if (input.direction === "sent" || input.direction === "received") {
+    const ownerFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : { receiverUserId: input.ownerUserId };
+    const filter: Record<string, unknown> = { ...ownerFilter };
+    if (input.cursor) {
+      const cursor = await input.collections.transactions.findOne({ publicId: input.cursor, ...ownerFilter }, { projection: { createdAt: 1, publicId: 1 } });
+      if (!cursor) throw notFound();
+      filter["$and"] = [ownerFilter, { $or: [{ createdAt: { $lt: cursor.createdAt } }, { createdAt: cursor.createdAt, publicId: { $lt: cursor.publicId } }] }];
+    }
+    const transactions = await input.collections.transactions.find(filter).sort({ createdAt: -1, publicId: -1 }).limit(limit + 1).toArray();
+    const hasMore = transactions.length > limit;
+    const page = transactions.slice(0, limit);
+    return { transactions: page.map((item) => publicTransaction(item, input.ownerUserId)), nextCursor: hasMore ? page.at(-1)?.publicId ?? null : null };
+  }
   // `participants` is not a required schema field, so a transfer written by an older process after
   // this process's startup backfill has no participant list. Reading only that field would silently
   // drop such a transfer from both sides' combined history until the next backfill, so the `all`
   // direction keeps a legacy fallback on the sender/receiver pair the record always implies.
-  const ownerFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : input.direction === "received" ? { receiverUserId: input.ownerUserId } : { $or: [{ participants: input.ownerUserId }, { senderUserId: input.ownerUserId }, { receiverUserId: input.ownerUserId }] };
-  const filter: Record<string, unknown> = { ...ownerFilter };
+  //
+  // The fallback must not slow the normal page: a single `$or` over all three predicates would make
+  // the server fetch and sort the account's whole history on every page instead of the ordered scan
+  // the participants index was built for. The two sources are therefore read as two bounded,
+  // indexed pages — the participants page off its history index, the not-yet-backfilled remainder
+  // off the sender/receiver indexes — and merged in memory over at most 2 * (limit + 1) rows. In
+  // steady state the legacy side is empty and costs one cheap empty page.
+  const ownerFilter = { $or: [{ participants: input.ownerUserId }, { senderUserId: input.ownerUserId }, { receiverUserId: input.ownerUserId }] };
+  let pageBound: Record<string, unknown> | null = null;
   if (input.cursor) {
     const cursor = await input.collections.transactions.findOne({ publicId: input.cursor, ...ownerFilter }, { projection: { createdAt: 1, publicId: 1 } });
     if (!cursor) throw notFound();
-    filter["$and"] = [ownerFilter, { $or: [{ createdAt: { $lt: cursor.createdAt } }, { createdAt: cursor.createdAt, publicId: { $lt: cursor.publicId } }] }];
+    pageBound = { $or: [{ createdAt: { $lt: cursor.createdAt } }, { createdAt: cursor.createdAt, publicId: { $lt: cursor.publicId } }] };
   }
-  const transactions = await input.collections.transactions.find(filter).sort({ createdAt: -1, publicId: -1 }).limit(limit + 1).toArray();
-  const hasMore = transactions.length > limit;
-  const page = transactions.slice(0, limit);
+  const participantsFilter: Record<string, unknown> = { participants: input.ownerUserId };
+  // `$ne` also matches documents where the field is missing, which is exactly the legacy shape.
+  // It is disjoint from the participants branch, so the merge below never sees a row twice.
+  const legacyFilter: Record<string, unknown> = {
+    $and: [
+      { $or: [{ senderUserId: input.ownerUserId }, { receiverUserId: input.ownerUserId }] },
+      { participants: { $ne: input.ownerUserId } },
+    ],
+  };
+  const primaryFilter: Record<string, unknown> = pageBound ? { $and: [participantsFilter, pageBound] } : participantsFilter;
+  const legacyPageFilter: Record<string, unknown> = pageBound ? { $and: [legacyFilter, pageBound] } : legacyFilter;
+  const [primary, legacy] = await Promise.all([
+    input.collections.transactions.find(primaryFilter).sort({ createdAt: -1, publicId: -1 }).limit(limit + 1).toArray(),
+    input.collections.transactions.find(legacyPageFilter).sort({ createdAt: -1, publicId: -1 }).limit(limit + 1).toArray(),
+  ]);
+  const seen = new Set<string>();
+  const merged = [...primary, ...legacy]
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (b.publicId < a.publicId ? -1 : b.publicId > a.publicId ? 1 : 0))
+    .filter((item) => {
+      if (seen.has(item.publicId)) return false;
+      seen.add(item.publicId);
+      return true;
+    });
+  const hasMore = merged.length > limit;
+  const page = merged.slice(0, limit);
   return { transactions: page.map((item) => publicTransaction(item, input.ownerUserId)), nextCursor: hasMore ? page.at(-1)?.publicId ?? null : null };
 }

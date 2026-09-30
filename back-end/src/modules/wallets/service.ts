@@ -75,6 +75,31 @@ export async function resolveRecipient(input: { collections: Collections; addres
   return wallet;
 }
 
+/**
+ * Resolves the single system treasury account, creating it on first use.
+ *
+ * The treasury is the controlled source every issuance debit lands on (see reconciliation.ts): a
+ * reward credits a wallet and debits the treasury in the same balanced transaction, so LMA is never
+ * conjured inside a wallet record. A unique partial index on `system_treasury` makes the upsert
+ * below converge on one account even when two processes create it at the same moment.
+ */
+export async function ensureTreasuryAccount(collections: Collections): Promise<string> {
+  const existing = await collections.ledgerAccounts.findOne({ accountType: "system_treasury", currency: "LMA" });
+  if (existing) return existing.publicId;
+  const result = await collections.ledgerAccounts.updateOne(
+    { accountType: "system_treasury", currency: "LMA" },
+    { $setOnInsert: { publicId: randomUUID(), walletId: null, accountType: "system_treasury", currency: "LMA", balanceMinor: 0, createdAt: new Date() } },
+    { upsert: true },
+  );
+  if (result.upsertedId) {
+    const created = await collections.ledgerAccounts.findOne({ _id: result.upsertedId });
+    if (created) return created.publicId;
+  }
+  const resolved = await collections.ledgerAccounts.findOne({ accountType: "system_treasury", currency: "LMA" });
+  if (!resolved) throw new Error("Failed to initialize the system treasury account");
+  return resolved.publicId;
+}
+
 export async function ensureFeeAccount(collections: Collections): Promise<string> {
   const revenueAccount = await collections.ledgerAccounts.findOne({ accountType: "fee_revenue", currency: "LMA" });
   if (revenueAccount) return revenueAccount.publicId;

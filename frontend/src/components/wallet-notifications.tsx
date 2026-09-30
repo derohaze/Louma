@@ -209,7 +209,7 @@ export function WalletNotifications() {
           size="icon"
           aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
           aria-expanded={open}
-          className="relative rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+          className="relative rounded-full border border-primary-foreground/10 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground dark:border-white/10 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
         >
           <HugeiconsIcon icon={Notification01Icon} size={20} strokeWidth={1.7} />
           {/*
@@ -236,17 +236,17 @@ export function WalletNotifications() {
       <PopoverContent
         align="end"
         sideOffset={12}
-        className="w-[400px] max-w-[calc(100vw-2rem)] rounded-[24px] border-0 bg-[#E9E9EC] p-3 shadow-2xl"
+        className="w-[400px] max-w-[calc(100vw-2rem)] rounded-[24px] border-0 bg-[#E9E9EC] p-3 shadow-2xl dark:bg-card"
       >
         <div className="mb-1 flex items-center justify-between gap-2 px-2 pb-2 pt-1">
-          <h2 className="text-[17px] font-bold text-gray-900">Notifications</h2>
+          <h2 className="text-[17px] font-bold text-gray-900 dark:text-white">Notifications</h2>
           <div className="flex shrink-0 items-center gap-3">
             {unreadCount > 0 && (
               <button
                 type="button"
                 disabled={markingRead}
                 onClick={() => void markAllRead()}
-                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
+                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60 dark:text-violet-400 dark:hover:text-violet-300"
               >
                 Mark all as read
               </button>
@@ -255,21 +255,21 @@ export function WalletNotifications() {
               type="button"
               disabled={query.isFetching}
               onClick={() => void query.refetch()}
-              className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
+              className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60 dark:text-violet-400 dark:hover:text-violet-300"
             >
               Refresh
             </button>
           </div>
         </div>
-        <div className="rounded-[20px] bg-white px-4 shadow-sm">
+        <div className="rounded-[20px] bg-white px-4 shadow-sm dark:bg-background">
           {error ? (
             <p className="py-6 text-sm text-destructive">{error}</p>
           ) : notifications.length ? (
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-gray-100 dark:divide-border">
               {notifications.map((item) => (
                 <article key={item.id} className="py-4">
                   <div className="flex items-start gap-3">
-                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900">
+                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900 dark:bg-secondary dark:text-white">
                       <HugeiconsIcon
                         icon={kindIcons[item.kind] ?? Notification01Icon}
                         size={20}
@@ -284,32 +284,32 @@ export function WalletNotifications() {
                             className="mt-2 size-2 shrink-0 rounded-full bg-[#F5334F]"
                           />
                         )}
-                        <p className="flex-1 text-[15px] font-bold leading-snug text-gray-900">
+                        <p className="flex-1 text-[15px] font-bold leading-snug text-gray-900 dark:text-white">
                           {item.title}
                         </p>
                       </div>
-                      <p className="mt-1 text-[13px] leading-relaxed text-gray-500">{item.body}</p>
-                      <p className="mt-1 text-[12px] text-gray-400">{dateText(item.createdAt)}</p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-zinc-400">{item.body}</p>
+                      <p className="mt-1 text-[12px] text-gray-400 dark:text-zinc-500">{dateText(item.createdAt)}</p>
                     </div>
                   </div>
                 </article>
               ))}
             </div>
           ) : (
-            <p className="py-6 text-sm text-gray-500">
+            <p className="py-6 text-sm text-gray-500 dark:text-zinc-400">
               {query.isPending
                 ? "Loading notifications…"
                 : "You are all caught up. Transfer and security notices appear here."}
             </p>
           )}
           {nextCursor && (
-            <div className="border-t border-gray-100 py-3 text-center">
+            <div className="border-t border-gray-100 py-3 text-center dark:border-border">
               {pageError && <p className="pb-2 text-[13px] text-destructive">{pageError}</p>}
               <button
                 type="button"
                 disabled={loadingOlder}
                 onClick={() => void loadOlder()}
-                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60"
+                className="text-[13px] font-semibold text-violet-600 transition-colors hover:text-violet-700 disabled:opacity-60 dark:text-violet-400 dark:hover:text-violet-300"
               >
                 {loadingOlder
                   ? "Loading older notices…"

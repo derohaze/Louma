@@ -272,7 +272,7 @@ export function OverviewContent() {
       <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
         <div className="flex items-center justify-between border-b px-5 py-4">
           <h2 className="font-display text-base font-semibold">Recent transactions</h2>
-          <Link to="/history" className="text-sm font-semibold text-primary">
+          <Link to="/history" className="text-sm font-semibold text-primary-soft">
             View all
           </Link>
         </div>
@@ -286,7 +286,7 @@ export function OverviewContent() {
             >
               <Icon
                 icon={t.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
-                className={t.direction === "sent" ? "text-primary" : "text-success"}
+                className={t.direction === "sent" ? "text-primary-soft" : "text-success"}
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold">{t.counterpartyAddress}</p>

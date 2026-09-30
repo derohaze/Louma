@@ -20,6 +20,45 @@ export interface ApiWallet {
   customAddress: string | null;
 }
 
+/**
+ * One mining cycle as the API reports it. It carries the persisted window and rate plus the live
+ * accrual the server computed, and it carries the rate as exact integers as well so the page can
+ * advance the counter between responses without the server ever being out of the loop.
+ */
+export interface ApiMiningSession {
+  id: string;
+  status: "active" | "completed" | "settled";
+  cycleNumber: number;
+  startedAt: string;
+  endsAt: string;
+  durationSeconds: number;
+  rate: string;
+  rateUnit: "LMA/hour";
+  rateUnits: number;
+  rateScale: number;
+  serverNow: string;
+  elapsedSeconds: number;
+  remainingSeconds: number;
+  accruedMinor: number;
+  accrued: string;
+  settledMinor: number;
+  settled: string;
+  totalAccruedMinor: number;
+  totalAccrued: string;
+  progress: number;
+  canSettle: boolean;
+  lastSettledAt: string | null;
+}
+
+export interface ApiMiningState {
+  status: "idle" | "active" | "completed" | "settled";
+  serverNow: string;
+  enabled: boolean;
+  canStart: boolean;
+  cycleDurationSeconds: number;
+  session: ApiMiningSession | null;
+}
+
 export interface ApiTransaction {
   id: string;
   transferId: string;

@@ -231,7 +231,7 @@ export function TransferContent() {
             {frozen && (
               <p className="text-sm text-muted-foreground">
                 The wallet is frozen, so transfers are refused.{" "}
-                <Link to="/security/freeze" className="font-semibold text-primary">
+                <Link to="/security/freeze" className="font-semibold text-primary-soft">
                   Unfreeze it
                 </Link>
                 .
@@ -453,7 +453,7 @@ export function HistoryContent() {
               >
                 <Icon
                   icon={isSent ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
-                  className={isSent ? "text-primary" : "text-success"}
+                  className={isSent ? "text-primary-soft" : "text-success"}
                 />
                 <Link
                   to="/history/$transferId"

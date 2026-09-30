@@ -7,6 +7,7 @@ import {
   ArrowUpRight01Icon,
   Home04Icon,
   Settings01Icon,
+  Moon02Icon,
   SnowIcon,
   Search01Icon,
   UserCircleIcon,
@@ -28,10 +29,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useWallet } from "@/hooks/wallet-context";
+import { useTheme } from "@/hooks/use-theme";
 import { messageForError } from "@/lib/api";
 import { WalletProvider } from "@/components/wallet-provider";
 import { WalletNotifications } from "@/components/wallet-notifications";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   findActiveSection,
@@ -56,21 +59,6 @@ export function Icon({
   className?: string;
 }) {
   return <HugeiconsIcon icon={icon} size={size} strokeWidth={1.7} className={className} />;
-}
-/** Official Discord "Clyde" mark (Simple Icons), filled with the current text color. */
-export function DiscordLogo({ size = 17, className }: { size?: number; className?: string }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-      className={className}
-    >
-      <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
-    </svg>
-  );
 }
 export function PageHeader({
   title,
@@ -184,6 +172,7 @@ const searchPages: SearchPage[] = navSections.flatMap((section) =>
 /** Order of the dialog's default list, so it opens on the pages an owner reaches for most. */
 const searchPageRank: NavHref[] = [
   "/transfer",
+  "/mining",
   "/wallet",
   "/history",
   "/security",
@@ -201,6 +190,13 @@ const searchTransactionLimit = 3;
 /**
  * Compact rail item: the rail lists sections, and the panel below shows the pages of the one
  * the route belongs to. Clicking a section opens its landing page.
+ *
+ * Layout follows Hostinger's own rail: the icon sits plainly in the middle of the column with
+ * the label centred underneath it. There is deliberately no chip behind the icon — the
+ * reference carries no box on its current item either, so the current section is marked by
+ * colour alone (bright icon and label against the muted rest). The icon is drawn at 22px
+ * rather than 20px because that is what the reference uses, and at 20px inside a 72px column
+ * it read as a detail next to the label rather than the anchor of the item.
  */
 function RailLink({ section, current }: { section: NavSection; current: boolean }) {
   return (
@@ -208,19 +204,14 @@ function RailLink({ section, current }: { section: NavSection; current: boolean 
       to={section.items[0].href}
       aria-current={current ? "page" : undefined}
       className={cn(
-        "group flex min-h-[68px] flex-col items-center justify-center gap-1.5 text-[11px] font-semibold",
-        current ? "text-[#323234]" : "text-[#58585E] hover:text-[#323234]",
+        "group flex min-h-[68px] flex-col items-center justify-center gap-2 px-1 text-[11px] font-medium",
+        current
+          ? "text-[#323234] dark:text-white"
+          : "text-[#58585E] hover:text-[#323234] dark:text-zinc-400 dark:hover:text-white",
       )}
     >
-      <span
-        className={cn(
-          "grid size-10 place-items-center rounded-xl transition-colors",
-          current ? "bg-card text-[#323234] shadow-sm" : "text-[#58585E] group-hover:bg-card/70",
-        )}
-      >
-        <Icon icon={section.icon} size={21} />
-      </span>
-      <span className="max-w-[64px] text-center leading-4">{section.title}</span>
+      <Icon icon={section.icon} size={22} className="shrink-0" />
+      <span className="max-w-[64px] text-center leading-4 text-balance">{section.title}</span>
     </Link>
   );
 }
@@ -242,6 +233,7 @@ export function WalletPage({ children, title }: { children: ReactNode; title: st
 
 function WalletShell({ children, title }: { children: ReactNode; title: string }) {
   const { user, wallet, transactions, security, loading, error, refresh, signOut } = useWallet();
+  const { isDark, toggle } = useTheme();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -325,8 +317,8 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
           "mb-1 flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
           "translate-y-0 opacity-100",
           current
-            ? "bg-card text-[#323234] shadow-sm"
-            : "text-[#58585E] hover:bg-card/70 hover:text-[#323234]",
+            ? "bg-card text-[#323234] shadow-sm dark:bg-secondary dark:text-white"
+            : "text-[#58585E] hover:bg-card/70 hover:text-[#323234] dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white",
         )}
       >
         <Icon icon={icon} size={21} />
@@ -344,7 +336,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
    * rendered; the desktop panel stays scoped to the section of the current page.
    */
   const sidebar = (allSections: boolean) => (
-    <aside className="h-full w-[228px] shrink-0 overflow-x-hidden overflow-y-auto bg-[#E9E9EC] px-3 py-4">
+    <aside className="h-full w-[228px] shrink-0 overflow-x-hidden overflow-y-auto bg-[#E9E9EC] px-3 py-4 dark:bg-card">
       <nav>
         {(allSections || !activeSection ? navSections : [activeSection]).map((section) =>
           sectionNav(section),
@@ -356,7 +348,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
   // at once and only the page body waits (see PageSkeleton).
   return (
     <div className="min-h-dvh bg-shell text-foreground">
-      <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground">
+      <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground dark:text-white">
         <div className="flex w-[330px] items-center gap-3">
           <img
             src="/Louma_Brand_logos/png/louma-logo-256x256.png"
@@ -369,21 +361,6 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
           <span className="font-display text-xl font-semibold tracking-tight">Louma</span>
         </div>
         <div className="ms-auto flex items-center gap-3">
-          <Button
-            variant="ghost"
-            asChild
-            className="h-8 rounded-full border-0 bg-[#5865F2] px-3 text-[13px] font-semibold text-white shadow-sm hover:bg-[#4752C4] hover:text-white"
-          >
-            <a
-              href="https://discord.com/"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Open Discord server in a new tab"
-            >
-              <DiscordLogo size={17} />
-              <span className="hidden sm:inline">Discord Server</span>
-            </a>
-          </Button>
           <Popover
             open={searchOpen}
             onOpenChange={(open) => {
@@ -399,7 +376,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 size="icon"
                 aria-label="Search"
                 aria-expanded={searchOpen}
-                className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+                className="rounded-full border border-primary-foreground/10 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground dark:border-white/10 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
               >
                 <Icon icon={Search01Icon} />
               </Button>
@@ -486,7 +463,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 variant="ghost"
                 size="icon"
                 aria-label="Account menu"
-                className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground"
+                className="rounded-full border border-primary-foreground/10 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground dark:border-white/10 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
               >
                 <Icon icon={UserCircleIcon} />
               </Button>
@@ -513,6 +490,24 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 <Icon icon={Settings01Icon} />
                 Settings
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  toggle();
+                }}
+                className="justify-between"
+              >
+                <span className="flex items-center gap-2">
+                  <Icon icon={Moon02Icon} />
+                  Dark mode
+                </span>
+                <Switch
+                  checked={isDark}
+                  onCheckedChange={toggle}
+                  aria-label="Dark mode"
+                  onClick={(event) => event.stopPropagation()}
+                />
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               {/* A logout the API did not confirm leaves this tab signed in, because the refresh
                   cookie that keeps the session alive is the server's to clear: saying otherwise
@@ -537,7 +532,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
             size="icon"
             aria-label="Open navigation"
             onClick={() => setMobileNavOpen((v) => !v)}
-            className="rounded-full border border-primary-foreground/15 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground lg:hidden"
+            className="rounded-full border border-primary-foreground/10 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground lg:hidden dark:border-white/10 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
           >
             <Icon icon={Menu01Icon} />
           </Button>
@@ -550,7 +545,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
        * corners, and it must match the dark shell for the arcs to read as curves.
        */}
       <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
-        <aside className="hidden h-full w-[72px] shrink-0 overflow-x-hidden overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col">
+        <aside className="hidden h-full w-[72px] shrink-0 overflow-x-hidden overflow-y-auto border-e border-border bg-[#E9E9EC] md:flex md:flex-col dark:bg-card">
           {/* Account-level sections stay out of the rail: the account menu owns them. */}
           {navSections
             .filter((section) => !section.accountLevel)
@@ -562,7 +557,9 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
               />
             ))}
         </aside>
-        <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex">{sidebar(false)}</div>
+        <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex dark:bg-card">
+          {sidebar(false)}
+        </div>
         <div
           className={cn(
             "fixed inset-x-0 top-[68px] z-40 grid bg-shell/30 transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] lg:hidden",
@@ -572,7 +569,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
           )}
         >
           <div className="overflow-hidden">
-            <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-x-hidden overflow-y-auto bg-[#E9E9EC] shadow-xl">
+            <div className="ms-auto max-h-[calc(100dvh-68px)] min-h-[calc(100dvh-68px)] w-[228px] overflow-x-hidden overflow-y-auto bg-[#E9E9EC] shadow-xl dark:bg-card">
               {sidebar(true)}
             </div>
           </div>
@@ -585,7 +582,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
         <main
           ref={mainRef}
           tabIndex={0}
-          className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-[#F5F5F6] [scrollbar-width:none] rounded-se-(--app-corner-size) max-md:rounded-ss-(--app-corner-size) [&::-webkit-scrollbar]:hidden"
+          className="relative min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-[#F5F5F6] [scrollbar-width:none] rounded-se-(--app-corner-size) max-md:rounded-ss-(--app-corner-size) dark:bg-background [&::-webkit-scrollbar]:hidden"
         >
           <div className="dotted-canvas pointer-events-none absolute end-0 top-0 h-48 w-[38%] [mask-image:linear-gradient(to_bottom_left,black,transparent)]" />
           <div className="dotted-canvas pointer-events-none absolute bottom-0 start-0 h-32 w-[28%] [mask-image:linear-gradient(to_top_right,black,transparent)]" />
