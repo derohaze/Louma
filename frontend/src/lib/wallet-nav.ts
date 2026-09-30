@@ -1,8 +1,8 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
+  BitcoinCpuIcon,
   Home04Icon,
-  Mining01Icon,
   QrCodeIcon,
   Settings01Icon,
   TransactionHistoryIcon,
@@ -100,12 +100,12 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
   },
   {
     title: "Mining",
-    icon: Mining01Icon,
+    icon: BitcoinCpuIcon,
     items: [
       {
         title: "Mining",
         href: "/mining",
-        icon: Mining01Icon,
+        icon: BitcoinCpuIcon,
         searchTerms: "mining rewards rate cycle earn lma earn",
       },
     ],

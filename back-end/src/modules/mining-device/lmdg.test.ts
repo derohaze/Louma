@@ -1,0 +1,587 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  bucketDeviceMemory,
+  bucketHardwareConcurrency,
+  bucketLanguageClass,
+  bucketMediaInputs,
+  bucketPixelRatio,
+  bucketPlatformVersion,
+  bucketScreenClass,
+  bucketScreenDepth,
+  bucketTimezoneOffset,
+  detectImpossibleUaPlatform,
+  ipFamilyOf,
+  normalizeSignals,
+  parseBrowserFamily,
+  parseOsFamily,
+  sanitizeEvidence,
+  type NormalizedDeviceSignals,
+} from "./signals.js";
+import {
+  buildFeatureMap,
+  decideClusterMatch,
+  deviceKeyHash,
+  digestFeatureMap,
+  hmacHex,
+  isPresentationFeature,
+  isRenderingFeature,
+  learnFeatureProfile,
+  machineFeatureMap,
+  machineKeyHash,
+  MIN_MACHINE_FEATURES,
+  matchDeviceFeatures,
+  normalizedDeviceSignature,
+  buildNormalizedVector,
+  type ObservedFeatures,
+} from "./identity.js";
+import { evaluateMiningDeviceTrust } from "./risk.js";
+
+/**
+ * LMDG unit tests: pure domain logic without a database.
+ *
+ * These pin the security-relevant invariants: normalization buckets, keyed (never plain) hashes,
+ * a matching model that refuses to treat shared Wi-Fi as shared hardware but recognises one machine
+ * across browsers and harmless drift, and a deterministic risk engine whose lease-conflict rule
+ * denies another account's active device.
+ */
+
+const SECRET = Buffer.alloc(32, 7);
+
+const CHROME_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+const FIREFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0";
+
+/** A machine's evidence as the client sends it, with per-test overrides. */
+function evidence(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    fingerprintConfidence: 0.95,
+    fingerprintVersion: "v5",
+    platform: "Win32",
+    userAgent: CHROME_UA,
+    screenWidth: 1920,
+    screenHeight: 1080,
+    pixelRatio: 1,
+    timezone: "Africa/Cairo",
+    timezoneOffsetMinutes: -180,
+    language: "en-US",
+    hardwareConcurrency: 8,
+    deviceMemory: 8,
+    maxTouchPoints: 0,
+    webglHash: "webgl-x",
+    canvasHash: "canvas-x",
+    audioHash: "audio-x",
+    fontsHash: "fonts-x",
+    colorGamut: "srgb",
+    mediaAudioInputs: 1,
+    mediaVideoInputs: 1,
+    platformVersion: "10.0.0",
+    integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
+    ...overrides,
+  };
+}
+
+function observedOf(rawEvidence: Record<string, unknown>): { features: ObservedFeatures; signals: NormalizedDeviceSignals } {
+  const signals = normalizeSignals(sanitizeEvidence(rawEvidence));
+  const raw = buildFeatureMap(signals);
+  return { features: { raw, digests: digestFeatureMap(SECRET, raw), machine: machineFeatureMap(raw) }, signals };
+}
+
+function profileOf(rawEvidence: Record<string, unknown>) {
+  const { features } = observedOf(rawEvidence);
+  return { features, profile: learnFeatureProfile(null, features.digests) };
+}
+
+test("signal buckets absorb small hardware differences but keep machines apart", () => {
+  assert.equal(bucketHardwareConcurrency(7), 8);
+  assert.equal(bucketHardwareConcurrency(8), 8);
+  assert.equal(bucketHardwareConcurrency(null), 0);
+  assert.equal(bucketDeviceMemory(16), 16);
+  assert.equal(bucketDeviceMemory(null), null);
+  assert.equal(bucketScreenClass(1920, 1080), "medium");
+  assert.equal(bucketScreenClass(null, null), "unknown");
+  assert.equal(bucketLanguageClass("en-US"), "en");
+  assert.equal(bucketLanguageClass(null), "unknown");
+  assert.equal(ipFamilyOf("1.2.3.4"), "ipv4");
+  assert.equal(ipFamilyOf("::1"), "ipv6");
+});
+
+test("display, timezone and capture-device traits bucket into stable labels", () => {
+  assert.equal(bucketPixelRatio(1), "dpr-1");
+  assert.equal(bucketPixelRatio(1.25), "dpr-1.25");
+  assert.equal(bucketPixelRatio(0), "unknown");
+  assert.equal(bucketTimezoneOffset(-180), "utc+3");
+  assert.equal(bucketTimezoneOffset(300), "utc-5");
+  assert.equal(bucketTimezoneOffset(0), "utc+0");
+  assert.equal(bucketMediaInputs(1, 1), "1x1");
+  assert.equal(bucketMediaInputs(4, 0), "3+x0");
+  assert.equal(bucketMediaInputs(null, null), "unknown");
+  assert.equal(bucketPlatformVersion("10.0.22631"), "pv-10.0");
+  assert.equal(bucketPlatformVersion(null), "unknown");
+  assert.equal(bucketScreenDepth(24), "depth-24");
+  assert.equal(bucketScreenDepth(30), "depth-30");
+  assert.equal(bucketScreenDepth(null), "unknown");
+  assert.equal(bucketScreenDepth(0), "unknown");
+});
+
+test("UA parsing spots the common families and impossible combinations", () => {
+  assert.equal(parseOsFamily(CHROME_UA, "Win32"), "windows");
+  assert.equal(parseBrowserFamily(CHROME_UA), "chrome");
+  assert.equal(parseBrowserFamily(FIREFOX_UA), "firefox");
+  assert.equal(
+    detectImpossibleUaPlatform("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", "Win32"),
+    true,
+  );
+  assert.equal(detectImpossibleUaPlatform(CHROME_UA, "Win32"), false);
+});
+
+test("evidence sanitization drops hostile shapes and oversized values", () => {
+  const sanitized = sanitizeEvidence({
+    visitorId: "abc123",
+    fingerprintConfidence: 5,
+    platform: "  Win32  ",
+    userAgent: "x".repeat(10_000),
+    screenWidth: Number.NaN,
+    integrity: { webdriver: true, headlessHint: "yes" },
+    extra: "ignored",
+  });
+  assert.equal(sanitized.visitorId, "abc123");
+  assert.equal(sanitized.fingerprintConfidence, 1);
+  assert.equal(sanitized.platform, "  Win32  ");
+  assert.equal(sanitized.userAgent?.length, 512, "an oversized UA is truncated, not dropped");
+  assert.equal(sanitized.screenWidth, null);
+  assert.equal(sanitized.integrity?.webdriver, true);
+  assert.equal(sanitized.integrity?.headlessHint, null);
+  const normalized = normalizeSignals(sanitized);
+  assert.equal(normalized.platform, "win32");
+});
+
+test("collector failures never become shared evidence", () => {
+  // Two machines with blocked WebGL both report "no-webgl"; that must not read as a shared trait.
+  const { features } = observedOf(evidence({ webglHash: "no-webgl", canvasHash: "canvas-error", audioHash: "no-audio" }));
+  assert.equal(features.raw["webgl"], undefined);
+  assert.equal(features.raw["canvas"], undefined);
+  assert.equal(features.raw["audio"], undefined);
+  assert.equal(features.raw["fonts"], "fonts-x");
+});
+
+test("device hashes are keyed HMACs, deterministic per secret, and secret-sensitive", () => {
+  const vector = buildNormalizedVector(
+    normalizeSignals(sanitizeEvidence({ platform: "Win32", timezone: "Africa/Cairo" })),
+    { ipFamily: "ipv4", asn: "AS123", country: "EG" },
+  );
+  const first = normalizedDeviceSignature(SECRET, vector);
+  assert.equal(first, normalizedDeviceSignature(SECRET, vector));
+  assert.equal(first.length, 64);
+  assert.notEqual(first, normalizedDeviceSignature(Buffer.alloc(32, 8), vector));
+  assert.notEqual(first, hmacHex(SECRET, "other-domain", vector));
+  const keyA = deviceKeyHash(SECRET, "public-key-a", first);
+  assert.notEqual(keyA, deviceKeyHash(SECRET, "public-key-b", first));
+});
+
+test("one machine behind two browsers is the same device", () => {
+  const { profile } = profileOf(evidence());
+  const firefox = observedOf(evidence({ userAgent: FIREFOX_UA }));
+  const match = matchDeviceFeatures(
+    { featureProfile: profile, featureSnapshot: null, browserKeyPublicKey: "key-chrome", fingerprintVisitorIdHash: "v1" },
+    firefox.features,
+    SECRET,
+  );
+  assert.ok(match.matchedGraphics, "the rendering stack agreed");
+  assert.ok(match.score >= 90, `same machine, different browser must correlate, got ${match.score}`);
+  assert.equal(decideClusterMatch(match, 78, 55), "same");
+});
+
+test("two different laptops on the same home Wi-Fi do not collapse into one device", () => {
+  const laptopX = profileOf(evidence());
+  const laptopY = observedOf(
+    evidence({
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+      screenWidth: 2560,
+      screenHeight: 1600,
+      pixelRatio: 2,
+      hardwareConcurrency: 16,
+      platformVersion: "14.5.0",
+      webglHash: "webgl-y",
+      canvasHash: "canvas-y",
+      audioHash: "audio-y",
+      fontsHash: "fonts-y",
+    }),
+  );
+  const match = matchDeviceFeatures(
+    { featureProfile: laptopX.profile, featureSnapshot: null, browserKeyPublicKey: "key-x", fingerprintVisitorIdHash: "vx" },
+    laptopY.features,
+    SECRET,
+  );
+  assert.ok(match.score < 55, `shared Wi-Fi must not identify a machine, got ${match.score}`);
+  assert.equal(decideClusterMatch(match, 78, 55), "different");
+});
+
+test("harmless drift keeps the device: the learned profile absorbs a changing field", () => {
+  // A browser/driver update changes the canvas and audio digests. Without a profile the old score
+  // would fall into "ambiguous"; with one, the machine is still itself.
+  const { profile } = profileOf(evidence());
+  const drifted = observedOf(evidence({ canvasHash: "canvas-updated", audioHash: "audio-updated" }));
+  const match = matchDeviceFeatures(
+    { featureProfile: profile, featureSnapshot: null, browserKeyPublicKey: "key-chrome", fingerprintVisitorIdHash: "v1" },
+    drifted.features,
+    SECRET,
+  );
+  assert.ok(match.score >= 78, `drift must not fork the device, got ${match.score}`);
+  assert.equal(decideClusterMatch(match, 78, 55), "same");
+  assert.ok(match.drifted.includes("canvas") && match.drifted.includes("audio"));
+});
+
+test("the learned ring keeps a previously seen value comparable", () => {
+  const first = profileOf(evidence());
+  const second = observedOf(evidence({ canvasHash: "canvas-v2" }));
+  const merged = learnFeatureProfile(first.profile, second.features.digests);
+  for (const observation of [first.features, second.features]) {
+    const match = matchDeviceFeatures(
+      { featureProfile: merged, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+      observation,
+      SECRET,
+    );
+    assert.equal(match.score, 100, "both observed values stay in the profile");
+  }
+  assert.equal(merged["canvas"]?.digests.length, 2);
+});
+
+test("a hidden rendering stack no longer hides the machine, and is still recorded as tampering", () => {
+  // Blanked canvas/audio/WebGL is what a spoofer does — and also what a privacy browser does on
+  // purpose, which is why it must not fork the machine identity. The machine traits still agree, so
+  // the verdict is "same"; the disappearance stays on the record and is what feeds the risk score.
+  const { profile } = profileOf(evidence());
+  const blank = observedOf(evidence({ webglHash: "no-webgl", canvasHash: "no-canvas", audioHash: "no-audio" }));
+  const match = matchDeviceFeatures(
+    { featureProfile: profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+    blank.features,
+    SECRET,
+  );
+  assert.equal(match.matchedGraphics, false);
+  assert.equal(match.missingHighEntropy, true, "the hidden high-entropy traits stay on the record");
+  assert.deepEqual(match.classDrifted, [], "no class trait disagreed");
+  assert.equal(decideClusterMatch(match, 78, 55), "same", "the machine traits are what identify the machine");
+  // A rendering digest that *moves* rather than disappears is drift — recorded, and equally not a
+  // new machine.
+  const moved = matchDeviceFeatures(
+    { featureProfile: profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+    observedOf(evidence({ canvasHash: "canvas-elsewhere" })).features,
+    SECRET,
+  );
+  assert.ok(moved.drifted.some(isRenderingFeature), "the moved rendering digest is on the record");
+  assert.equal(decideClusterMatch(moved, 78, 55), "same");
+});
+
+test("a different machine class is never a positive match, however much else agrees", () => {
+  // Two machines of the same model but a different CPU SKU: everything the browser reports agrees,
+  // and the CPU class does not. That is not one computer, and no amount of agreement overrules it.
+  const { profile } = profileOf(evidence());
+  const other = observedOf(evidence({ hardwareConcurrency: 16 }));
+  const match = matchDeviceFeatures(
+    { featureProfile: profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+    other.features,
+    SECRET,
+  );
+  assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
+  assert.ok(match.machineScore >= 78, `everything else agrees, got ${match.machineScore}`);
+  assert.equal(decideClusterMatch(match, 78, 55), "ambiguous", "the class disagreement is what vetoes a match");
+});
+
+test("one computer running two browsers is one machine, whatever the browsers disagree about", () => {
+  // The reported bypass at the model level: the same computer, a second browser. The two
+  // observations disagree about everything the *browser* owns — a privacy browser reports its GPU as
+  // `brave`, randomizes the rendering digests, and the second window sits on another monitor — and
+  // agree about everything the *computer* owns.
+  const machine = {
+    screenColorDepth: 24,
+    audioSampleRate: 48000,
+    audioChannels: 2,
+    hdr: false,
+    hardwareConcurrency: 16,
+    deviceMemory: 16,
+    pixelRatio: 1.25,
+    mediaAudioInputs: 1,
+    mediaVideoInputs: 1,
+    timezone: "Africa/Cairo",
+    timezoneOffsetMinutes: -180,
+    fontsHash: "fonts-windows",
+    codecsHash: "codecs-windows",
+    mimeTypesHash: "mime-types-windows",
+  };
+  const chrome = observedOf(
+    evidence({
+      ...machine,
+      screenWidth: 1536,
+      screenHeight: 864,
+      screenAvailWidth: 1536,
+      screenAvailHeight: 816,
+      webglVendor: "Google Inc. (AMD)",
+      webglRenderer: "ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      webglLimitsHash: "limits-amd",
+      webglExtensionsHash: "extensions-amd",
+      webglHash: "webgl-amd",
+      canvasHash: "canvas-chrome",
+      audioHash: "audio-chrome",
+      speechVoicesHash: "voices-chrome",
+    }),
+  );
+  const privacyBrowser = observedOf(
+    evidence({
+      ...machine,
+      screenWidth: 1680,
+      screenHeight: 1050,
+      screenAvailWidth: 1680,
+      screenAvailHeight: 1050,
+      webglVendor: "brave",
+      webglRenderer: "brave",
+      webglLimitsHash: "limits-brave",
+      webglExtensionsHash: "extensions-brave",
+      webglHash: "webgl-brave",
+      canvasHash: "canvas-brave",
+      audioHash: "audio-brave",
+      speechVoicesHash: "voices-brave",
+      locale: "en-GB",
+      languages: "en-GB,en",
+    }),
+  );
+  assert.equal(
+    machineKeyHash(SECRET, privacyBrowser.features.raw),
+    machineKeyHash(SECRET, chrome.features.raw),
+    "one computer, one machine key — the browser traits are not part of it",
+  );
+  const match = matchDeviceFeatures(
+    { featureProfile: learnFeatureProfile(null, chrome.features.digests), featureSnapshot: null, browserKeyPublicKey: "key-chrome", fingerprintVisitorIdHash: "visitor-chrome" },
+    privacyBrowser.features,
+    SECRET,
+  );
+  assert.deepEqual(match.classDrifted, []);
+  assert.equal(match.machineScore, 100, "every machine trait both sides reported agrees");
+  assert.equal(decideClusterMatch(match, 78, 55), "same");
+  for (const drifted of ["gpu", "gpuLimits", "canvas", "audio", "webgl", "screenGeometry"]) {
+    assert.ok(match.drifted.includes(drifted), `${drifted} moved with the browser and is recorded as drift`);
+  }
+});
+
+test("a user-agent switch on one machine cannot move the machine key", () => {
+  // The reported bypass: a browser extension changed the user agent, the weighted score fell below
+  // the matching threshold, and the observation was classified as a different machine — so a second
+  // account mined on the same computer. The machine key is built from machine traits only,
+  // so the switch leaves it untouched: it is an identity, not one more vote in the score.
+  const hardware = {
+    screenWidth: 1920,
+    screenHeight: 1080,
+    screenAvailWidth: 1920,
+    screenAvailHeight: 1040,
+    screenColorDepth: 24,
+    webglVendor: "Google Inc. (NVIDIA)",
+    webglRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    webglLimitsHash: "limits-rtx3060",
+    webglExtensionsHash: "ext-rtx3060",
+    webgpuHash: "webgpu-rtx3060",
+    audioSampleRate: 48000,
+    audioChannels: 2,
+    hdr: false,
+  };
+  const before = observedOf(evidence({ ...hardware, platform: "Win32", userAgent: CHROME_UA }));
+  const switched = observedOf(
+    evidence({
+      ...hardware,
+      platform: "MacIntel",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36",
+      platformVersion: "14.6.0",
+    }),
+  );
+  const beforeKey = machineKeyHash(SECRET, before.features.raw);
+  const switchedKey = machineKeyHash(SECRET, switched.features.raw);
+  assert.ok(beforeKey, "a machine key exists once machine traits are reported");
+  assert.equal(switchedKey, beforeKey, "the user-agent switch must not create a second machine identity");
+  assert.notEqual(before.signals.platform, switched.signals.platform, "the switch really moved the UA/platform");
+  assert.notEqual(before.signals.osFamily, switched.signals.osFamily);
+
+  // The score-based correlation is what the switch used to defeat: it drifts, the identity does not.
+  const { profile } = profileOf(evidence({ ...hardware, platform: "Win32", userAgent: CHROME_UA }));
+  const match = matchDeviceFeatures(
+    { featureProfile: profile, featureSnapshot: null, browserKeyPublicKey: "key-chrome", fingerprintVisitorIdHash: "v1" },
+    switched.features,
+    SECRET,
+  );
+  assert.ok(match.matchedMachine.length >= 3, `the machine traits still agree, got ${match.matchedMachine.join(",")}`);
+  assert.ok(match.drifted.some(isPresentationFeature), "the switch is visible as presentation drift");
+});
+
+test("the machine key survives what a browser randomizes and forks on what a machine changes", () => {
+  const machine = {
+    screenAvailWidth: 1920,
+    screenAvailHeight: 1040,
+    screenColorDepth: 24,
+    audioSampleRate: 48000,
+    audioChannels: 2,
+    webglVendor: "Intel Inc.",
+    webglRenderer: "Intel Iris OpenGL Engine",
+    webglLimitsHash: "limits-intel",
+  };
+  const plain = observedOf(evidence({ ...machine }));
+  const plainKey = machineKeyHash(SECRET, plain.features.raw);
+  assert.ok(plainKey, "a machine key exists once machine traits are reported");
+  // Randomized rendering digests, farbled GPU strings and a window on another display: all browser
+  // traits, none of them the machine.
+  const browserSide = observedOf(
+    evidence({
+      ...machine,
+      webglVendor: "brave",
+      webglRenderer: "brave",
+      webglLimitsHash: "limits-brave",
+      webglExtensionsHash: "extensions-brave",
+      webglHash: "webgl-random",
+      canvasHash: "canvas-random",
+      audioHash: "audio-random",
+      speechVoicesHash: "voices-random",
+      screenWidth: 1680,
+      screenHeight: 1050,
+      screenAvailWidth: 1680,
+      screenAvailHeight: 1050,
+    }),
+  );
+  assert.equal(machineKeyHash(SECRET, browserSide.features.raw), plainKey, "browser traits must not fork the identity");
+  assert.notEqual(
+    machineKeyHash(SECRET, observedOf(evidence({ ...machine, fontsHash: "fonts-other" })).features.raw),
+    plainKey,
+    "a different installed font set is a different machine",
+  );
+  assert.notEqual(
+    machineKeyHash(SECRET, observedOf(evidence({ ...machine, hardwareConcurrency: 16 })).features.raw),
+    plainKey,
+    "a different CPU class is a different machine",
+  );
+  assert.notEqual(
+    machineKeyHash(SECRET, observedOf(evidence({ ...machine, deviceMemory: 16 })).features.raw),
+    plainKey,
+    "a different memory class is a different machine",
+  );
+});
+
+test("too little hardware evidence yields no machine key rather than a fake identity", () => {
+  const thin = observedOf(
+    evidence({
+      pixelRatio: undefined,
+      hardwareConcurrency: undefined,
+      deviceMemory: undefined,
+      maxTouchPoints: undefined,
+      colorGamut: null,
+    }),
+  );
+  assert.ok(Object.keys(thin.features.machine).length < MIN_MACHINE_FEATURES);
+  assert.equal(machineKeyHash(SECRET, thin.features.raw), null, "a thin report must not become an identity");
+});
+
+test("presentation and rendering features are classified for tamper detection", () => {
+  assert.equal(isPresentationFeature("platform"), true);
+  assert.equal(isPresentationFeature("osFamily"), true);
+  assert.equal(isPresentationFeature("gpu"), false);
+  assert.equal(isPresentationFeature("canvas"), false);
+  assert.equal(isRenderingFeature("canvas"), true);
+  assert.equal(isRenderingFeature("webgl"), true);
+  assert.equal(isRenderingFeature("fonts"), false, "fonts are not part of the rendering stack");
+  assert.equal(isRenderingFeature("timezone"), false);
+});
+
+test("records from before the profile existed still compare through their snapshot", () => {
+  const stored = observedOf(evidence({ fontsHash: undefined }));
+  const current = observedOf(evidence({ fontsHash: undefined }));
+  const match = matchDeviceFeatures(
+    { featureProfile: null, featureSnapshot: stored.features.raw, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+    current.features,
+    SECRET,
+  );
+  assert.equal(match.score, 100);
+  assert.equal(decideClusterMatch(match, 78, 55), "same");
+});
+
+test("risk engine denies another account's active lease and never leaks through allow", () => {
+  const base = {
+    clusterVerdict: "same" as const,
+    clusterScore: 95, activeLeaseConflict: true, conflictOwnerIsSelf: false, deviceBlocked: false,
+    browserKeyPresent: true, browserKeyRequired: false, fingerprintConfidence: 0.9,
+    webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
+    missingHighEntropyFields: false, keyChangedForKnownDevice: false,
+    uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
+    history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
+  };
+  const same = evaluateMiningDeviceTrust({ ...base, clusterVerdict: "same" });
+  assert.equal(same.decision, "deny");
+  assert.equal(same.reasonCode, "device_lease_active");
+  const ambiguous = evaluateMiningDeviceTrust({ ...base, clusterVerdict: "ambiguous", clusterScore: 60 });
+  assert.equal(ambiguous.decision, "challenge");
+  // Self-conflict is not a device denial: the mining service owns the one-cycle rule.
+  const self = evaluateMiningDeviceTrust({ ...base, clusterVerdict: "same" as const, conflictOwnerIsSelf: true });
+  assert.notEqual(self.reasonCode, "device_lease_active");
+});
+
+test("risk engine escalates hostile integrity signals without banning on one weak hint", () => {
+  const calm = {
+    clusterVerdict: "different" as const, clusterScore: 10, activeLeaseConflict: false, conflictOwnerIsSelf: false,
+    deviceBlocked: false, browserKeyPresent: false, browserKeyRequired: false, fingerprintConfidence: 0.9,
+    webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
+    missingHighEntropyFields: false, keyChangedForKnownDevice: false,
+    uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
+    history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
+  };
+  assert.equal(evaluateMiningDeviceTrust(calm).decision, "allow");
+  // An anonymized network alone raises the score but never bans by itself.
+  assert.equal(evaluateMiningDeviceTrust({ ...calm, anonymity: { vpn: true, proxy: false, tor: false, hosting: false, anonymous: true } }).decision, "allow");
+  assert.equal(evaluateMiningDeviceTrust({ ...calm, anonymity: { vpn: false, proxy: false, tor: true, hosting: true, anonymous: true } }).decision, "allow");
+  // But it feeds the score: combined with automation hints it escalates to a challenge.
+  assert.equal(
+    evaluateMiningDeviceTrust({ ...calm, webdriver: true, headlessHint: true, anonymity: { vpn: false, proxy: false, tor: true, hosting: true, anonymous: true } }).decision,
+    "challenge",
+  );
+  const hostile = evaluateMiningDeviceTrust({ ...calm, webdriver: true, headlessHint: true, impossibleUaPlatform: true, history: { ...calm.history, geoJump: true } });
+  assert.equal(hostile.decision, "deny");
+  const blocked = evaluateMiningDeviceTrust({ ...calm, deviceBlocked: true });
+  assert.equal(blocked.decision, "deny");
+  assert.equal(blocked.reasonCode, "device_blocked");
+});
+
+test("hiding traits on a known device feeds the score without banning on its own", () => {
+  const calm = {
+    clusterVerdict: "different" as const, clusterScore: 10, activeLeaseConflict: false, conflictOwnerIsSelf: false,
+    deviceBlocked: false, browserKeyPresent: true, browserKeyRequired: false, fingerprintConfidence: 0.9,
+    webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
+    missingHighEntropyFields: false, keyChangedForKnownDevice: false,
+    uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
+    history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
+  };
+  const evidenceOnly = evaluateMiningDeviceTrust({ ...calm, missingHighEntropyFields: true, keyChangedForKnownDevice: true });
+  assert.equal(evidenceOnly.decision, "allow");
+  assert.equal(evidenceOnly.riskScore, 20);
+  const withAutomation = evaluateMiningDeviceTrust({
+    ...calm, missingHighEntropyFields: true, keyChangedForKnownDevice: true, webdriver: true, headlessHint: true,
+  });
+  assert.equal(withAutomation.decision, "challenge");
+});
+
+test("a changed user agent on a known machine is scored as tampering, never as a new device", () => {
+  const calm = {
+    clusterVerdict: "same" as const, clusterScore: 95, activeLeaseConflict: false, conflictOwnerIsSelf: false,
+    deviceBlocked: false, browserKeyPresent: true, browserKeyRequired: false, fingerprintConfidence: 0.9,
+    webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
+    missingHighEntropyFields: false, keyChangedForKnownDevice: false,
+    uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
+    history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
+  };
+  const switched = evaluateMiningDeviceTrust({ ...calm, uaChangedForKnownMachine: true });
+  assert.equal(switched.riskScore, 15);
+  assert.equal(switched.decision, "allow", "one changed string is evidence, not a verdict");
+  const tampered = evaluateMiningDeviceTrust({ ...calm, uaChangedForKnownMachine: true, renderingTamperForKnownMachine: true, missingHighEntropyFields: true });
+  assert.equal(tampered.riskScore, 47);
+  assert.equal(tampered.decision, "allow", "the machine key, not the score, is what blocks the second cycle");
+  const hostile = evaluateMiningDeviceTrust({ ...calm, uaChangedForKnownMachine: true, renderingTamperForKnownMachine: true, webdriver: true });
+  assert.equal(hostile.decision, "challenge");
+});

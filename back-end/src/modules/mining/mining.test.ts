@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ObjectId } from "mongodb";
 import { loadConfig } from "../../config/env.js";
 import { accruedMinorFor, pickRateUnits, rateToString, secureRandomIntInclusive, totalAccrualMinor } from "./rate.js";
-import { toPublicSession } from "./service.js";
+import { stateFromRecord, toPublicSession } from "./service.js";
 import type { MiningSessionRecord } from "../../shared/types.js";
 
 /**
@@ -148,6 +148,39 @@ test("a running cycle reports its remaining time and whether there is anything t
   assert.equal(settled.progress, 1);
 });
 
+test("capability flags follow settlement availability, not just the cycle clock", () => {
+  // Running cycle, everything on: collectible, not restartable.
+  const running = stateFromRecord(storedSession(), HOUR_MS, true, true, DAY_SECONDS);
+  assert.equal(running.status, "active");
+  assert.equal(running.canStart, false);
+  assert.equal(running.session?.canSettle, true);
+
+  // Settlement paused: no collect button, because settle would be refused.
+  const paused = stateFromRecord(storedSession(), HOUR_MS, true, false, DAY_SECONDS);
+  assert.equal(paused.session?.canSettle, false);
+
+  // Expired-but-unsettled cycle needs a settlement before a start: paused means no start.
+  const completed = stateFromRecord(storedSession(), WINDOW.endsAtMs + 1000, true, true, DAY_SECONDS);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.canStart, true);
+  const completedPaused = stateFromRecord(storedSession(), WINDOW.endsAtMs + 1000, true, false, DAY_SECONDS);
+  assert.equal(completedPaused.canStart, false);
+  assert.equal(completedPaused.session?.canSettle, false);
+});
+
+test("disabled mining still reports the existing cycle instead of hiding it", () => {
+  const disabled = stateFromRecord(storedSession(), HOUR_MS, false, true, DAY_SECONDS);
+  assert.equal(disabled.enabled, false);
+  assert.notEqual(disabled.session, null, "the accrued reward stays visible");
+  assert.equal(disabled.status, "active");
+  assert.equal(disabled.canStart, false, "writes stay off");
+  assert.equal(disabled.session?.canSettle, false);
+
+  const disabledIdle = stateFromRecord(null, HOUR_MS, false, true, DAY_SECONDS);
+  assert.equal(disabledIdle.status, "idle");
+  assert.equal(disabledIdle.session, null);
+});
+
 test("mining configuration is validated: the 24-hour window and the one-cycle rule are invariants", () => {
   const base = {
     MONGODB_URI: "mongodb://127.0.0.1:27017/louma",
@@ -171,6 +204,15 @@ test("mining configuration is validated: the 24-hour window and the one-cycle ru
   assert.throws(() => loadConfig({ ...base, MINING_RATE_DECIMALS: "2", MINING_RATE_MIN_LMA_PER_HOUR: "0.001" }), /MINING_RATE_MIN_LMA_PER_HOUR/, "precision beyond the configured decimals is refused, not truncated");
   assert.throws(() => loadConfig({ ...base, MINING_RATE_MIN_LMA_PER_HOUR: "-1" }), /MINING_RATE_MIN_LMA_PER_HOUR/);
   assert.throws(() => loadConfig({ ...base, MINING_ENABLED: "maybe" }), /MINING_ENABLED/);
+  // A rate whose 24-hour total cannot be posted through the ledger is refused at boot, so it can
+  // never strand an unsettleable active cycle on an account.
+  assert.throws(
+    () => loadConfig({ ...base, MINING_RATE_DECIMALS: "1", MINING_RATE_MIN_LMA_PER_HOUR: "0.1", MINING_RATE_MAX_LMA_PER_HOUR: "40000000000" }),
+    /24-hour total/,
+  );
+  // ...while a large-but-postable rate still boots: 1,000,000 LMA/hour totals 2.4e11 minor units.
+  const roomy = loadConfig({ ...base, MINING_RATE_DECIMALS: "1", MINING_RATE_MIN_LMA_PER_HOUR: "0.1", MINING_RATE_MAX_LMA_PER_HOUR: "1000000" });
+  assert.equal(roomy.mining.rate.maxUnits, 10_000_000);
 
   const tuned = loadConfig({ ...base, MINING_RATE_MIN_LMA_PER_HOUR: "0.0001", MINING_RATE_MAX_LMA_PER_HOUR: "0.0002", MINING_RATE_DECIMALS: "4" });
   assert.equal(tuned.mining.rate.minUnits, 1, "0.0001 at four decimals");
