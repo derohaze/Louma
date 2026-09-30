@@ -8,11 +8,13 @@
  *
  * The signal set is split by *what an attacker would have to change to defeat it*:
  *
- *   - Machine traits — CPU class, memory class, display scale, capture-device counts, audio device
- *     rate, display gamut and colour depth, the installed font set, the codec set. These are
- *     properties of the computer and its operating system, so they are the same whichever browser
- *     is running: they are the machine identity (identity.ts, `machineKeyHash`) and not just one
- *     more vote in a score.
+ *   - Machine traits — CPU class, display scale, touch class, audio device, display gamut and colour
+ *     depth. These are properties of the computer and its operating system, so they are the same
+ *     whichever browser is running: they are the machine identity (identity.ts,
+ *     `machineKeyHash`) and not just one more vote in a score. The machine-level traits an engine
+ *     may decline to *report* — the capture-device counts, the engine-variant memory class, the
+ *     installed font and codec sets — are evidence instead of identity, because "this browser does
+ *     not answer" is a fact about the browser, not about the machine.
  *   - Browser traits — the GPU strings and limits, canvas/audio/WebGL digests, speech voices, the
  *     screen geometry of the window, locale, storage quota, plugins. They are strong evidence when
  *     they agree and tamper evidence when they move, but they describe the *browser session*: a
@@ -282,6 +284,12 @@ export function bucketTouchPoints(value: number | null): string {
  * Connected capture devices. Only the *counts* are used: `enumerateDevices` labels are empty
  * without permission, so the count is the stable part — and it is the part that differs between a
  * laptop, a desktop with a webcam and a machine that has neither.
+ *
+ * Evidence, never identity: whether an engine answers at all is its own policy and timing —
+ * Firefox's first call reports nothing until its media stack has started, and a hardened profile
+ * reports less than a plain one — so a machine cannot be identified by a count one of its browsers
+ * never sends. It corroborates a match when both sides do report it (see `matchDeviceFeatures`),
+ * and it is deliberately absent from CORE_MACHINE_FEATURES.
  */
 export function bucketMediaInputs(audioInputs: number | null, videoInputs: number | null): string {
   const bucket = (value: number | null): string => {

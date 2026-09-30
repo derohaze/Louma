@@ -38,6 +38,22 @@ export async function findDeviceByPublicKey(
   return collections.miningDevices.findOne({ browserKeyPublicKey }, OLDEST_FIRST);
 }
 
+/**
+ * The machine identity of one observation, resolved directly.
+ *
+ * A record that already carries this observation's machine key IS the same machine — identity, not
+ * similarity — so the lookup must not depend on the recent-activity ordering of the profile sweep
+ * (`lastSeenAt` desc, limit 50): an idle machine behind a second browser, or busy fleet traffic,
+ * could otherwise push the one record that matters out of the window and split the device. Served
+ * by the dedicated machine-key index; falls back to the most recent match on the rare duplicate.
+ */
+export async function lookupMachineKey(
+  collections: Pick<Collections, "miningDevices">,
+  machineKeyHash: string,
+): Promise<MiningDeviceRecord | null> {
+  return collections.miningDevices.findOne({ machineKeyHash }, OLDEST_FIRST);
+}
+
 export async function listClusterCandidates(
   collections: Pick<Collections, "miningDevices">,
   filter: Record<string, unknown>,

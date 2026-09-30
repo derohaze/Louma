@@ -358,7 +358,16 @@ export type MiningDeviceStatus = "active" | "quarantined" | "blocked";
  * update) still compare as the same machine instead of forking into a new identity.
  */
 export interface MiningDeviceFeatureProfile {
-  [featureKey: string]: { digests: string[]; count: number };
+  [featureKey: string]: {
+    digests: string[];
+    count: number;
+    /**
+     * Bounded log of digests this observation stream contradicted the ring with, not yet seen
+     * often enough consecutively to be trusted. Evidence, never identity: a contradictory value
+     * does not enter `digests` until it repeats (see learnFeatureProfileChecked).
+     */
+    drift?: string[];
+  };
 }
 
 export interface MiningDeviceRecord {
@@ -370,8 +379,8 @@ export interface MiningDeviceRecord {
    */
   deviceKeyHash: string;
   /**
-   * HMAC over the machine traits only (CPU and memory class, display scale and colour depth,
-   * capture devices, audio device, display gamut, installed fonts, codec set). Identifies the
+   * HMAC over the engine-stable machine traits only (CPU and touch class, audio device, display
+   * gamut and HDR capability, panel colour depth — see CORE_MACHINE_FEATURES). Identifies the
    * *computer and its operating system*: two browsers on one machine produce the same value, and a
    * user-agent change or a new browser profile does not move it. It is what a mining lease is taken
    * on. Null when the client reported too few machine traits for the key to mean anything.
@@ -435,6 +444,8 @@ export interface MiningDeviceNonceRecord {
   issuedAt: Date;
   expiresAt: Date;
   consumedAt: Date | null;
+  /** Public browser key proven through this nonce, set when the proof is consumed. */
+  verifiedBrowserKey?: string | null;
 }
 
 export interface MiningDeviceObservationRecord {

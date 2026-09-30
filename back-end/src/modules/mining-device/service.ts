@@ -4,6 +4,7 @@ import { ObjectId } from "mongodb";
 import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { MiningDeviceRecord } from "../../shared/types.js";
+import { AppError } from "../../shared/errors.js";
 import { isPublicIp, lookupIpLocation } from "../geo/ipinfo.js";
 import { lookupProxyCheckIntel, type ProxyCheckIntel } from "../geo/proxycheck.js";
 import { recordSecurityEvent } from "../security/audit.js";
@@ -17,6 +18,7 @@ import {
   isPresentationFeature,
   isRenderingFeature,
   learnFeatureProfile,
+  learnFeatureProfileChecked,
   machineFeatureMap,
   machineKeyHash,
   machineProfileOf,
@@ -41,6 +43,8 @@ import { evaluateMiningDeviceTrust, type RiskDecision } from "./risk.js";
 import {
   CHALLENGE_MAX_PER_HOUR,
   LMDG_EVENT_TYPES,
+  LMDG_PROOF_ACTION,
+  LMDG_PROOF_VERSION,
   MAX_ACCOUNTS_PER_DEVICE_CLUSTER,
   MAX_DEVICES_PER_ACCOUNT,
   OBSERVATION_MIN_INTERVAL_MS,
@@ -53,6 +57,7 @@ import {
   findLiveLeases,
   isDuplicateKeyError,
   listClusterCandidates,
+  lookupMachineKey,
 } from "./repository.js";
 
 /**
@@ -81,6 +86,27 @@ interface IpIntel {
 
 const ipIntelCache = new Map<string, { intel: IpIntel; cachedAtMs: number }>();
 
+/**
+ * Bounded in-process cache: the TTL alone stops reuse of stale intelligence but never removes
+ * entries, so a long-running service resolving continually changing public IPs would grow without
+ * end. Inserts evict expired entries first, then the oldest, keeping the map at a fixed ceiling.
+ */
+const IP_INTEL_CACHE_MAX_ENTRIES = 1000;
+
+function cacheIpIntel(ip: string, intel: IpIntel, nowMs: number, ttlMs: number): void {
+  ipIntelCache.set(ip, { intel, cachedAtMs: nowMs });
+  if (ipIntelCache.size <= IP_INTEL_CACHE_MAX_ENTRIES) return;
+  for (const [key, entry] of ipIntelCache) {
+    if (ipIntelCache.size <= IP_INTEL_CACHE_MAX_ENTRIES) break;
+    if (nowMs - entry.cachedAtMs >= ttlMs) ipIntelCache.delete(key);
+  }
+  while (ipIntelCache.size > IP_INTEL_CACHE_MAX_ENTRIES) {
+    const oldest = ipIntelCache.keys().next();
+    if (oldest.done) break;
+    ipIntelCache.delete(oldest.value);
+  }
+}
+
 function parseAsn(org: string | null): string | null {
   if (!org) return null;
   const match = /AS(\d+)/i.exec(org);
@@ -95,8 +121,9 @@ export async function resolveIpIntel(input: {
 }): Promise<IpIntel> {
   const ip = (input.ip ?? "").slice(0, 45);
   if (!ip || !isPublicIp(ip)) return { ...UNKNOWN_INTEL };
+  const ttlMs = input.config.lmdg.ipIntelTtlSeconds * 1000;
   const cached = ipIntelCache.get(ip);
-  if (cached && Date.now() - cached.cachedAtMs < input.config.lmdg.ipIntelTtlSeconds * 1000) return cached.intel;
+  if (cached && Date.now() - cached.cachedAtMs < ttlMs) return cached.intel;
   // Mining path prefers proxycheck (VPN/proxy/Tor/hosting + ASN/country in one answer).
   // ipinfo remains the fallback for ASN/country so its signup role is untouched.
   let proxy: ProxyCheckIntel | null = null;
@@ -113,7 +140,7 @@ export async function resolveIpIntel(input: {
         anonymous: proxy.anonymous,
         providerRisk: proxy.risk,
       };
-      ipIntelCache.set(ip, { intel, cachedAtMs: Date.now() });
+      cacheIpIntel(ip, intel, Date.now(), ttlMs);
       return intel;
     }
   }
@@ -121,7 +148,7 @@ export async function resolveIpIntel(input: {
     try {
       const location = await lookupIpLocation({ ipAddress: ip, token: input.config.ipinfoToken, timeoutMs: input.config.ipinfoTimeoutMs });
       const intel: IpIntel = { ...UNKNOWN_INTEL, asn: parseAsn(location.org), country: location.country };
-      ipIntelCache.set(ip, { intel, cachedAtMs: Date.now() });
+      cacheIpIntel(ip, intel, Date.now(), ttlMs);
       return intel;
     } catch {
       // Degraded mode: third-party outage never fails mining.
@@ -263,34 +290,41 @@ export async function resolveOrCreateDevice(input: {
 
   // 1. Exact continuity: same browser key, same key hash, or same signature. Each of these is a
   // byte-level match on a value the device itself produced and kept, so no similarity is needed.
+  // No mutation here: the record is folded only after admission allows (see `assessMiningStart`),
+  // so a rejected attempt can never re-tag the identity or history it was compared against.
   if (evidence.browserKeyPublicKey) {
     const byKey = await findDeviceByPublicKey(collections, evidence.browserKeyPublicKey);
     if (byKey) {
-      await touchDevice(collections, config.encryptionKey, byKey, input, observed);
       return resolutionFor({ device: { ...byKey }, verdict: "same", score: 100, match: exactMatch(100), isNew: false });
     }
   }
   const byKeyHash = await findDeviceByKeyHash(collections, keyHash);
   if (byKeyHash) {
-    await touchDevice(collections, config.encryptionKey, byKeyHash, input, observed);
     return resolutionFor({ device: { ...byKeyHash }, verdict: "same", score: 100, match: exactMatch(100), isNew: false });
   }
   const bySignature = signature
     ? await findDeviceBySignature(collections, signature)
     : null;
   if (bySignature) {
-    await touchDevice(collections, config.encryptionKey, bySignature, input, observed);
     return resolutionFor({ device: { ...bySignature }, verdict: "same", score: 95, match: exactMatch(95), isNew: false });
   }
 
-  // 2. Weighted correlation: same physical machine behind a different browser/profile emits a new
-  // visitorId and a new browser key, and a different rendering stack, but keeps the traits that
-  // describe the computer itself — CPU and memory class, display scale, capture devices, audio
-  // device, installed fonts and codecs. Those are what `decideClusterMatch` compares.
+  // 2. Weighted correlation: same physical machine behind a different browser/profile/engine emits a
+  // new visitorId, a new browser key and a different rendering stack, but keeps the machine traits —
+  // CPU class, touch class, audio device, display gamut and colour depth — which is what
+  // `decideClusterMatch` compares. This is also the path a machine takes when its key forked, which
+  // is why the machine-trait verdict must not depend on a trait only some engines report.
+  //
+  // The machine-key lookup is its own bounded query and is matched before anything else: a record
+  // that carries this observation's machine identity is the same machine outright, and that lookup
+  // must never depend on the recent-activity ordering of the profile sweep below.
+  if (machineKey) {
+    const byMachine = await lookupMachineKey(collections, machineKey);
+    if (byMachine) {
+      return resolutionFor({ device: { ...byMachine }, verdict: "same", score: 100, match: exactMatch(100), isNew: false });
+    }
+  }
   const orClauses: Record<string, unknown>[] = [
-    // The machine key first: a UA switch moves the platform string but not this, so the record the
-    // same hardware is already known by stays reachable and gets extended instead of forked.
-    ...(machineKey ? [{ machineKeyHash: machineKey }] : []),
     ...(observed.raw["platform"] ? [{ platform: observed.raw["platform"] }] : []),
     ...(network.asn ? [{ lastAsn: network.asn }] : []),
     ...(network.country ? [{ lastCountry: network.country }] : []),
@@ -318,7 +352,6 @@ export async function resolveOrCreateDevice(input: {
       : decideClusterMatch(decided, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold)
     : "different";
   if (best && verdict === "same") {
-    await touchDevice(collections, config.encryptionKey, best.candidate, input, observed);
     return resolutionFor({
       device: { ...best.candidate },
       verdict,
@@ -400,7 +433,10 @@ async function createDevice(
     webglFingerprintHash: signals.webglHash === "unknown" ? null : signals.webglHash,
     hardwareConcurrencyBucket: signals.hardwareConcurrencyBucket === 0 ? null : signals.hardwareConcurrencyBucket,
     deviceMemoryBucket: signals.deviceMemoryBucket,
-    featureSnapshot: observed.raw,
+    // Keyed digests only: the snapshot must never persist reversible fingerprint data (GPU
+    // strings, screen geometry, timezone). Matching digests snapshots the same way it digests
+    // legacy raw ones — see `matchDeviceFeatures`.
+    featureSnapshot: observed.digests,
     // A new record starts with a single-observation profile; later observations extend the ring.
     featureProfile: learnFeatureProfile(null, observed.digests),
     machineFeatureProfile: machineProfileOf(input.config.encryptionKey, observed.raw),
@@ -438,15 +474,22 @@ async function createDevice(
 /**
  * Refreshes liveness and folds the observation into the learned profile.
  *
+ * Called only after mining admission allows the start (see `assessMiningStart`), never during
+ * resolution: a rejected request must not rewrite the record's machine key, snapshot, or history,
+ * or a failed attempt presenting a known browser key with different machine evidence would re-tag
+ * the record and later matching would use that altered identity.
+ *
  * The profile is what makes a device survive normal drift: a browser or driver update changes one
  * or two digests, and the ring keeps the previous values for `MAX_FEATURE_VALUES` observations
- * instead of forking the identity on the first difference.
+ * instead of forking the identity on the first difference. Contradictions of an established value
+ * are recorded but not learned (see `learnFeatureProfileChecked`): one hostile observation cannot
+ * walk a stored identity to a value of its choosing.
  */
-async function touchDevice(
+async function recordDeviceSeen(
   collections: Collections,
   secret: Buffer,
   device: MiningDeviceRecord,
-  input: { intel: IpIntel; ip: string | null },
+  input: { intel: IpIntel; ip: string | null; correlationId: string },
   observed: ObservedFeatures,
 ): Promise<void> {
   const now = new Date();
@@ -454,15 +497,36 @@ async function touchDevice(
   // of the machine traits, so a user-agent switch or a new browser profile reproduces the same key
   // and the record keeps pointing at the one machine identity its leases are taken on.
   const machineKey = machineKeyHash(secret, observed.raw);
+  // Controlled learning: a contradictory value never silently becomes the new identity baseline. It
+  // is kept in the profile's bounded drift log for the matcher, and — on this machine-anchored
+  // record — every contradiction is also a security event, so poisoning attempts leave a trail the
+  // risk engine sees while the stored value stays intact.
+  const fold = learnFeatureProfileChecked(device.featureProfile, observed.digests);
+  const machineFold = learnFeatureProfileChecked(
+    device.machineFeatureProfile,
+    digestFeatureMap(secret, observed.machine),
+  );
+  for (const driftedKey of [...fold.drift, ...machineFold.drift]) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: null,
+      sessionId: null,
+      eventType: LMDG_EVENT_TYPES.suspicious,
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { deviceId: device.publicId, feature: driftedKey.slice(0, 32), reason: "identity_drift_not_learned" },
+    }).catch(() => undefined);
+  }
   await collections.miningDevices.updateOne(
     { _id: device._id },
     {
       $set: {
         lastSeenAt: now,
         updatedAt: now,
-        featureSnapshot: observed.raw,
-        featureProfile: learnFeatureProfile(device.featureProfile, observed.digests),
-        machineFeatureProfile: learnFeatureProfile(device.machineFeatureProfile, digestFeatureMap(secret, observed.machine)),
+        // Digests only — see `createDevice`.
+        featureSnapshot: observed.digests,
+        featureProfile: fold.profile,
+        machineFeatureProfile: machineFold.profile,
         // The record's platform drives the candidate pre-filter above; a client that changes its
         // user agent must not also hide the record it belongs to from that filter. Never downgraded
         // to null: a client that stops reporting the trait keeps the last value it did report.
@@ -484,17 +548,20 @@ export async function issueChallenge(input: {
   config: Pick<AppConfig, "lmdg">;
   ownerUserId: string;
   deviceKeyHash: string | null;
+  origin?: string | null;
   correlationId: string;
   nowMs?: number;
-}): Promise<{ nonce: string; expiresAt: Date }> {
+}): Promise<{ nonce: string; expiresAt: Date; payload: string }> {
   const nowMs = input.nowMs ?? Date.now();
   const hourAgo = new Date(nowMs - 60 * 60 * 1000);
   const issued = await input.collections.miningDeviceNonces.countDocuments({ ownerUserId: input.ownerUserId, issuedAt: { $gt: hourAgo } });
   if (issued >= CHALLENGE_MAX_PER_HOUR) {
-    throw Object.assign(new Error("Too many challenge requests"), { statusCode: 429, code: "rate_limited" });
+    throw new AppError(429, "rate_limited", "Too many challenge requests. Try again later.");
   }
   const nonce = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(nowMs + input.config.lmdg.challengeTtlSeconds * 1000);
+  // The nonce lifetime is `LMDG_NONCE_TTL_SECONDS`: the TTL index expires the row off `expiresAt`,
+  // so writing the challenge TTL here would silently leave that setting ineffective.
+  const expiresAt = new Date(nowMs + input.config.lmdg.nonceTtlSeconds * 1000);
   await input.collections.miningDeviceNonces.insertOne({
     _id: new ObjectId(),
     publicId: randomUUID(),
@@ -513,7 +580,96 @@ export async function issueChallenge(input: {
     outcome: "success",
     correlationId: input.correlationId,
   }).catch(() => undefined);
-  return { nonce, expiresAt };
+  // The exact bytes the client must sign. They bind this nonce to the protocol version, the mining
+  // action, the origin the browser answered on, the account, the device enrollment, and the window
+  // — so the proof proves possession *of this key, for this account, on this origin, for this
+  // action* and nothing else (see `buildProofPayload`).
+  const payload = buildProofPayload({
+    nonce,
+    origin: input.origin ?? null,
+    ownerUserId: input.ownerUserId,
+    deviceKeyHash: input.deviceKeyHash ?? null,
+    issuedAtMs: nowMs,
+    expiresAtMs: expiresAt.getTime(),
+  });
+  return { nonce, expiresAt, payload };
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) => {
+    if (Array.isArray(entry)) return entry;
+    if (entry !== null && typeof entry === "object") {
+      return Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)));
+    }
+    return entry;
+  });
+}
+
+/**
+ * The canonical payload a device proof must sign.
+ *
+ * Possession of a key over a bare nonce proves nothing about intent or context: the same signature
+ * could be replayed in any request shape the protocol ever grows. The payload binds the nonce to
+ * the protocol version, the action (mining start), the frontend origin the browser answered on,
+ * the authenticated account, the device enrollment this handshake belongs to, and the nonce's own
+ * issue/expiry window — so a signature minted for one account, one origin, one device, or one
+ * action verifies nowhere else.
+ *
+ * Key order is fixed here, so both sides hash the same bytes; the JSON-level canonicalization of
+ * the whole object is irrelevant because the client is given the exact field list to sign.
+ */
+export function buildProofPayload(parts: {
+  nonce: string;
+  origin: string | null;
+  ownerUserId: string;
+  deviceKeyHash: string | null;
+  issuedAtMs: number;
+  expiresAtMs: number;
+}): string {
+  return canonicalJson({
+    v: LMDG_PROOF_VERSION,
+    action: LMDG_PROOF_ACTION,
+    origin: parts.origin ?? "null",
+    user: parts.ownerUserId,
+    device: parts.deviceKeyHash ?? "",
+    nonce: parts.nonce,
+    iat: Math.floor(parts.issuedAtMs / 1000),
+    exp: Math.floor(parts.expiresAtMs / 1000),
+  });
+}
+
+/**
+ * Strict P-256 EC public-key acceptance.
+ *
+ * Everything else — RSA, octet keys, other curves, extra members, missing members, wrong
+ * formats — is rejected before any signature material is parsed. `createPublicKey` alone would
+ * happily accept several of those, and a cross-family or cross-curve confusion would turn "verify
+ * this proof" into "verify whatever key shape arrived". The private member is refused outright.
+ */
+export function verifiedP256Jwk(jwk: Record<string, unknown>): ReturnType<typeof createPublicKey> | null {
+  try {
+    if (typeof jwk !== "object" || jwk === null || Array.isArray(jwk)) return null;
+    if (jwk["kty"] !== "EC" || jwk["crv"] !== "P-256") return null;
+    if (typeof jwk["x"] !== "string" || typeof jwk["y"] !== "string") return null;
+    // `ext` is the standard WebCrypto export member, so the real browser client always sends it.
+    const allowed = new Set(["kty", "crv", "x", "y", "kid", "alg", "use", "key_ops", "ext"]);
+    for (const key of Object.keys(jwk)) {
+      if (!allowed.has(key)) return null;
+      if (key === "alg" && jwk["alg"] !== "ES256") return null;
+      if (key === "use" && jwk["use"] !== "sig") return null;
+      if (key === "key_ops" && (!Array.isArray(jwk["key_ops"]) || !(jwk["key_ops"] as unknown[]).includes("verify"))) return null;
+      if (key === "ext" && jwk["ext"] !== true) return null;
+    }
+    if (jwk["x"].length > 128 || jwk["y"].length > 128) return null;
+    if ("d" in jwk) return null;
+    const key = createPublicKey({ key: jwk as never, format: "jwk" });
+    if (key.asymmetricKeyType !== "ec") return null;
+    const details = key.asymmetricKeyDetails as { namedCurve?: string } | undefined;
+    if (details?.namedCurve !== "prime256v1") return null;
+    return key;
+  } catch {
+    return null;
+  }
 }
 
 function rawEcdsaToDer(raw: Buffer): Buffer {
@@ -538,12 +694,13 @@ function rawEcdsaToDer(raw: Buffer): Buffer {
   ]);
 }
 
-function verifyEcdsaP256(publicKeyJwk: Record<string, unknown>, nonce: string, signatureB64: string): boolean {
+function verifyEcdsaP256(publicKeyJwk: Record<string, unknown>, payload: string, signatureB64: string): boolean {
+  const key = verifiedP256Jwk(publicKeyJwk);
+  if (!key) return false;
   try {
-    const key = createPublicKey({ key: publicKeyJwk as never, format: "jwk" });
     const raw = Buffer.from(signatureB64, "base64url");
     const der = raw.length === 64 ? rawEcdsaToDer(raw) : raw;
-    return createVerify("SHA256").update(nonce, "utf8").verify(key, der);
+    return createVerify("SHA256").update(payload, "utf8").verify(key, der);
   } catch {
     return false;
   }
@@ -556,16 +713,29 @@ export async function verifyProof(input: {
   nonce: string;
   signature: string;
   publicKeyJwk: Record<string, unknown>;
+  origin?: string | null;
   correlationId: string;
   nowMs?: number;
 }): Promise<{ deviceKeyHash: string; verified: boolean }> {
   const nowMs = input.nowMs ?? Date.now();
   const hourAgo = new Date(nowMs - 60 * 60 * 1000);
-  const attempts = await input.collections.miningDeviceNonces.countDocuments({ ownerUserId: input.ownerUserId, issuedAt: { $gt: hourAgo }, consumedAt: { $ne: null } });
+  // Every proof call writes exactly one audit event — `challengeFailed` on any rejection,
+  // `verified` on success — so the hourly quota counts attempts, not just consumed nonces. Counting
+  // consumed rows alone let invalid signatures and unknown nonces retry forever, and rotating IPs
+  // walk around the per-route limit.
+  const attempts = await input.collections.securityEvents.countDocuments({
+    ownerUserId: input.ownerUserId,
+    eventType: { $in: [LMDG_EVENT_TYPES.challengeFailed, LMDG_EVENT_TYPES.verified] },
+    createdAt: { $gt: hourAgo },
+  }).catch(() => 0);
   if (attempts >= PROVE_MAX_PER_HOUR) {
-    throw Object.assign(new Error("Too many proof attempts"), { statusCode: 429, code: "rate_limited" });
+    throw new AppError(429, "rate_limited", "Too many proof attempts. Try again later.");
   }
   const record = await input.collections.miningDeviceNonces.findOne({ nonce: input.nonce, ownerUserId: input.ownerUserId });
+  // A typed AppError, so the envelope keeps the dedicated code: thrown as a bare Error it reached the
+  // handler's clientErrorStatus branch and surfaced as a generic `invalid_request`.
+  const rejectProof = (reason: string): AppError =>
+    new AppError(401, "mining_device_proof_rejected", "Device proof rejected.");
   const fail = async (reason: string): Promise<never> => {
     await recordSecurityEvent({
       collections: input.collections,
@@ -576,20 +746,32 @@ export async function verifyProof(input: {
       correlationId: input.correlationId,
       metadata: { reason },
     }).catch(() => undefined);
-    throw Object.assign(new Error("Device proof rejected"), { statusCode: 401, code: "mining_device_proof_rejected" });
+    throw rejectProof(reason);
   };
   if (!record) return fail("unknown_nonce");
   if (record.consumedAt) return fail("reused_nonce");
   if (record.expiresAt.getTime() <= nowMs) return fail("expired_nonce");
-  const ok = verifyEcdsaP256(input.publicKeyJwk, record.nonce, input.signature);
+  // The signature must cover the canonical bound payload, not just the nonce. A bare-nonce
+  // signature from any earlier build (or minted elsewhere) verifies against nothing here.
+  const payload = buildProofPayload({
+    nonce: record.nonce,
+    origin: input.origin ?? null,
+    ownerUserId: input.ownerUserId,
+    deviceKeyHash: record.deviceKeyHash ?? null,
+    issuedAtMs: record.issuedAt.getTime(),
+    expiresAtMs: record.expiresAt.getTime(),
+  });
+  const ok = verifyEcdsaP256(input.publicKeyJwk, payload, input.signature);
   if (!ok) return fail("bad_signature");
-  // Single-use: consume before linking so a replayed proof finds a consumed nonce.
+  const publicKeyText = JSON.stringify(input.publicKeyJwk).slice(0, 2048);
+  // Single-use: consume before linking so a replayed proof finds a consumed nonce. The proven
+  // public key is stored on the nonce so mining admission can tell a verified browser key from an
+  // unverified claim when it later evaluates a risk challenge.
   const consumed = await input.collections.miningDeviceNonces.updateOne(
     { _id: record._id, consumedAt: null },
-    { $set: { consumedAt: new Date(nowMs) } },
+    { $set: { consumedAt: new Date(nowMs), verifiedBrowserKey: publicKeyText } },
   );
   if (consumed.modifiedCount !== 1) return fail("reused_nonce");
-  const publicKeyText = JSON.stringify(input.publicKeyJwk).slice(0, 2048);
   await input.collections.miningDevices.updateOne(
     { browserKeyPublicKey: publicKeyText },
     { $set: { lastSeenAt: new Date(nowMs), updatedAt: new Date(nowMs) } },
@@ -626,12 +808,18 @@ export interface StartEligibility {
 /**
  * Records that an account was seen on a device, sampled to at most one row per account per
  * `OBSERVATION_MIN_INTERVAL_MS`. Never throws: a sampling write is evidence, not the decision.
+ *
+ * Network fields carry the server-observed values for this request — a keyed IP hash (never the
+ * address or a placeholder), plus the ASN/country the intelligence lookup reported — so later
+ * starts can measure IP churn and geographic jumps instead of reading zeroes.
  */
 async function recordDeviceObservation(input: {
   collections: Pick<Collections, "miningDeviceObservations">;
+  secret: Buffer;
   device: MiningDeviceRecord;
   ownerUserId: string;
   ip: string | null;
+  intel: IpIntel;
   nowMs: number;
   riskScore: number;
   decision: string;
@@ -646,9 +834,9 @@ async function recordDeviceObservation(input: {
     deviceId: input.device.publicId,
     ownerUserId: input.ownerUserId,
     observedAt: new Date(input.nowMs),
-    ipHash: input.ip ? "hashed" : null,
-    asn: input.device.lastAsn,
-    country: input.device.lastCountry,
+    ipHash: input.ip ? ipHash(input.secret, input.ip) : null,
+    asn: input.intel.asn,
+    country: input.intel.country,
     riskScore: input.riskScore,
     decision: input.decision,
   } as never).catch(() => undefined);
@@ -690,7 +878,7 @@ export async function assessMiningStart(input: {
     // The denial is still an observation of this account on this device, and the accumulated
     // history is what makes a repeat attempt riskier than the first.
     await recordDeviceObservation({
-      collections, device, ownerUserId: input.ownerUserId, ip: input.ip, nowMs, riskScore: 70, decision: "deny",
+      collections, secret: config.encryptionKey, device, ownerUserId: input.ownerUserId, ip: input.ip, intel: input.intel, nowMs, riskScore: 70, decision: "deny",
     });
     return { decision: "deny", reasonCode: "device_lease_active", confidence: 0.95, riskScore: 70, device, equivalentLeaseKeys: ownLeaseKeys, conflictingLeaseOwner: direct.ownerUserId };
   }
@@ -703,6 +891,28 @@ export async function assessMiningStart(input: {
   // rendering stack) and for records written before the machine key existed. Network traits carry no
   // weight in the feature model, so a different machine on the same Wi-Fi scores low and passes.
   const sweep = await listClusterCandidates(collections, {});
+  // Live-lease backstop: the fuzzy sweep compares only the most recently seen records, so a
+  // still-mining device that fell behind newer records — and whose machine traits and browser key
+  // have since changed — would drop out of the comparison and its active lease would be missed.
+  // Every identity holding a live lease is therefore pulled in explicitly, regardless of recency.
+  const liveLeaseIds = await collections.miningDeviceLeases
+    .distinct("deviceClusterId", { status: "active", leaseEndsAt: { $gt: new Date(nowMs) } })
+    .catch(() => [] as unknown[]);
+  const liveIds = (liveLeaseIds as unknown[]).filter((value): value is string => typeof value === "string").slice(0, 1000);
+  if (liveIds.length > 0) {
+    const knownIds = new Set(sweep.map((entry) => entry.publicId));
+    const leased = await collections.miningDevices
+      .find({ $or: [{ machineKeyHash: { $in: liveIds } }, { deviceKeyHash: { $in: liveIds } }] })
+      .limit(500)
+      .toArray()
+      .catch(() => []);
+    for (const entry of leased) {
+      if (!knownIds.has(entry.publicId)) {
+        sweep.push(entry);
+        knownIds.add(entry.publicId);
+      }
+    }
+  }
   const sameClusterKeys: string[] = [];
   const ambiguousClusterKeys: string[] = [];
   let bestScore = input.resolution.match.score;
@@ -764,7 +974,7 @@ export async function assessMiningStart(input: {
       if (config.lmdg.riskMode === "monitor") {
         // Fall through to the risk evaluation below (allows with an audit trail above).
       } else if (config.lmdg.riskMode === "challenge") {
-        return { decision: "challenge", reasonCode: "device_cluster_lease_ambiguous", confidence: 0.6, riskScore: 55, device, equivalentLeaseKeys: [], conflictingLeaseOwner: null };
+        return { decision: "challenge", reasonCode: "device_cluster_lease_ambiguous", confidence: 0.6, riskScore: 55, device, equivalentLeaseKeys: [], conflictingLeaseOwner: foreign.ownerUserId };
       } else {
         return { decision: "deny", reasonCode: "device_cluster_lease_ambiguous", confidence: 0.7, riskScore: 60, device, equivalentLeaseKeys: [], conflictingLeaseOwner: null };
       }
@@ -779,7 +989,7 @@ export async function assessMiningStart(input: {
   // forever. Observations cover the accounts that reported this machine, leases cover the accounts
   // that actually mined on it — including a record a tolerant match left unmerged.
   const windowStart = new Date(nowMs - 30 * 24 * 60 * 60 * 1000);
-  const [observedAccounts, leaseAccounts, devicesOnAccount, rejectsOnDevice, rejectsOnAccount] = await Promise.all([
+  const [observedAccounts, leaseAccounts, devicesOnAccount, rejectsOnDevice, rejectsOnAccount, recentObs] = await Promise.all([
     collections.miningDeviceObservations.distinct("ownerUserId", { deviceId: device.publicId, observedAt: { $gt: windowStart } }).catch(() => [] as unknown[]),
     collections.miningDeviceLeases.distinct("ownerUserId", { deviceClusterId: { $in: equivalentLeaseKeys }, leasedAt: { $gt: windowStart } }).catch(() => [] as unknown[]),
     collections.miningDeviceObservations.distinct("deviceId", { ownerUserId: input.ownerUserId, observedAt: { $gt: windowStart } }).then((v) => v.length).catch(() => 1),
@@ -787,10 +997,26 @@ export async function assessMiningStart(input: {
     // every account's risk score for the following 30 days.
     collections.securityEvents.countDocuments({ eventType: LMDG_EVENT_TYPES.conflict, "metadata.deviceId": device.publicId, createdAt: { $gt: windowStart } }).catch(() => 0),
     collections.securityEvents.countDocuments({ ownerUserId: input.ownerUserId, eventType: LMDG_EVENT_TYPES.conflict, createdAt: { $gt: windowStart } }).catch(() => 0),
+    // Network drift over the last day: distinct server-observed IP hashes and countries on this
+    // device, bounded to the sampled rows. Legacy rows stored a literal placeholder instead of a
+    // hash and collapse to a single value, which can only understate churn, never invent it.
+    collections.miningDeviceObservations.find(
+      { deviceId: device.publicId, observedAt: { $gt: new Date(nowMs - 24 * 60 * 60 * 1000) } },
+      { projection: { ipHash: 1, country: 1 } },
+    ).limit(50).toArray().catch(() => [] as { ipHash: string | null; country: string | null }[]),
   ]);
   const accountsOnDevice = new Set([...observedAccounts, ...leaseAccounts]).size;
   void MAX_ACCOUNTS_PER_DEVICE_CLUSTER;
   void MAX_DEVICES_PER_ACCOUNT;
+  const currentIpHash = input.ip ? ipHash(config.encryptionKey, input.ip) : null;
+  const observedIpHashes = new Set(
+    [...recentObs.map((entry) => entry.ipHash), currentIpHash].filter((value): value is string => typeof value === "string" && value.length > 0),
+  );
+  const observedCountries = new Set(
+    [...recentObs.map((entry) => entry.country), input.intel.country].filter((value): value is string => typeof value === "string" && value.length > 0),
+  );
+  const ipChurnDuringCycle = observedIpHashes.size;
+  const geoJump = observedCountries.size > 1;
 
   const verdict: ClusterVerdict =
     input.resolution.verdict === "same" ? "same" : input.resolution.verdict === "ambiguous" ? "ambiguous" : "different";
@@ -832,9 +1058,29 @@ export async function assessMiningStart(input: {
     history: {
       accountsOnDevice, devicesOnAccount,
       recentRejectsOnDevice: rejectsOnDevice, recentRejectsOnAccount: rejectsOnAccount,
-      ipChurnDuringCycle: 0, geoJump: false,
+      ipChurnDuringCycle, geoJump,
     },
   });
+
+  // A risk challenge the account already satisfied: a recent proof-of-possession over the same
+  // browser key converts the challenge into an allow, so the customer who completed the requested
+  // verification is not asked for it again on retry. Lease challenges are never converted — a proof
+  // of one's own key cannot free a cycle another account holds.
+  let finalDecision = result.decision;
+  let finalReasonCode = result.reasonCode;
+  let finalConfidence = result.confidence;
+  if (result.decision === "challenge" && result.reasonCode === "device_risk_review" && evidence.browserKeyPublicKey) {
+    const proofWindow = new Date(nowMs - config.lmdg.challengeTtlSeconds * 1000);
+    const proof = await collections.miningDeviceNonces.findOne(
+      { ownerUserId: input.ownerUserId, verifiedBrowserKey: evidence.browserKeyPublicKey, consumedAt: { $gt: proofWindow } },
+      { projection: { _id: 1 } },
+    ).catch(() => null);
+    if (proof) {
+      finalDecision = "allow";
+      finalReasonCode = "device_verified";
+      finalConfidence = 0.75;
+    }
+  }
 
   // Persist a sampled observation: which account was seen on this device, and what the guard
   // decided. This is the cross-account evidence the risk engine accumulates — it is written on every
@@ -842,24 +1088,32 @@ export async function assessMiningStart(input: {
   // the history that has to be on the record.
   await recordDeviceObservation({
     collections,
+    secret: config.encryptionKey,
     device,
     ownerUserId: input.ownerUserId,
     ip: input.ip,
+    intel: input.intel,
     nowMs,
     riskScore: result.riskScore,
-    decision: result.decision,
+    decision: finalDecision,
   });
 
-  if (result.decision === "deny" || result.decision === "challenge") {
+  if (finalDecision === "deny" || finalDecision === "challenge") {
     await recordSecurityEvent({
       collections, ownerUserId: input.ownerUserId, sessionId: null,
-      eventType: result.decision === "deny" ? LMDG_EVENT_TYPES.rejected : LMDG_EVENT_TYPES.challenge,
+      eventType: finalDecision === "deny" ? LMDG_EVENT_TYPES.rejected : LMDG_EVENT_TYPES.challenge,
       outcome: "failure", correlationId: input.correlationId,
-      metadata: { deviceId: device.publicId, reason: result.reasonCode },
+      metadata: { deviceId: device.publicId, reason: finalReasonCode },
     }).catch(() => undefined);
   }
 
-  return { decision: result.decision, reasonCode: result.reasonCode, confidence: result.confidence, riskScore: result.riskScore, device, equivalentLeaseKeys, conflictingLeaseOwner: null };
+  // The start was allowed: fold the observation into the record now that the decision is made. A
+  // rejected attempt never reaches this line, so it can no longer re-tag the identity or history.
+  if (finalDecision === "allow") {
+    await recordDeviceSeen(collections, config.encryptionKey, device, { intel: input.intel, ip: input.ip, correlationId: input.correlationId }, input.resolution.observed);
+  }
+
+  return { decision: finalDecision, reasonCode: finalReasonCode, confidence: finalConfidence, riskScore: result.riskScore, device, equivalentLeaseKeys, conflictingLeaseOwner: null };
 }
 
 /**

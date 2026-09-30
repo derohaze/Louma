@@ -324,6 +324,22 @@ export async function startMining(input: {
   let leaseKeys: string[] = [];
   if (deviceLeaseEnabled && input.device) {
     const guard = await import("../mining-device/service.js");
+    // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
+    // traits and no browser key, so the lease would fall back to a network-dependent identity that a
+    // second account reproduces differently. Refuse it exactly like a missing field.
+    const evidenceRaw: unknown = input.device.evidenceRaw;
+    if (typeof evidenceRaw !== "object" || evidenceRaw === null || Array.isArray(evidenceRaw) || Object.keys(evidenceRaw).length === 0) {
+      await recordSecurityEvent({
+        collections,
+        ownerUserId: input.ownerUserId,
+        sessionId: null,
+        eventType: "mining_device_evidence_missing",
+        outcome: "failure",
+        correlationId: input.correlationId,
+        metadata: { reason: "device_evidence_empty" },
+      }).catch(() => undefined);
+      throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
+    }
     const intel = await guard.resolveIpIntel({ config, ip: input.device.ip });
     const resolution = await guard.resolveOrCreateDevice({
       collections,
@@ -334,6 +350,22 @@ export async function startMining(input: {
       ownerUserId: input.ownerUserId,
       correlationId: input.correlationId,
     });
+    // Evidence with neither a machine identity nor a browser key cannot name a device: without this
+    // check a junk payload leases a fallback identity and a second account on the same machine
+    // leases a different one, opening a second cycle. Rich clients (including cleared storage, which
+    // keeps its machine traits) always produce one of the two.
+    if (resolution.machineKey === null && !resolution.evidence.browserKeyPublicKey) {
+      await recordSecurityEvent({
+        collections,
+        ownerUserId: input.ownerUserId,
+        sessionId: null,
+        eventType: "mining_device_evidence_missing",
+        outcome: "failure",
+        correlationId: input.correlationId,
+        metadata: { reason: "device_evidence_insufficient" },
+      }).catch(() => undefined);
+      throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
+    }
     // Leases this account already holds on this machine's identities.
     const leaseNowMs = Date.now();
     const ownLeases = await collections.miningDeviceLeases
@@ -396,6 +428,15 @@ export async function startMining(input: {
   }
 
   if (leaseKeys.length > 0) {
+    // Expired rows stay `active` in the database — expiry is a fact about the clock, not a write —
+    // and the partial unique index still refuses a new lease while one exists. Admission already
+    // ignores expired leases, so release them here (any owner's: an expired lease protects nothing)
+    // before the insert, or the new account would fail with `mining_start_failed` until the former
+    // owner starts again or the row is released by hand.
+    await collections.miningDeviceLeases.updateMany(
+      { deviceClusterId: { $in: leaseKeys }, status: "active", leaseEndsAt: { $lte: new Date(Date.now()) } },
+      { $set: { status: "released", updatedAt: new Date(Date.now()) } },
+    ).catch(() => undefined);
     // Atomic commit: the cycle and its device lease land together or not at all. The partial
     // unique index on active leases is the concurrency lock — two accounts racing on one device
     // cannot both insert; the loser maps to the dedicated rejection code below.

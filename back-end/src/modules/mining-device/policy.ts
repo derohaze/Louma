@@ -28,6 +28,15 @@ export const DEVICE_EVIDENCE_MISSING_MESSAGE =
 export const CHALLENGE_MAX_PER_HOUR = 20;
 export const PROVE_MAX_PER_HOUR = 30;
 
+/**
+ * Proof protocol version. The signed payload carries it, so a signature can never be replayed
+ * across protocol revisions, and a server upgrade can refuse pre-binding handshakes outright.
+ */
+export const LMDG_PROOF_VERSION = 1;
+
+/** The action a device proof is valid for — proof is bound to intent, not to possession alone. */
+export const LMDG_PROOF_ACTION = "lmdg.mining_start";
+
 /** Cluster search fan-out: how many recent devices the fuzzy match compares against. */
 export const CLUSTER_CANDIDATE_LIMIT = 50;
 

@@ -34,9 +34,10 @@ const DAY_SECONDS = 24 * 60 * 60;
  *
  * A device lease lives for the full 24-hour cycle, so without a per-run namespace a second run's
  * "machine 0" would resolve to the first run's device and inherit its still-live lease — the suite
- * would then fail on its own leftovers instead of on the behaviour under test. The timestamp bounds
- * the cleanup: device records carry no owner on purpose, so creation time is what identifies the
- * rows this run produced.
+ * would then fail on its own leftovers instead of on the behaviour under test. The namespace plus
+ * the accounts this run registered bound the cleanup: device records carry no owner on purpose, so
+ * `after` matches them through this run's fixture namespace and its observations, never through a
+ * bare creation-time window that could catch another suite's rows.
  */
 const RUN = randomUUID().slice(0, 8);
 const runStartedAt = new Date();
@@ -183,7 +184,9 @@ const FIXTURE_DEVICE_FILTER = { webglFingerprintHash: { $regex: /^webgl-(machine
 
 async function removeFixtureDevices(): Promise<void> {
   const devices = await collections.miningDevices
-    .find(FIXTURE_DEVICE_FILTER, { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } })
+    // Only leftovers from earlier runs: rows created after this run started may belong to a suite
+    // running concurrently against the same database and must never be touched here.
+    .find({ ...FIXTURE_DEVICE_FILTER, firstSeenAt: { $lt: runStartedAt } }, { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } })
     .toArray();
   if (devices.length === 0) return;
   // Every identity a lease can be keyed by: the machine key, the browser key, or an older record id.
@@ -345,9 +348,26 @@ after(async () => {
     await collections.users.deleteMany({ publicId: userId });
   }
   // Device identity and its leases, so a finished run leaves nothing that can refuse the next
-  // one's starts. Device records deliberately carry no owner, so the run window scopes the delete.
+  // one's starts. Device records deliberately carry no owner, so the rows this run created are
+  // identified by what links to this run only: observations of the accounts this file registered,
+  // plus this run's fixture namespace (`RUN`). A bare creation-time window is never used — it would
+  // also match devices another suite or user created mid-run against the same database.
+  const observedDeviceIds = (
+    (await collections.miningDeviceObservations.distinct("deviceId", { ownerUserId: { $in: createdUserIds } }).catch(() => [] as unknown[])) as unknown[]
+  ).filter((value): value is string => typeof value === "string");
   const devices = await collections.miningDevices
-    .find({ firstSeenAt: { $gte: runStartedAt } }, { projection: { publicId: 1 } })
+    .find(
+      {
+        $or: [
+          { publicId: { $in: observedDeviceIds } },
+          {
+            webglFingerprintHash: { $regex: new RegExp(`^webgl-(machine|laptop).*${RUN}`) },
+            firstSeenAt: { $gte: runStartedAt },
+          },
+        ],
+      },
+      { projection: { publicId: 1 } },
+    )
     .toArray();
   const deviceIds = devices.map((device) => device.publicId);
   if (deviceIds.length > 0) {

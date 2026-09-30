@@ -285,7 +285,9 @@ test("a different machine class is never a positive match, however much else agr
     SECRET,
   );
   assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
-  assert.ok(match.machineScore >= 78, `everything else agrees, got ${match.machineScore}`);
+  // The class traits alone carry the veto, so the exact similarity ratio is calibration, not the
+  // invariant — the machine core still mostly agrees, and is still never allowed to decide "same".
+  assert.ok(match.machineScore >= 50, `everything else agrees, got ${match.machineScore}`);
   assert.equal(decideClusterMatch(match, 78, 55), "ambiguous", "the class disagreement is what vetoes a match");
 });
 
@@ -446,21 +448,104 @@ test("the machine key survives what a browser randomizes and forks on what a mac
     }),
   );
   assert.equal(machineKeyHash(SECRET, browserSide.features.raw), plainKey, "browser traits must not fork the identity");
-  assert.notEqual(
+  // Fonts are cross-engine-variant evidence now (each engine probes widths through its own text
+  // stack), so a different font set no longer forks the identity — it is scored drift instead.
+  assert.equal(
     machineKeyHash(SECRET, observedOf(evidence({ ...machine, fontsHash: "fonts-other" })).features.raw),
     plainKey,
-    "a different installed font set is a different machine",
+    "a cross-engine-variant font set is evidence, not a new machine",
   );
   assert.notEqual(
     machineKeyHash(SECRET, observedOf(evidence({ ...machine, hardwareConcurrency: 16 })).features.raw),
     plainKey,
     "a different CPU class is a different machine",
   );
-  assert.notEqual(
+  // Memory class is engine-variant (Firefox has no navigator.deviceMemory), so it vetoes similarity
+  // verdicts instead of being a core slot — see the class-veto test.
+  assert.equal(
     machineKeyHash(SECRET, observedOf(evidence({ ...machine, deviceMemory: 16 })).features.raw),
     plainKey,
-    "a different memory class is a different machine",
+    "an engine-variant memory class is evidence, not a new machine",
   );
+});
+
+test("a capture-device answer an engine never gives is not a second machine", () => {
+  // Values read out of the production device records: one Windows machine — 16 cores, a depth-24
+  // panel, no touch points, a 48 kHz stereo output, sRGB, no HDR — mined in Chrome and then mined
+  // again in Firefox. Chrome enumerated `1x1` capture devices; Firefox answered for none, because
+  // its media stack only starts on the first `enumerateDevices()` call. That single absence was
+  // enough to fork the machine key and admit a second cycle on the same computer.
+  const machine = {
+    screenColorDepth: 24,
+    audioSampleRate: 48000,
+    audioChannels: 2,
+    hdr: false,
+    hardwareConcurrency: 16,
+    pixelRatio: 1.25,
+    deviceMemory: 16,
+  };
+  const enumerated = observedOf(evidence({ ...machine, mediaAudioInputs: 1, mediaVideoInputs: 1 }));
+  const silent = observedOf(evidence({ ...machine, mediaAudioInputs: null, mediaVideoInputs: null }));
+  const enumeratedKey = machineKeyHash(SECRET, enumerated.features.raw);
+  assert.ok(enumeratedKey, "the machine key exists once the machine traits are reported");
+  assert.equal(
+    machineKeyHash(SECRET, silent.features.raw),
+    enumeratedKey,
+    "an unanswered capture-device probe must not fork the identity",
+  );
+  // The trait is not thrown away: it corroborates a match when both sides report it, and its absence
+  // is never read as a difference.
+  const candidate = {
+    featureProfile: learnFeatureProfile(null, enumerated.features.digests),
+    featureSnapshot: null,
+    browserKeyPublicKey: null,
+    fingerprintVisitorIdHash: null,
+  };
+  assert.ok(matchDeviceFeatures(candidate, enumerated.features, SECRET).matchedMachine.includes("mediaInputs"));
+  assert.ok(!matchDeviceFeatures(candidate, silent.features, SECRET).drifted.includes("mediaInputs"));
+});
+
+test("a second engine on one computer is a positive match without a memory class or capture devices", () => {
+  // The verdict half of the same reported bypass: the record was written by Chrome (memory class and
+  // capture devices reported), the observation comes from Firefox, which can report neither. The
+  // class gate must accept the one class trait both engines have, and the machine-trait agreement
+  // must carry the verdict on its own — the rendering stack cannot help here, because two engines
+  // measure it differently by construction.
+  const machine = {
+    screenColorDepth: 24,
+    audioSampleRate: 48000,
+    audioChannels: 2,
+    hdr: false,
+    hardwareConcurrency: 16,
+    pixelRatio: 1.25,
+  };
+  const chrome = profileOf(evidence({ ...machine, deviceMemory: 16, mediaAudioInputs: 1, mediaVideoInputs: 1 }));
+  const firefox = observedOf(
+    evidence({
+      ...machine,
+      deviceMemory: undefined,
+      mediaAudioInputs: null,
+      mediaVideoInputs: null,
+      userAgent: FIREFOX_UA,
+      webglHash: "webgl-firefox",
+      canvasHash: "canvas-firefox",
+      audioHash: "audio-firefox",
+      fontsHash: "fonts-firefox",
+      codecsHash: "codecs-firefox",
+      mimeTypesHash: "mime-types-firefox",
+    }),
+  );
+  const match = matchDeviceFeatures(
+    { featureProfile: chrome.profile, featureSnapshot: null, browserKeyPublicKey: "key-chrome", fingerprintVisitorIdHash: "visitor-chrome" },
+    firefox.features,
+    SECRET,
+  );
+  assert.deepEqual(match.classDrifted, [], "no class trait was contradicted");
+  assert.equal(match.classCompared.length, 1, "only the CPU class is comparable across engines");
+  assert.equal(match.machineScore, 100, "every machine trait both sides reported agrees");
+  assert.ok(match.matchedMachine.length >= 3, `the machine traits agree, got ${match.matchedMachine.join(",")}`);
+  assert.equal(match.matchedGraphics, false, "the rendering stack disagreed, so it cannot be what matches");
+  assert.equal(decideClusterMatch(match, 78, 55), "same");
 });
 
 test("too little hardware evidence yields no machine key rather than a fake identity", () => {

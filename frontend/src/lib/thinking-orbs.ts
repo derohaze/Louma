@@ -32,6 +32,7 @@ https://github.com/Jakubantalik/thinking-orbs
  * contract and visual output match the vanilla source:
  * - `data-thinking-orb` hook on every managed canvas (unchanged)
  * - `data-orb-state`: working | searching | solving | listening | composing | shaping
+ * - `data-orb-ink`: mono (default) | danger (red warning tint, same motion)
  * - `data-orb-size`, `data-orb-speed`, `data-orb-theme`, `data-orb-paused` overrides
  * - 20px/64px preset interpolation, DPR-aware sizing, one shared rAF loop,
  *   offscreen/tab pausing, live theme resolution, reduced-motion still frame,
@@ -40,11 +41,14 @@ https://github.com/Jakubantalik/thinking-orbs
  */
 
 export type OrbState = "working" | "searching" | "solving" | "listening" | "composing" | "shaping";
+/** Dot ink: monochrome depth shading, or the same motion shaded red for warnings. */
+export type OrbInk = "mono" | "danger";
 type OrbMode = "orbits" | "globe" | "rubik" | "wave" | "ribbon" | "morph";
 export type OrbThemeName = "auto" | "dark" | "light";
 
 export interface OrbOptions {
   state: OrbState;
+  ink: OrbInk;
   size: number;
   speed: number;
   theme: OrbThemeName;
@@ -69,6 +73,7 @@ type Drawer = (
   time: number,
   dark: boolean,
   drawOptions: DrawOptions,
+  danger: boolean,
 ) => void;
 
 interface PresetPoint {
@@ -232,20 +237,41 @@ const paintDots = (
   dots: Dot[],
   dark: boolean,
   minimumRadius = 0.3,
+  danger = false,
 ): void => {
   dots.sort((first, second) => first.z - second.z);
   for (const dot of dots) {
     const alpha = dot.a ?? 1;
     if (alpha < 0.02) continue;
     const white = clamp(dot.white);
-    // Light surfaces get near-black ink: a linear 0.3 scale keeps the exact
-    // relative depth order of every dot (same shape as dark mode) while
-    // landing far dots in dark grays and near dots in near-black, so the
-    // structure reads clearly on a white card. Dark surfaces keep the
-    // original mapping (bright ink on dark background).
-    const ink = dark ? 1 - white : white * 0.3;
-    const gray = Math.round(ink * 255);
-    context.fillStyle = `rgba(${gray}, ${gray}, ${gray}, ${alpha})`;
+    if (!danger) {
+      // Light surfaces get near-black ink: a linear 0.3 scale keeps the exact
+      // relative depth order of every dot (same shape as dark mode) while
+      // landing far dots in dark grays and near dots in near-black, so the
+      // structure reads clearly on a white card. Dark surfaces keep the
+      // original mapping (bright ink on dark background).
+      const ink = dark ? 1 - white : white * 0.3;
+      const gray = Math.round(ink * 255);
+      context.fillStyle = `rgba(${gray}, ${gray}, ${gray}, ${alpha})`;
+    } else {
+      // Warning ink: the same per-dot depth order as mono (near dots are
+      // bright, far dots are dim), interpolated along a red ramp per theme —
+      // bright red on dark surfaces, strong red on light surfaces.
+      const depth = clamp(1 - white);
+      let red: number;
+      let green: number;
+      let blue: number;
+      if (dark) {
+        red = Math.round(153 + (248 - 153) * depth);
+        green = Math.round(27 + (113 - 27) * depth);
+        blue = Math.round(27 + (113 - 27) * depth);
+      } else {
+        red = Math.round(252 - (252 - 220) * depth);
+        green = Math.round(165 - (165 - 38) * depth);
+        blue = Math.round(165 - (165 - 38) * depth);
+      }
+      context.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+    }
     context.beginPath();
     context.arc(dot.x, dot.y, Math.max(minimumRadius, dot.r), 0, Math.PI * 2);
     context.fill();
@@ -319,7 +345,7 @@ const resolvePreset = (
   return { mode, baseSpeed: mix(small.speed, large.speed, progress), drawOptions };
 };
 
-const drawOrbits: Drawer = (context, size, time, dark, drawOptions) => {
+const drawOrbits: Drawer = (context, size, time, dark, drawOptions, danger) => {
   const center = size / 2;
   const radius = center * 0.82;
   const project = makeProjector(time * 0.12, 0.3, center, center, 1);
@@ -387,10 +413,10 @@ const drawOrbits: Drawer = (context, size, time, dark, drawOptions) => {
       });
     }
   }
-  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3);
+  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3, danger);
 };
 
-const drawGlobe: Drawer = (context, size, time, dark, drawOptions) => {
+const drawGlobe: Drawer = (context, size, time, dark, drawOptions, danger) => {
   const center = size / 2;
   const radius = center * 0.82;
   const spin = 0.5;
@@ -431,7 +457,7 @@ const drawGlobe: Drawer = (context, size, time, dark, drawOptions) => {
       });
     }
   }
-  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3);
+  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3, danger);
 };
 
 interface RubikMove {
@@ -518,7 +544,7 @@ const applyMoves = (
   return [x, y, z, inActiveMove];
 };
 
-const drawRubik: Drawer = (context, size, time, dark, drawOptions) => {
+const drawRubik: Drawer = (context, size, time, dark, drawOptions, danger) => {
   const center = size / 2;
   const radius = center * 0.82;
   const project = makeProjector(
@@ -564,10 +590,10 @@ const drawRubik: Drawer = (context, size, time, dark, drawOptions) => {
       });
     }
   }
-  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3);
+  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3, danger);
 };
 
-const drawWave: Drawer = (context, size, time, dark, drawOptions) => {
+const drawWave: Drawer = (context, size, time, dark, drawOptions, danger) => {
   const center = size / 2;
   const radius = center * 0.874;
   const project = makeProjector(time * 0.18, 0.38, center, center, 1);
@@ -604,10 +630,10 @@ const drawWave: Drawer = (context, size, time, dark, drawOptions) => {
       });
     }
   }
-  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3);
+  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3, danger);
 };
 
-const drawRibbon: Drawer = (context, size, time, dark, drawOptions) => {
+const drawRibbon: Drawer = (context, size, time, dark, drawOptions, danger) => {
   const center = size / 2;
   const radius = center * 0.78;
   const spin = drawOptions["spin"] ?? 1;
@@ -668,7 +694,7 @@ const drawRibbon: Drawer = (context, size, time, dark, drawOptions) => {
       });
     }
   }
-  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3);
+  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.3, danger);
 };
 
 const smoothStep = (value: number): number => value * value * (3 - 2 * value);
@@ -716,7 +742,7 @@ const squarePath = makePolygonPath([
 ]);
 const morphPaths = [circlePath, trianglePath, squarePath];
 
-const drawMorph: Drawer = (context, size, time, dark, drawOptions) => {
+const drawMorph: Drawer = (context, size, time, dark, drawOptions, danger) => {
   const holdDuration = 1.4;
   const morphDuration = 0.9;
   const segmentDuration = holdDuration + morphDuration;
@@ -781,7 +807,7 @@ const drawMorph: Drawer = (context, size, time, dark, drawOptions) => {
       white: 0.1,
     });
   }
-  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.25);
+  paintDots(context, dots, dark, drawOptions["rMin"] ?? 0.25, danger);
 };
 
 const modeDrawers: Record<OrbMode, Drawer> = {
@@ -796,6 +822,7 @@ const modeDrawers: Record<OrbMode, Drawer> = {
 interface OrbInstance {
   canvas: OrbCanvas;
   context: CanvasRenderingContext2D;
+  ink: OrbInk;
   size: number;
   theme: OrbThemeName;
   paused: boolean;
@@ -811,6 +838,8 @@ interface OrbInstance {
 const isOrbState = (value: string): value is OrbState =>
   (Object.keys(stateToMode) as OrbState[]).includes(value as OrbState);
 
+const isOrbInk = (value: string): value is OrbInk => value === "mono" || value === "danger";
+
 /**
  * Initialise every `data-thinking-orb` canvas inside `scope`.
  * Safe to call again: an existing canvas is cleaned up before re-init.
@@ -825,6 +854,7 @@ export function thinkingOrbs(
 
   const config: OrbOptions = {
     state: "working",
+    ink: "mono",
     size: 64,
     speed: 1,
     theme: "auto",
@@ -871,7 +901,14 @@ export function thinkingOrbs(
     const { context, size, devicePixelRatio } = instance;
     context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     context.clearRect(0, 0, size, size);
-    instance.draw(context, size, time, instance.dark, instance.drawOptions);
+    instance.draw(
+      context,
+      size,
+      time,
+      instance.dark,
+      instance.drawOptions,
+      instance.ink === "danger",
+    );
   };
 
   const canAnimate = (instance: OrbInstance): boolean =>
@@ -956,6 +993,8 @@ export function thinkingOrbs(
 
     const requestedState = canvas.dataset["orbState"] ?? config.state;
     const state: OrbState = isOrbState(requestedState) ? requestedState : "working";
+    const requestedInk = canvas.dataset["orbInk"] ?? config.ink;
+    const ink: OrbInk = isOrbInk(requestedInk) ? requestedInk : "mono";
     const size = Math.max(8, readNumber(canvas.dataset["orbSize"], readNumber(config.size, 64)));
     const speed = Math.max(0, readNumber(canvas.dataset["orbSpeed"], readNumber(config.speed, 1)));
     const requestedTheme = canvas.dataset["orbTheme"] ?? config.theme;
@@ -972,6 +1011,7 @@ export function thinkingOrbs(
     const instance: OrbInstance = {
       canvas,
       context,
+      ink,
       size,
       theme,
       paused,
