@@ -13,6 +13,7 @@ import {
   UserCircleIcon,
   Menu01Icon,
   SecurityCheckIcon,
+  CheckmarkCircle01Icon,
   Copy01Icon,
   Logout01Icon,
 } from "@hugeicons/core-free-icons";
@@ -33,7 +34,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { messageForError } from "@/lib/api";
 import { WalletProvider } from "@/components/wallet-provider";
 import { WalletNotifications } from "@/components/wallet-notifications";
-import { Skeleton } from "@/components/ui/skeleton";
+import { skeletonForPath } from "@/components/page-skeletons";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
@@ -97,36 +98,22 @@ export function EmptyState({
   );
 }
 /**
- * Placeholder for a page that has nothing to show yet. It follows the rhythm every wallet page
- * opens with — heading, action, then the card grid — so the layout does not jump when the real
- * content arrives. It lives in the shell because the shell is what gates the content, which makes
- * it the skeleton for every page at once.
+ * The shell gates every page on the shared account load, and the loading state mirrors the page
+ * behind it: `skeletonForPath()` resolves by the current route path (exact → section prefix →
+ * title → generic), so renames can't break it, sub-pages inherit their section's shape
+ * automatically, and unknown paths fall back loudly (dev warn + `check:skeletons` failure).
+ * A new page only has to register its path in page-skeletons.tsx — the shell needs no change.
  */
-function PageSkeleton({ title }: { title: string }) {
-  return (
-    <div aria-busy="true">
-      <p role="status" className="sr-only">
-        Loading {title}…
-      </p>
-      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <Skeleton className="h-7 w-44" />
-          <Skeleton className="mt-3 h-4 w-64" />
-        </div>
-        <Skeleton className="h-10 w-36 rounded-full" />
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 6 }, (_, index) => (
-          <Skeleton key={index} className="h-28 rounded-2xl" />
-        ))}
-      </div>
-      <Skeleton className="mt-4 h-72 rounded-[22px]" />
-    </div>
-  );
-}
 
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
   return (
     <Button
       variant="ghost"
@@ -134,12 +121,31 @@ export function CopyButton({ text }: { text: string }) {
       title="Copy address"
       aria-label="Copy address"
       onClick={async () => {
-        await navigator.clipboard.writeText(text);
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // Clipboard API needs a secure context: fall back to the legacy execCommand path.
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.style.position = "fixed";
+          area.style.opacity = "0";
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+        }
         setCopied(true);
-        window.setTimeout(() => setCopied(false), 1800);
+        if (timer.current !== null) window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setCopied(false), 1800);
       }}
     >
-      <Icon icon={Copy01Icon} size={18} />
+      <span key={copied ? "copied" : "copy"} className="grid animate-fade-in place-items-center">
+        <Icon
+          icon={copied ? CheckmarkCircle01Icon : Copy01Icon}
+          size={18}
+          {...(copied ? { className: "text-success" } : {})}
+        />
+      </span>
       <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
     </Button>
   );
@@ -608,7 +614,10 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
               </p>
             )}
             {loading ? (
-              <PageSkeleton title={title} />
+              (() => {
+                const PageSkeleton = skeletonForPath(location.pathname, title);
+                return <PageSkeleton title={title} />;
+              })()
             ) : error ? (
               <EmptyState
                 title="Wallet unavailable"

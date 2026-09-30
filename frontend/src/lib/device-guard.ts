@@ -815,7 +815,11 @@ export async function collectDeviceEvidence(): Promise<DeviceEvidencePayload> {
 // Challenge / prove / start orchestration
 // ---------------------------------------------------------------------------
 
-async function provePossession(nonce: string, payload: string): Promise<boolean> {
+async function provePossession(
+  nonce: string,
+  payload: string,
+  device: DeviceEvidencePayload,
+): Promise<boolean> {
   const pair = await getOrCreateKeyPair();
   if (!pair) return false;
   const publicKeyJwk = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as Record<
@@ -830,10 +834,14 @@ async function provePossession(nonce: string, payload: string): Promise<boolean>
     pair.privateKey,
     new TextEncoder().encode(payload),
   );
+  // The same evidence is sent back so the server can independently recompute the enrollment binding
+  // it committed to at challenge time: the device slot in the signed payload is a server-resolved
+  // anchor, not anything the client names.
   await api.post("/api/v1/mining/device/prove", {
     nonce,
     signature: toBase64Url(signature),
     publicKeyJwk,
+    device,
   });
   return true;
 }
@@ -851,9 +859,9 @@ export async function startMiningWithGuard(): Promise<unknown> {
     if (error instanceof ApiError && error.code === "mining_device_challenge_required" && device) {
       const challenge = await api.post<{ nonce: string; payload: string }>(
         "/api/v1/mining/device/challenge",
-        {},
+        { device },
       );
-      await provePossession(challenge.nonce, challenge.payload);
+      await provePossession(challenge.nonce, challenge.payload, device);
       return api.post("/api/v1/mining/start", { device });
     }
     throw error;

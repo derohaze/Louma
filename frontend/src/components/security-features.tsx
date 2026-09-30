@@ -43,6 +43,7 @@ import {
 import { securityDevices, securityFeature, securityFreezeWallet } from "@/lib/security-catalog";
 import { dateText } from "@/lib/wallet-format";
 import { CopyButton, Icon, PageHeader } from "./wallet-shell";
+import { Skeleton } from "./ui/skeleton";
 import { FactList, FormMessage, Panel, StatusPill } from "./security-ui";
 
 /**
@@ -800,7 +801,21 @@ export function DevicesContent() {
           }
         >
           {loading ? (
-            <p className="px-5 py-6 text-sm text-muted-foreground">Loading devices…</p>
+            <div aria-busy="true" className="px-5 py-4">
+              <p role="status" className="sr-only">
+                Loading devices…
+              </p>
+              {Array.from({ length: 3 }, (_, i) => (
+                <div key={i} className="flex items-center gap-3 border-b py-4 last:border-0">
+                  <Skeleton className="size-10 rounded-xl" />
+                  <div className="min-w-0 flex-1">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="mt-2 h-3 w-64" />
+                  </div>
+                  <Skeleton className="h-8 w-24 rounded-full" />
+                </div>
+              ))}
+            </div>
           ) : sessions.length ? (
             sessions.map((session) => (
               <div

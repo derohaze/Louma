@@ -51,6 +51,20 @@ export interface RiskInput {
   uaChangedForKnownMachine: boolean;
   /** The hardware is a machine we know, but its rendering digests all moved at once. */
   renderingTamperForKnownMachine: boolean;
+  /**
+   * Server-owned trust state of the cluster this start resolves to. A `provisional` cluster is one
+   * fabricated request old; `established` has survived repeated admission or a bound proof;
+   * `suspicious` has accumulated contradictions. It is never a client value.
+   */
+  clusterTrust: "provisional" | "established" | "suspicious" | "blocked";
+  /** New machine identities enrolled on this network in the last day (churn evidence). */
+  identityChurn: number;
+  /** Contradictions found inside this observation plus simultaneous-trait-replacement findings. */
+  consistencyFindings: number;
+  /** Another account holds a live lease on a *different* cluster behind this network. */
+  networkLeaseConflict: boolean;
+  /** A browser key was presented that this deployment has never verified by proof-of-possession. */
+  unverifiedBrowserKey: boolean;
   /** proxycheck detections; all-false when the provider is disabled or degraded. */
   anonymity: NetworkAnonymity;
   history: RiskHistory;
@@ -93,6 +107,18 @@ export function evaluateMiningDeviceTrust(input: RiskInput): RiskResult {
   if (input.uaChangedForKnownMachine) risk += 15;
   if (input.renderingTamperForKnownMachine) risk += 20;
   if (!input.browserKeyPresent) risk += 5;
+  // Identity churn: the account/network has been creating machine identities. Each individual
+  // enrollment is allowed (a real new device must work); the rate at which they appear is the abuse
+  // signal, and the hard cap lives in the enrollment budget, not here.
+  if (input.clusterTrust === "suspicious") risk += 20;
+  else if (input.clusterTrust === "provisional") risk += 6;
+  if (input.identityChurn >= 8) risk += 15;
+  else if (input.identityChurn >= 4) risk += 8;
+  if (input.consistencyFindings >= 3) risk += 16;
+  else if (input.consistencyFindings === 2) risk += 10;
+  else if (input.consistencyFindings === 1) risk += 5;
+  if (input.networkLeaseConflict) risk += 15;
+  if (input.unverifiedBrowserKey) risk += 4;
   if (input.history.accountsOnDevice >= 5) risk += 25;
   else if (input.history.accountsOnDevice >= 3) risk += 12;
   if (input.history.devicesOnAccount >= 10) risk += 10;

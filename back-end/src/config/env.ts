@@ -44,6 +44,31 @@ export interface LmdgConfig {
   riskMode: LmdgRiskMode;
   challengeTtlSeconds: number;
   nonceTtlSeconds: number;
+  /**
+   * Enrollment controls: identity creation is a budgeted, server-side transition, not a
+   * consequence of a syntactically valid payload. All four limits are consumed atomically and are
+   * deliberately far above what one real person needs — they bound abuse churn, not normal use.
+   *
+   * `LMDG_ENROLLMENT_ENABLED=false` is the operational escape hatch: it restores the older
+   * create-on-first-sight behaviour while leaving the rest of the guard in place.
+   */
+  enrollmentEnabled: boolean;
+  /** New device clusters one account may enroll per rolling 24h. */
+  maxNewClustersPerAccountPerDay: number;
+  /** New device clusters one network context (server-observed IP) may enroll per rolling hour. */
+  maxNewClustersPerNetworkPerHour: number;
+  /** New device clusters one network context may enroll per rolling 24h. */
+  maxNewClustersPerNetworkPerDay: number;
+  /**
+   * When a network context already holds another account's live mining lease, a *provisional* new
+   * cluster on that network must answer a satisfied proof-of-possession before it can be admitted;
+   * an established cluster (or a disabled flag) is unaffected. This is the rule that stops
+   * "same network, freshly minted second identity" without locking out a device that can prove the
+   * browser key it already holds.
+   */
+  networkLeaseLock: boolean;
+  /** Allowed admissions (or bound proofs) a cluster needs before it becomes `established`. */
+  establishMinAdmissions: number;
 }
 
 export interface AppConfig {
@@ -273,11 +298,23 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   const ambiguous = Number(values["LMDG_AMBIGUOUS_MATCH_THRESHOLD"] ?? "55");
   if (!Number.isFinite(high) || high < 50 || high > 100) throw new Error("LMDG_HIGH_CONFIDENCE_MATCH_THRESHOLD must be 50..100");
   if (!Number.isFinite(ambiguous) || ambiguous < 20 || ambiguous >= high) throw new Error("LMDG_AMBIGUOUS_MATCH_THRESHOLD must be 20..high-1");
-  const observationTtlSeconds = positiveInteger("LMDG_DEVICE_OBSERVATION_TTL_SECONDS", values["LMDG_DEVICE_OBSERVATION_TTL_SECONDS"] ?? String(90 * 24 * 60 * 60), 3600);
+  // The device and account risk checks read a 30-day history window: a shorter observation
+  // retention would silently undercount prior activity and lower risk scores, so the floor is the
+  // window the engine reasons over, not an arbitrary duration.
+  const observationTtlSeconds = positiveInteger("LMDG_DEVICE_OBSERVATION_TTL_SECONDS", values["LMDG_DEVICE_OBSERVATION_TTL_SECONDS"] ?? String(90 * 24 * 60 * 60), 30 * 24 * 60 * 60);
   const ipIntelTtlSeconds = positiveInteger("LMDG_IP_INTELLIGENCE_TTL_SECONDS", values["LMDG_IP_INTELLIGENCE_TTL_SECONDS"] ?? String(24 * 60 * 60), 300);
   const browserKeyRequired = booleanFlag("LMDG_BROWSER_KEY_REQUIRED", values["LMDG_BROWSER_KEY_REQUIRED"], false);
   const rawMode = (values["LMDG_RISK_MODE"] ?? "enforce").trim();
   if (rawMode !== "monitor" && rawMode !== "challenge" && rawMode !== "enforce") throw new Error("LMDG_RISK_MODE must be monitor, challenge, or enforce");
+  const enrollmentEnabled = booleanFlag("LMDG_ENROLLMENT_ENABLED", values["LMDG_ENROLLMENT_ENABLED"], true);
+  const maxNewClustersPerAccountPerDay = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_ACCOUNT_PER_DAY", values["LMDG_MAX_NEW_CLUSTERS_PER_ACCOUNT_PER_DAY"] ?? "3", 1);
+  const maxNewClustersPerNetworkPerHour = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR", values["LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR"] ?? "8", 1);
+  const maxNewClustersPerNetworkPerDay = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY", values["LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY"] ?? "20", 1);
+  if (maxNewClustersPerNetworkPerDay < maxNewClustersPerNetworkPerHour) {
+    throw new Error("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY must be at least LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR");
+  }
+  const networkLeaseLock = booleanFlag("LMDG_NETWORK_LEASE_LOCK", values["LMDG_NETWORK_LEASE_LOCK"], true);
+  const establishMinAdmissions = positiveInteger("LMDG_ESTABLISH_MIN_ADMISSIONS", values["LMDG_ESTABLISH_MIN_ADMISSIONS"] ?? "3", 2);
   return {
     enabled,
     leaseEnabled,
@@ -289,6 +326,12 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
     riskMode: rawMode,
     challengeTtlSeconds: positiveInteger("LMDG_CHALLENGE_TTL_SECONDS", values["LMDG_CHALLENGE_TTL_SECONDS"] ?? "300", 60),
     nonceTtlSeconds: positiveInteger("LMDG_NONCE_TTL_SECONDS", values["LMDG_NONCE_TTL_SECONDS"] ?? "300", 60),
+    enrollmentEnabled,
+    maxNewClustersPerAccountPerDay,
+    maxNewClustersPerNetworkPerHour,
+    maxNewClustersPerNetworkPerDay,
+    networkLeaseLock,
+    establishMinAdmissions,
   };
 }
 

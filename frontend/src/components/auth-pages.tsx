@@ -75,7 +75,7 @@ function AuthField({
       <input
         {...props}
         aria-label={label}
-        className="h-12 w-full rounded-full border border-black/[0.06] bg-[#F1F1F4] px-5 text-sm text-[#1B1B21] shadow-[0_1px_2px_rgba(16,16,20,0.06)] outline-none placeholder:text-[#8A8A93] focus:border-[#1B1B21]/20 focus:ring-2 focus:ring-[#1B1B21]/10"
+        className="h-12 w-full rounded-full border border-black/[0.06] bg-[#F1F1F4] px-5 text-sm text-[#1B1B21] shadow-[0_1px_2px_rgba(16,16,20,0.06)] outline-none placeholder:text-[#8A8A93] focus:border-[#1B1B21]/20 focus:ring-2 focus:ring-[#1B1B21]/10 dark:border-border dark:bg-secondary dark:text-foreground dark:placeholder:text-muted-foreground dark:focus:border-ring/50 dark:focus:ring-ring/20"
       />
     </label>
   );
@@ -96,7 +96,7 @@ function PasswordField({
   return (
     <label className="block">
       <span className="sr-only">{label}</span>
-      <span className="flex h-12 items-center rounded-full border border-black/[0.06] bg-[#F1F1F4] pe-3 shadow-[0_1px_2px_rgba(16,16,20,0.06)] focus-within:border-[#1B1B21]/20 focus-within:ring-2 focus-within:ring-[#1B1B21]/10">
+      <span className="flex h-12 items-center rounded-full border border-black/[0.06] bg-[#F1F1F4] pe-3 shadow-[0_1px_2px_rgba(16,16,20,0.06)] focus-within:border-[#1B1B21]/20 focus-within:ring-2 focus-within:ring-[#1B1B21]/10 dark:border-border dark:bg-secondary dark:focus-within:border-ring/50 dark:focus-within:ring-ring/20">
         <input
           type={visible ? "text" : "password"}
           aria-label={label}
@@ -105,14 +105,14 @@ function PasswordField({
           value={value}
           autoComplete={autoComplete}
           onChange={(e) => onChange(e.target.value)}
-          className="h-full min-w-0 flex-1 rounded-full border-0 bg-transparent px-5 text-sm text-[#1B1B21] outline-none placeholder:text-[#8A8A93]"
+          className="h-full min-w-0 flex-1 rounded-full border-0 bg-transparent px-5 text-sm text-[#1B1B21] outline-none placeholder:text-[#8A8A93] dark:text-foreground dark:placeholder:text-muted-foreground"
         />
         <button
           type="button"
           aria-label={visible ? "Hide password" : "Show password"}
           aria-pressed={visible}
           onClick={() => setVisible((v) => !v)}
-          className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full text-[#6E6E77] transition-colors hover:bg-black/5 hover:text-[#1B1B21]"
+          className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full text-[#6E6E77] transition-colors hover:bg-black/5 hover:text-[#1B1B21] dark:text-muted-foreground dark:hover:bg-white/10 dark:hover:text-foreground"
         >
           <AuthIcon icon={visible ? ViewOffIcon : ViewIcon} size={18} />
         </button>
@@ -177,7 +177,7 @@ function AuthShell({
   footer: ReactNode;
 }) {
   return (
-    <div className="grid min-h-dvh bg-white lg:grid-cols-2">
+    <div className="grid min-h-dvh bg-background lg:grid-cols-2">
       <div className="flex flex-col items-center justify-center px-6 py-10 sm:px-12">
         <span className="flex items-center gap-2.5">
           <img
@@ -188,16 +188,16 @@ function AuthShell({
             draggable={false}
             className="size-11 shrink-0 border-0 bg-transparent object-contain shadow-none"
           />
-          <span className="font-display text-2xl font-bold tracking-tight text-[#14141A]">
+          <span className="font-display text-2xl font-bold tracking-tight text-foreground">
             Louma
           </span>
         </span>
-        <h1 className="mt-8 text-center font-display text-4xl leading-[1.15] font-bold text-[#101014]">
+        <h1 className="mt-8 text-center font-display text-4xl leading-[1.15] font-bold text-foreground">
           {title}
         </h1>
-        <p className="mt-3 text-center text-sm text-[#6E6E77]">{subtitle}</p>
+        <p className="mt-3 text-center text-sm text-muted-foreground">{subtitle}</p>
         <div className="mt-8 w-full max-w-[340px]">{children}</div>
-        <p className="mt-8 text-center text-[13px] text-[#6E6E77]">{footer}</p>
+        <p className="mt-8 text-center text-[13px] text-muted-foreground">{footer}</p>
       </div>
       <div className="relative hidden overflow-hidden rounded-tl-[24px] lg:block">
         <ShowcaseVisual />
@@ -256,7 +256,7 @@ export function LoginContent() {
       footer={
         <>
           New to Louma?{" "}
-          <Link to="/signup" className="font-bold text-[#101014] hover:underline">
+          <Link to="/signup" className="font-bold text-foreground hover:underline">
             Create account
           </Link>
         </>
@@ -297,7 +297,7 @@ export function LoginContent() {
           <div className="flex justify-end">
             <Link
               to="/forgot-password"
-              className="text-xs font-semibold text-[#6E6E77] hover:underline"
+              className="text-xs font-semibold text-muted-foreground hover:underline"
             >
               Forgot password?
             </Link>
@@ -346,7 +346,7 @@ export function SignupContent() {
       footer={
         <>
           Already have an account?{" "}
-          <Link to="/login" className="font-bold text-[#101014] hover:underline">
+          <Link to="/login" className="font-bold text-foreground hover:underline">
             Log in
           </Link>
         </>
@@ -402,20 +402,20 @@ export function ForgotPasswordContent() {
       footer={
         <>
           Remembered it?{" "}
-          <Link to="/login" className="font-bold text-[#101014] hover:underline">
+          <Link to="/login" className="font-bold text-foreground hover:underline">
             Back to log in
           </Link>
         </>
       }
     >
       {sent ? (
-        <div className="rounded-[22px] bg-[#F1F1F4] p-6 text-center">
-          <span className="mx-auto grid size-12 place-items-center rounded-full bg-success/15 text-[#1F7A5A]">
+        <div className="rounded-[22px] border bg-card p-6 text-center shadow-sm">
+          <span className="mx-auto grid size-12 place-items-center rounded-full bg-success/15 text-[#1F7A5A] dark:text-emerald-400">
             <AuthIcon icon={CheckmarkCircle01Icon} size={24} />
           </span>
-          <p className="mt-4 font-display text-lg font-bold text-[#101014]">Check your inbox</p>
-          <p className="mt-2 text-sm leading-relaxed text-[#6E6E77]">
-            If an account exists for <strong className="text-[#101014]">{email}</strong>, a reset
+          <p className="mt-4 font-display text-lg font-bold text-foreground">Check your inbox</p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            If an account exists for <strong className="text-foreground">{email}</strong>, a reset
             link is on its way.
           </p>
           <Link

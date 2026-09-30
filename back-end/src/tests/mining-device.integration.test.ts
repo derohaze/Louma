@@ -51,7 +51,13 @@ const csrfByAccessToken = new Map<string, string>();
 // Rotating IPs like mining.integration.test.ts: per-IP rate limits (register 5/min, global
 // 120/min) would otherwise throttle the suite itself rather than the behavior under test.
 let requestIp = 0;
-const nextIp = () => `10.9.0.${(requestIp++ % 250) + 1}`;
+// A fresh address per request. The third octet advances so the suite never reuses one: the guard
+// now scopes *new-identity* admission to a network, so a recycled address would carry an earlier
+// test's live lease into a later test and make it fail on the fixture rather than on the rule.
+const nextIp = () => {
+  const index = requestIp++;
+  return `10.9.${Math.floor(index / 254) % 254}.${(index % 254) + 1}`;
+};
 
 interface Account {
   userId: string;
@@ -217,7 +223,15 @@ function machineShape(salt: string): MachineShape {
   // would inherit one (verified: it did). Every fixture therefore reports a panel and an audio
   // device no plain desktop reports — an HDR panel at a non-24-bit depth, and never 48 kHz — and the
   // index varies both, so no two fixtures collide with each other either.
-  const sampleRate = [44100, 96000, 192000][index % 3]!;
+  // Unique per index, deliberately: the audio device is one of the six engine-stable core slots
+  // the machine key hashes, and the rest of the shape repeats every 12 entries (MACHINES length)
+  // while the panel depth repeats every 2 — so a three-value rate cycled by index was not enough to
+  // keep two namespaces apart. Indices 0 and 12 produced an identical machine core, and the later
+  // test then resolved to the earlier test's cluster (and its live lease) instead of enrolling its
+  // own machine. A unique rate makes every namespace a distinct machine by construction. The values
+  // stay realistic: a plain audio device other than 48 kHz, which is what keeps a fixture from
+  // colliding with a real customer's machine in a shared database.
+  const sampleRate = 22050 + index * 750;
   return {
     ...shape,
     platform: system.platform,
@@ -436,6 +450,12 @@ before(async () => {
 after(async () => {
   if (!collections) return;
   await trackSettlements();
+  // Captured before the per-account cleanup below deletes this run's observations: querying after
+  // the delete always yields an empty set, leaving denied fixture devices (no lease, no RUN
+  // namespaced WebGL hash — including the Firefox-engine fixture) behind in the shared database.
+  const observedDeviceIds = (
+    (await collections.miningDeviceObservations.distinct("deviceId", { ownerUserId: { $in: createdUserIds } }).catch(() => [] as unknown[])) as unknown[]
+  ).filter((value): value is string => typeof value === "string");
   for (const userId of createdUserIds) {
     await collections.miningSessions.deleteMany({ ownerUserId: userId });
     await collections.miningSettlements.deleteMany({ ownerUserId: userId });
@@ -456,16 +476,17 @@ after(async () => {
   // a record with no lease is invisible to the id set above. Device records deliberately carry no
   // owner, so the rows this run created are identified by what links to this run only: observations
   // and leases of the accounts this file registered, plus this run's fixture namespace (`RUN`) for
-  // records a denial left without either. A bare creation-time window is never used — it would also
-  // match devices another suite or user created mid-run against the same database.
-  const observedDeviceIds = (
-    (await collections.miningDeviceObservations.distinct("deviceId", { ownerUserId: { $in: createdUserIds } }).catch(() => [] as unknown[])) as unknown[]
-  ).filter((value): value is string => typeof value === "string");
+  // records a denial left without either. A denied start still records an observation, so the
+  // observed set alone is not proof this run created the device — the creation-time bound is what
+  // excludes a pre-existing device a fixture merely resolved to. A bare creation-time window is
+  // never used alone — it would also match devices another suite or user created mid-run against
+  // the same database.
+  // (`observedDeviceIds` was captured before the per-account observation cleanup above.)
   const runDevices = await collections.miningDevices
     .find(
       {
         $or: [
-          { publicId: { $in: observedDeviceIds } },
+          { publicId: { $in: observedDeviceIds }, firstSeenAt: { $gte: runStartedAt } },
           { deviceKeyHash: { $in: createdLeaseKeys } },
           { machineKeyHash: { $in: createdLeaseKeys } },
           {
@@ -484,7 +505,9 @@ after(async () => {
         runDevices.flatMap((device) => [device.publicId, device.deviceKeyHash, device.machineKeyHash]),
       ),
     ].filter((key): key is string => key !== null);
-    await collections.miningDeviceLeases.deleteMany({ deviceClusterId: { $in: runLeaseKeys } });
+    await collections.miningDeviceLeases.deleteMany({
+      $or: [{ deviceClusterId: { $in: runLeaseKeys } }, { deviceId: { $in: runDeviceIds } }],
+    });
     await collections.miningDevices.deleteMany({ publicId: { $in: runDeviceIds } });
   }
   if (treasuryDeltaMinor !== 0) {
@@ -560,22 +583,41 @@ test("N: a second browser on one computer cannot mine (the reported bypass)", as
   assert.equal(denied?.riskScore, 70);
 });
 
-test("D+L: two different machines on the same home IP may both mine", async () => {
+test("D+L: a second new machine behind an occupied network is refused, not silently allowed", async () => {
   const accountA = await register("home-a");
   const accountB = await register("home-b");
   const first = await startWith(accountA, "laptop-x", "203.0.113.44", "home-x");
   assert.equal(first.status, 200, JSON.stringify(first.body));
+  // Same network, a brand-new identity: because a fresh browser key can be generated by anyone, a
+  // proof of possession must not clear this rule — it is refused outright. A household's second
+  // machine waits for the cycle to end; that is the honest cost of the rule (see ENROLL-C for the
+  // exempt path an already-established cluster takes).
   const second = await startWith(accountB, "laptop-y", "203.0.113.44", "home-y");
-  assert.equal(second.status, 200, `shared Wi-Fi must not block a different machine: ${JSON.stringify(second.body)}`);
+  assert.equal(second.status, 409, `a first-sight identity behind an occupied network is refused: ${JSON.stringify(second.body)}`);
+  assert.equal((second.body["error"] as { code: string }).code, "mining_device_network_in_use");
+  // And the refusal really was a refusal: no cycle, no session, and no active lease for that
+  // identity. A 4xx that still left a lease behind would be a bypass wearing a status code.
+  const deniedDevice = await collections.miningDevices.findOne({ webglFingerprintHash: `webgl-laptop-y-home-y-${RUN}` });
+  if (deniedDevice) {
+    const leases = await collections.miningDeviceLeases.countDocuments({ deviceId: deniedDevice.publicId, status: "active" });
+    assert.equal(leases, 0, "a refused start must not leave an active lease behind");
+  }
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: accountB.userId, status: "active" }), 0);
+  // The same machine on a different network is untouched by the network rule.
+  const otherNetwork = await startWith(accountB, "laptop-y", "198.51.100.9", "home-y");
+  assert.equal(otherNetwork.status, 200, `a different network admits the same machine: ${JSON.stringify(otherNetwork.body)}`);
 });
 
 test("E: VPN-like network change does not free the device", async () => {
   const accountA = await register("vpn-a");
   const accountB = await register("vpn-b");
-  const first = await startWith(accountA, "laptop-x", "203.0.113.44", "vpn");
+  // Distinct networks for this scenario: an address another test is already mining from would make
+  // the *network* rule (not the VPN scenario) the reason this start is refused.
+  const first = await startWith(accountA, "laptop-x", "203.0.113.71", "vpn");
   assert.equal(first.status, 200, JSON.stringify(first.body));
-  const second = await startWith(accountB, "laptop-x-vpn", "198.51.100.7", "vpn");
+  const second = await startWith(accountB, "laptop-x-vpn", "198.51.100.77", "vpn");
   assert.equal(second.status, 409, `network change must not re-identify the machine: ${JSON.stringify(second.body)}`);
+  assert.equal((second.body["error"] as { code: string }).code, "mining_device_already_in_use");
 });
 
 test("F: clearing browser storage does not free the device", async () => {
@@ -708,10 +750,250 @@ test("REAL-WORLD REPORT: four engines on one computer yield exactly one mining c
   assert.equal(activeSessions, 1, "one computer, four browsers, exactly one mining cycle");
 });
 
+/**
+ * ENROLL-A: identity creation is an enrollment, not a consequence of a valid payload.
+ *
+ * The first observation of a machine must be admitted (a real new device has to work) but it may not
+ * be *trusted*: the record is `provisional` until independent evidence accumulates. And the number of
+ * new identities one account can create is a hard, atomically consumed budget.
+ */
+test("ENROLL-A: a fresh machine is a provisional enrollment and the account budget caps new identities", async () => {
+  const account = await register("enroll-a");
+  const first = await startWith(account, "laptop-x", undefined, "enroll-a1");
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const device = await collections.miningDevices.findOne({ webglFingerprintHash: `webgl-laptop-x-enroll-a1-${RUN}` });
+  assert.ok(device, "the admitted machine is enrolled");
+  assert.equal(device.trustState, "provisional", "a first-sight identity is never born established");
+  assert.match(device.anchorHash ?? "", /^[0-9a-f]{64}$/, "the enrollment anchor is a server-derived digest");
+  assert.equal(device.enrollmentUserId, account.userId);
+  assert.equal(device.admissionCount, 1);
+  assert.deepEqual(device.aliasHashes ?? [], [], "a first observation is the anchor, not an alias");
+
+  // The default budget is three new identities per account per day. Two more real machines are
+  // admitted; the fourth is refused *before* any record exists — the refusal mints nothing.
+  // Identity creation is budgeted at its source. A mining start is refused while a cycle runs
+  // (`mining_cycle_active`), so the budget is exercised through the same resolution the route uses.
+  //
+  // The observations carry no machine core trait (nothing from CORE_MACHINE_FEATURES), so no machine
+  // key and no anchor match can exist, and the unique visitorId keeps the candidate sweep empty. The
+  // one non-core trait that *is* varied is the canvas digest: without it every thin observation
+  // normalizes to the same signature, the signature lookup resolves the second call to the first
+  // call's record, and the later calls never reach the enrollment gate at all — the budget would look
+  // unbounded while only ever being charged once.
+  const guard = await import("../modules/mining-device/service.js");
+  const intel = { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null };
+  const thinEvidence = (label: string) => ({
+    browserKeyPublicKey: `browser-key-${label}-${RUN}`,
+    visitorId: `visitor-${label}-${RUN}`,
+    canvasHash: `canvas-${label}-${RUN}`,
+    fingerprintConfidence: 0.9,
+    fingerprintVersion: "v5",
+    integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
+  });
+  const resolve = (label: string, ip: string) =>
+    guard.resolveOrCreateDevice({
+      collections,
+      config,
+      evidenceRaw: thinEvidence(label),
+      ip,
+      intel,
+      ownerUserId: account.userId,
+      correlationId: `enroll-a-${label}`,
+    });
+  const second = await resolve("enroll-a2", "10.6.6.2");
+  assert.equal(second.trustState, "provisional", "a resolved identity is provisional too");
+  await resolve("enroll-a3", "10.6.6.3");
+  await assert.rejects(
+    resolve("enroll-a4", "10.6.6.4"),
+    (error: unknown) => (error as { code?: string }).code === "mining_device_enrollment_limited",
+    "the fourth new identity of the day must be refused",
+  );
+  const held = await collections.miningDevices.countDocuments({ enrollmentUserId: account.userId });
+  assert.equal(held, 3, "the account holds exactly its budget of identities, and no more");
+});
+
+/**
+ * ENROLL-B: a rejected start cannot rewrite trusted identity state.
+ *
+ * The second account presents the same machine with a moved core trait (a different audio device),
+ * a new browser key and rewritten rendering — a plausible poisoning attempt against a device that is
+ * already mining. Another account's live lease refuses it, and every trusted field of the record must
+ * be byte-identical afterwards: anchor, aliases, snapshot, counters.
+ */
+test("ENROLL-B: a rejected request leaves the trusted identity untouched", async () => {
+  const accountA = await register("mutate-a");
+  const accountB = await register("mutate-b");
+  const salt = "mutate";
+  assert.equal((await startWith(accountA, "laptop-x", undefined, salt)).status, 200);
+  const before = await collections.miningDevices.findOne({ webglFingerprintHash: `webgl-laptop-x-${salt}-${RUN}` });
+  assert.ok(before);
+
+  const rejected = await call("POST", "/api/v1/mining/start", {
+    token: accountB.accessToken,
+    body: {
+      device: {
+        ...deviceEvidence("laptop-x", salt),
+        visitorId: `visitor-rewrite-${RUN}`,
+        browserKeyPublicKey: `browser-key-rewrite-${RUN}`,
+        audioSampleRate: 44100,
+        webglHash: `webgl-laptop-x-${salt}-${RUN}`,
+      },
+    },
+  });
+  assert.ok(rejected.status >= 400, `the rewrite attempt must not start: ${JSON.stringify(rejected.body)}`);
+
+  const after = await collections.miningDevices.findOne({ _id: before._id });
+  assert.ok(after);
+  assert.equal(after.anchorHash, before.anchorHash, "the anchor is immutable");
+  assert.deepEqual(after.aliasHashes ?? [], before.aliasHashes ?? [], "a rejected request appends no alias");
+  assert.equal(after.machineKeyHash, before.machineKeyHash, "the latest-key field is only written on an allowed admission");
+  assert.equal(JSON.stringify(after.featureSnapshot ?? {}), JSON.stringify(before.featureSnapshot ?? {}));
+  assert.equal(after.admissionCount, before.admissionCount);
+  assert.equal(after.findingCount, before.findingCount);
+});
+
+/**
+ * ENROLL-C: a proof of possession cannot clear the network lock.
+ *
+ * This is the regression for the measured bypass: the attacker forges a new machine, generates a
+ * browser key of its own, answers the challenge, and retried — and the retry was admitted because
+ * the proof was accepted as if it proved something about the machine. It proves continuity of a
+ * storage context, and anyone can create one, so it must not convert this rule. The exemption is the
+ * cluster's own server-owned trust state, which is what the second half of this test asserts.
+ */
+test("ENROLL-C: a proof of possession cannot clear the network lock, and only trust can", async () => {
+  const ip = "10.7.7.7";
+  const accountA = await register("net-a");
+  assert.equal((await startWith(accountA, "laptop-x", ip, "net-a")).status, 200);
+
+  const accountB = await register("net-b");
+  // 1. Keyless first-sight identity: nothing to prove, refused.
+  const keyless = await call("POST", "/api/v1/mining/start", {
+    token: accountB.accessToken,
+    body: { device: deviceEvidence("laptop-x-cleared", "net-b1") },
+    ip,
+  });
+  assert.equal(keyless.status, 409, `a keyless first-sight identity behind an occupied network must be refused: ${JSON.stringify(keyless.body)}`);
+  assert.equal((keyless.body["error"] as { code: string }).code, "mining_device_network_in_use");
+
+  // 2. The bypass attempt: a key THIS caller generated, a real handshake, then a retry.
+  const keyPair = await globalThis.crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = (await globalThis.crypto.subtle.exportKey("jwk", keyPair.publicKey)) as Record<string, unknown>;
+  const evidence = { ...deviceEvidence("laptop-y", "net-b2"), browserKeyPublicKey: JSON.stringify(jwk) };
+  const first = await call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidence }, ip });
+  assert.equal(first.status, 409, `a forged identity behind an occupied network is refused: ${JSON.stringify(first.body)}`);
+  assert.equal((first.body["error"] as { code: string }).code, "mining_device_network_in_use");
+
+  // The handshake still succeeds — it proves the key, which is all it ever proved.
+  const challenge = await call("POST", "/api/v1/mining/device/challenge", { token: accountB.accessToken, body: { device: evidence }, ip });
+  assert.equal(challenge.status, 200, JSON.stringify(challenge.body));
+  const signature = Buffer.from(
+    await globalThis.crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keyPair.privateKey, Buffer.from(challenge.body["payload"] as string, "utf8")),
+  ).toString("base64url");
+  const proof = await call("POST", "/api/v1/mining/device/prove", { token: accountB.accessToken, body: { nonce: challenge.body["nonce"], signature, publicKeyJwk: jwk, device: evidence }, ip });
+  assert.equal(proof.status, 200, JSON.stringify(proof.body));
+
+  // ...and it must NOT convert the refusal. This is the assertion the bypass broke.
+  const retried = await call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidence }, ip });
+  assert.equal(retried.status, 409, `a proven attacker key must not clear the network rule: ${JSON.stringify(retried.body)}`);
+  assert.equal((retried.body["error"] as { code: string }).code, "mining_device_network_in_use");
+
+  // 3. The refusal left nothing behind: no session, and no active lease on the forged identity.
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: accountB.userId, status: "active" }), 0, "the forged identity obtained no mining cycle");
+  const forged = await collections.miningDevices.findOne({ webglFingerprintHash: `webgl-laptop-y-net-b2-${RUN}` });
+  assert.ok(forged, "the refused observation was still recorded (as an untrusted enrollment, never as a trusted one)");
+  assert.equal(forged.trustState, "provisional", "a proof does not promote an identity to established");
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ deviceId: forged.publicId, status: "active" }), 0, "the forged identity holds no active lease");
+
+  // 4. The one exemption is server-owned trust. Scaffold the state the guard would otherwise earn
+  // over several admitted cycles and confirm the rule reads it — the honest second device is not
+  // locked out forever, it just has to have mined here before.
+  await collections.miningDevices.updateOne(
+    { _id: forged._id },
+    { $set: { trustState: "established", establishedAt: new Date(), admissionCount: config.lmdg.establishMinAdmissions } },
+  );
+  const established = await call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidence }, ip });
+  assert.equal(established.status, 200, `an established cluster is exempt on its own network: ${JSON.stringify(established.body)}`);
+});
+
+/**
+ * ENROLL-D: the budget is consumed atomically under concurrency.
+ *
+ * Five simultaneous first-time enrollments from one account: the counter is a single `$inc` upsert,
+ * so exactly the budget may pass and the rest are refused — no read-then-write window for a burst to
+ * slip through.
+ */
+test("ENROLL-D: concurrent enrollments cannot outrun the identity budget", async () => {
+  const account = await register("enroll-d");
+  const guard = await import("../modules/mining-device/service.js");
+  const intel = { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null };
+  const labels = ["enroll-d1", "enroll-d2", "enroll-d3", "enroll-d4", "enroll-d5"];
+  const results = await Promise.all(
+    labels.map((label, index) =>
+      guard
+        .resolveOrCreateDevice({
+          collections,
+          config,
+          // Browser-key-only evidence: it cannot match an existing cluster, so all five calls race
+          // the enrollment gate itself.
+          evidenceRaw: {
+            browserKeyPublicKey: `browser-key-${label}-${RUN}`,
+            visitorId: `visitor-${label}-${RUN}`,
+            integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
+          },
+          ip: `10.8.8.${10 + index}`,
+          intel,
+          ownerUserId: account.userId,
+          correlationId: `enroll-d-${label}`,
+        })
+        .then(() => "created" as const)
+        .catch((error: unknown) => (error as { code?: string }).code ?? "error"),
+    ),
+  );
+  assert.equal(results.filter((r) => r === "created").length, 3, `the account budget is consumed atomically: ${JSON.stringify(results)}`);
+  assert.equal(results.filter((r) => r === "mining_device_enrollment_limited").length, 2, `over-budget enrollments are refused: ${JSON.stringify(results)}`);
+  const created = await collections.miningDevices.countDocuments({ enrollmentUserId: account.userId });
+  assert.equal(created, 3, `exactly the budget becomes a record: got ${created}`);
+});
+
+/**
+ * ENROLL-E: a proof is bound to the enrollment it was issued for.
+ *
+ * The challenge commits to the server-resolved anchor of the evidence it was requested with. A
+ * signature minted under that challenge but presented with *different* device evidence recomputes a
+ * different payload, so it verifies nowhere — the same request with the original evidence does.
+ */
+test("ENROLL-E: a proof minted for one enrollment cannot be spent on another", async () => {
+  const account = await register("bind");
+  const evidenceA = { ...deviceEvidence("laptop-x", "bind-a") };
+  const evidenceB = { ...deviceEvidence("laptop-y", "bind-b") };
+  const keyPair = await globalThis.crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = (await globalThis.crypto.subtle.exportKey("jwk", keyPair.publicKey)) as Record<string, unknown>;
+  const request = await call("POST", "/api/v1/mining/device/challenge", {
+    token: account.accessToken,
+    body: { device: { ...evidenceA, browserKeyPublicKey: JSON.stringify(jwk) } },
+  });
+  assert.equal(request.status, 200, JSON.stringify(request.body));
+  const signature = Buffer.from(
+    await globalThis.crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keyPair.privateKey, Buffer.from(request.body["payload"] as string, "utf8")),
+  ).toString("base64url");
+  const mismatched = await call("POST", "/api/v1/mining/device/prove", {
+    token: account.accessToken,
+    body: {
+      nonce: request.body["nonce"],
+      signature,
+      publicKeyJwk: jwk,
+      device: { ...evidenceB, browserKeyPublicKey: JSON.stringify(jwk) },
+    },
+  });
+  assert.equal(mismatched.status, 401, `a proof presented for another enrollment must fail: ${JSON.stringify(mismatched.body)}`);
+});
+
 test("account B keeps full non-mining access while its mining start is rejected", async () => {
   const accountA = await register("access-a");
   const accountB = await register("access-b");
-  assert.equal((await startWith(accountA, "laptop-x", undefined, "access")).status, 200);
+  const ownStart = await startWith(accountA, "laptop-x", undefined, "access");
+  assert.equal(ownStart.status, 200, `account A's own fresh machine starts: ${JSON.stringify(ownStart.body)}`);
   assert.equal((await startWith(accountB, "laptop-x", undefined, "access")).status, 409);
   // Wallet + state reads are unaffected by the device lease.
   assert.equal((await call("GET", "/api/v1/wallet", { token: accountB.accessToken })).status, 200);

@@ -88,6 +88,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "color-scheme", content: "light dark" },
       { title: "MyHome — Sales Workspace" },
       {
         name: "description",
@@ -145,6 +146,17 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
+        {/*
+         * Blocking theme bootstrap: runs before first paint so a returning dark-mode visitor
+         * never sees a white flash. It mirrors `use-theme.ts` (same key, same `.dark` class)
+         * and must stay in sync with it. `colorScheme` keeps UA widgets (scrollbars, inputs)
+         * on the right theme from the very first frame.
+         */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `!function(){try{var t=localStorage.getItem("louma-theme");var d=t==="dark";document.documentElement.classList.toggle("dark",d);document.documentElement.style.colorScheme=d?"dark":"light";}catch(e){}}();`,
+          }}
+        />
         <HeadContent />
         {/*
          * The font stylesheet loads with `media="print"` so it never blocks rendering, then flips

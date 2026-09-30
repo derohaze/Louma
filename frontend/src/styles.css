@@ -185,6 +185,21 @@
     border-color: var(--color-border);
   }
 
+  /*
+   * First-paint theme guard: the blocking script in __root.tsx sets `.dark` before paint,
+   * and these flat colors paint the viewport correctly even before the token stylesheet
+   * resolves. Values mirror :root/.dark --background so the two can never drift visually.
+   */
+  html {
+    background-color: oklch(0.974 0.006 292);
+    color-scheme: light;
+  }
+
+  html.dark {
+    background-color: #101011;
+    color-scheme: dark;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);

@@ -19,6 +19,8 @@ function readStoredTheme(): Theme {
 function applyTheme(theme: Theme): void {
   if (typeof document !== "undefined") {
     document.documentElement.classList.toggle("dark", theme === "dark");
+    // Keep the UA widgets (scrollbars, form controls) in sync with the app theme.
+    document.documentElement.style.colorScheme = theme;
   }
   try {
     window.localStorage?.setItem(STORAGE_KEY, theme);

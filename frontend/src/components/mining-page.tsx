@@ -26,6 +26,7 @@ import {
 import { MONEY_SCALE, currency, dateText, moneyFromMinorUnits } from "@/lib/wallet-format";
 import { cn } from "@/lib/utils";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
+import { MiningSkeleton } from "./page-skeletons";
 import { MiningOrb } from "./mining-orb";
 import { MiningLiveLog, type FeedLine } from "./mining-live-log";
 import { FactList, FormMessage, Panel } from "./security-ui";
@@ -72,11 +73,20 @@ function countdown(totalSeconds: number): string {
  * Resolves after the browser has painted the latest commit. The checking card
  * (and its freshly mounted orb) must land its first frames before the
  * device-evidence collectors contend the main thread — otherwise the swap
- * visibly hitches.
+ * visibly hitches. Falls back after ~300ms: a background tab pauses animation
+ * frames, and the start request must not wait behind an unsent paint.
  */
 function nextPaint(): Promise<void> {
   return new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 300);
   });
 }
 
@@ -281,10 +291,19 @@ export function MiningContent() {
    */
   useEffect(() => {
     if (!session || !live) return;
-    if (!live.completed || session.status === "settled") return;
+    if (session.status === "settled") return;
     if (session.settledMinor >= live.accruedMinor) return;
-    // The server's capability flag: while settlement is paused `canSettle` is false and the
-    // endpoint refuses every request, so retrying here would only produce avoidable errors.
+    // `canSettle` is a snapshot from the last server read: a cycle that loaded while nothing had
+    // accrued yet reports `canSettle: false`, and the per-second countdown advances locally without
+    // refreshing that flag. Re-read once the local view shows a collectable reward so a stale flag
+    // cannot block collection (or leave Collect disabled); while settlement is paused the fresh
+    // read still reports `canSettle: false` and the endpoint is never retried.
+    if (!session.canSettle && !settleRequested.current.has(`refetched-${session.id}`)) {
+      settleRequested.current.add(`refetched-${session.id}`);
+      void refetch();
+      return;
+    }
+    if (!live.completed) return;
     if (!session.canSettle) return;
     if (settleRequested.current.has(session.id)) return;
     if (settleInFlight.current.has(session.id)) return;
@@ -305,7 +324,7 @@ export function MiningContent() {
         autoSettleFailedAt.current.set(session.id, Date.now());
       }
     });
-  }, [session, live, settle, pushFeed]);
+  }, [session, live, settle, pushFeed, refetch]);
 
   // LMDG: submits multi-signal device evidence with the start; the server alone decides
   // eligibility. A rejection names no account, IP, or detection detail — just the device rule.
@@ -446,10 +465,7 @@ export function MiningContent() {
       )}
 
       {loading ? (
-        <EmptyState
-          title="Loading mining state"
-          detail="Asking the server for your current cycle."
-        />
+        <MiningSkeleton title="Mining" />
       ) : !session ? (
         <div className="grid gap-4 sm:grid-cols-3">
           <section className="overflow-hidden rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2">
