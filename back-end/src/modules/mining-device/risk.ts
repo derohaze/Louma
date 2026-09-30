@@ -71,6 +71,12 @@ export function evaluateMiningDeviceTrust(input: RiskInput): RiskResult {
     return { decision: "deny", reasonCode: "device_blocked", confidence: 1, riskScore: 100 };
   }
 
+  // An operator who requires proof-of-possession means it: without a browser key there is nothing
+  // to challenge, and a risk score in the 30s would otherwise allow the start. Deny outright.
+  if (input.browserKeyRequired && !input.browserKeyPresent) {
+    return { decision: "deny", reasonCode: "browser_key_required", confidence: 0.9, riskScore: 85 };
+  }
+
   let risk = 0;
   if (input.webdriver) risk += 25;
   if (input.headlessHint) risk += 20;
@@ -86,7 +92,6 @@ export function evaluateMiningDeviceTrust(input: RiskInput): RiskResult {
   // does not move) carry the enforcement.
   if (input.uaChangedForKnownMachine) risk += 15;
   if (input.renderingTamperForKnownMachine) risk += 20;
-  if (!input.browserKeyPresent && input.browserKeyRequired) risk += 30;
   if (!input.browserKeyPresent) risk += 5;
   if (input.history.accountsOnDevice >= 5) risk += 25;
   else if (input.history.accountsOnDevice >= 3) risk += 12;

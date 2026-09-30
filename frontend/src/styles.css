@@ -384,6 +384,40 @@
 }
 
 /*
+ * Earned-this-cycle rolling number: the LMA suffix renders smaller and muted
+ * next to the rolling digits (styled through number-flow's part API).
+ */
+.earned-number::part(suffix) {
+  margin-left: 0.0625em;
+  font-weight: normal;
+  font-size: 0.75em;
+  color: var(--muted-foreground);
+}
+
+/*
+ * Mining activity line entrance: each line rises into place with the same
+ * premium easing the app uses for staggered lists. The delay is stored per
+ * line so lines that mount together cascade; it never changes afterwards,
+ * so shifting the list cannot replay the motion.
+ */
+@layer components {
+  @keyframes mining-log-enter {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .mining-log-enter {
+    animation: mining-log-enter 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+}
+
+/*
  * Shimmer sweep for live status captions (e.g. "Checking security…").
  * A highlight band travels across the text — the same idea as a
  * thinking-shimmer, implemented dependency-free in CSS. Colors derive from

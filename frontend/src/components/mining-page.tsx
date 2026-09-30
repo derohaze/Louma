@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import NumberFlow from "@number-flow/react";
 import {
   BitcoinCpuIcon,
   ChartIncreaseIcon,
@@ -26,6 +27,7 @@ import { MONEY_SCALE, currency, dateText, moneyFromMinorUnits } from "@/lib/wall
 import { cn } from "@/lib/utils";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
 import { MiningOrb } from "./mining-orb";
+import { MiningLiveLog, type FeedLine } from "./mining-live-log";
 import { FactList, FormMessage, Panel } from "./security-ui";
 
 const SECONDS_PER_HOUR = 3600n;
@@ -64,6 +66,18 @@ function countdown(totalSeconds: number): string {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+/**
+ * Resolves after the browser has painted the latest commit. The checking card
+ * (and its freshly mounted orb) must land its first frames before the
+ * device-evidence collectors contend the main thread — otherwise the swap
+ * visibly hitches.
+ */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 }
 
 /**
@@ -136,6 +150,24 @@ export function MiningContent() {
   /** Cycles whose completion the page has already asked to settle, so it asks exactly once each. */
   const settleRequested = useRef<Set<string>>(new Set());
 
+  /**
+   * Local activity feed: narrates real page events (cycle announcements,
+   * start/collect requests and confirmed outcomes) for the activity panel.
+   * Display only — pushing a line performs no request and touches no state.
+   * Lines that arrive in one burst cascade with a stagger instead of popping.
+   */
+  const [feed, setFeed] = useState<FeedLine[]>([]);
+  const feedId = useRef(0);
+  const feedBurst = useRef({ at: 0, delay: 0 });
+  const pushFeed = useCallback((text: string) => {
+    const now = Date.now();
+    const burst = feedBurst.current;
+    const delay = now - burst.at < 1000 ? Math.min(burst.delay + 75, 300) : 0;
+    feedBurst.current = { at: now, delay };
+    const line: FeedLine = { id: feedId.current++, text, delay };
+    setFeed((current) => [...current.slice(-11), line]);
+  }, []);
+
   // The server's clock is the reference: the tab's own clock may be wrong, and the offset is what
   // lets the countdown agree with the accrual the server reported.
   useEffect(() => {
@@ -186,42 +218,109 @@ export function MiningContent() {
 
   /** Last failed auto-collect per cycle, so a failing request backs off instead of refiring. */
   const autoSettleFailedAt = useRef<Map<string, number>>(new Map());
+  /** Cycles with a settle request currently in flight: the effect ticks every second, and without
+   * this guard a slow settle/invalidate/refresh would stack redundant `/settle` calls. */
+  const settleInFlight = useRef<Set<string>>(new Set());
+  /** Cycles already announced in the local activity feed, so reloads and refetches never repeat a line. */
+  const feedAnnounced = useRef<Set<string>>(new Set());
+  /** Baseline of the last heartbeat: each line reports only what was gained since. */
+  const heartbeatBaseline = useRef<number | null>(null);
+
+  /**
+   * Announces each cycle once in the local activity feed from confirmed server
+   * state: the cycle number and the rate the server assigned. Display only.
+   */
+  useEffect(() => {
+    if (session && !feedAnnounced.current.has(`cycle-${session.id}`)) {
+      feedAnnounced.current.add(`cycle-${session.id}`);
+      heartbeatBaseline.current = session.accruedMinor;
+      pushFeed(`Cycle #${session.cycleNumber} active · ${session.rate} LMA/h`);
+      pushFeed(`Window ends ${dateText(session.endsAt)}`);
+    }
+  }, [session, pushFeed]);
+
+  /**
+   * Honest heartbeat while a cycle runs: every 30s a line reports only what
+   * was gained since the previous line (never a total), plus the elapsed
+   * time — the same confirmed numbers the session card already shows.
+   * A stretch with no measurable gain is skipped instead of printing a zero
+   * line, so the next line covers the whole stretch since the last one.
+   * Latest snapshot is read through refs so the interval is never reset by
+   * the per-second countdown ticks.
+   */
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const sessionId = session?.id;
+  const sessionStatus = session?.status;
+  useEffect(() => {
+    if (!sessionId || sessionStatus !== "active") return;
+    const id = window.setInterval(() => {
+      const currentSession = sessionRef.current;
+      const currentLive = liveRef.current;
+      if (!currentSession || currentSession.status !== "active" || !currentLive) return;
+      const baseline = heartbeatBaseline.current ?? currentLive.accruedMinor;
+      heartbeatBaseline.current = currentLive.accruedMinor;
+      const gained = currentLive.accruedMinor - baseline;
+      if (gained <= 0) return;
+      pushFeed(
+        `+${currency(moneyFromMinorUnits(gained))} · ${countdown(currentLive.elapsedSeconds)} elapsed`,
+      );
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [sessionId, sessionStatus, pushFeed]);
 
   /**
    * A finished cycle collects itself once it is confirmed. It is not polling: this fires when the
    * local countdown reaches the end of a cycle the server already described, and the server
-   * credits only what the 24-hour window actually accrued. The cycle is marked done only after a
-   * confirmed result; a failure records its time and retries after a cooldown, so the reward can
+   * credits only what the 24-hour window actually accrued. The cycle is marked in-flight
+   * synchronously so the next one-second tick cannot start a second request while the first is
+   * still running; a failure clears the mark and retries after a cooldown, so the reward can
    * never be stranded by one bad request while the page stays open.
    */
   useEffect(() => {
     if (!session || !live) return;
     if (!live.completed || session.status === "settled") return;
     if (session.settledMinor >= live.accruedMinor) return;
+    // The server's capability flag: while settlement is paused `canSettle` is false and the
+    // endpoint refuses every request, so retrying here would only produce avoidable errors.
+    if (!session.canSettle) return;
     if (settleRequested.current.has(session.id)) return;
+    if (settleInFlight.current.has(session.id)) return;
     const failedAt = autoSettleFailedAt.current.get(session.id) ?? 0;
     if (Date.now() - failedAt < 30_000) return;
+    settleInFlight.current.add(session.id);
+    if (!feedAnnounced.current.has(`auto-${session.id}`)) {
+      feedAnnounced.current.add(`auto-${session.id}`);
+      pushFeed(`Cycle #${session.cycleNumber} window closed · collecting reward…`);
+    }
     void settle().then((ok) => {
+      settleInFlight.current.delete(session.id);
       if (ok) {
         settleRequested.current.add(session.id);
         autoSettleFailedAt.current.delete(session.id);
+        pushFeed("Reward settled · in your wallet");
       } else {
         autoSettleFailedAt.current.set(session.id, Date.now());
       }
     });
-  }, [session, live, settle]);
+  }, [session, live, settle, pushFeed]);
 
   // LMDG: submits multi-signal device evidence with the start; the server alone decides
   // eligibility. A rejection names no account, IP, or detection detail — just the device rule.
   const start = async () => {
     setBusy("start");
     setError("");
+    pushFeed("Starting cycle request…");
+    await nextPaint();
     try {
       await startMiningWithGuard();
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
       await refresh();
     } catch (cause) {
       setError(messageForMiningError(cause, messageForError));
+      pushFeed("Start request refused");
     } finally {
       setBusy(null);
     }
@@ -230,18 +329,26 @@ export function MiningContent() {
   const collect = async () => {
     setBusy("settle");
     setError("");
+    pushFeed("Collecting reward…");
     const settledBefore = session?.settledMinor ?? 0;
     try {
       const ok = await settle();
-      if (!ok) return;
+      if (!ok) {
+        pushFeed("Collection not confirmed · try again");
+        return;
+      }
       // Success is claimed only against fresh server state: the settled total must have advanced
       // past what this click saw, or already cover everything the window accrued.
       const fresh = await refetch();
       const next = fresh.data?.session;
       if (next && (next.settledMinor > settledBefore || next.settledMinor >= next.accruedMinor)) {
         toast.success("Reward collected into your wallet.", { position: "top-center" });
+        pushFeed(
+          `Reward collected · ${currency(moneyFromMinorUnits(next.settledMinor - settledBefore))}`,
+        );
       } else {
         setError("The reward could not be confirmed yet. Try again.");
+        pushFeed("Collection not confirmed · try again");
       }
     } finally {
       setBusy(null);
@@ -308,7 +415,9 @@ export function MiningContent() {
         icon={Coins01Icon}
         busy={busy === "settle"}
         onAction={collect}
-        disabled={busy !== null || !needsCollection}
+        // `canSettle` is the server's capability flag: while settlement is paused the endpoint
+        // refuses every request, so the action stays unavailable instead of calling it.
+        disabled={busy !== null || !needsCollection || !session.canSettle}
         busyLabel="Collecting reward"
       />
     ) : mining.data.canStart ? (
@@ -372,23 +481,14 @@ export function MiningContent() {
                     This decision comes from the protection system, not from this browser. Mining
                     will not start on this device until the current cycle ends.
                   </p>
-                  <div className="mt-4">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setError("");
-                        void refetch();
-                      }}
-                    >
-                      Check again
-                    </Button>
-                  </div>
                 </div>
                 <MiningOrb
                   state="working"
+                  ink="danger"
                   size={180}
                   label="Mining blocked on this device"
                   caption="Blocked"
+                  captionClassName="font-semibold text-destructive"
                 />
               </div>
             ) : (
@@ -460,7 +560,13 @@ export function MiningContent() {
               <div className="text-end">
                 <p className="text-xs text-muted-foreground">Earned this cycle</p>
                 <p className="mt-1 font-display text-2xl font-bold tabular-nums">
-                  {currency(moneyFromMinorUnits(accruedMinor))}
+                  <NumberFlow
+                    className="earned-number"
+                    value={accruedMinor / MONEY_SCALE}
+                    format={{ minimumFractionDigits: 4, maximumFractionDigits: 4 }}
+                    suffix=" LMA"
+                    trend={1}
+                  />
                 </p>
                 {session.settledMinor > 0 && (
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -501,7 +607,7 @@ export function MiningContent() {
               />
             </div>
 
-            {needsCollection && (
+            {needsCollection && session.canSettle && (
               <div className="mt-5">
                 <BusyButton
                   label="Collect reward"
@@ -512,6 +618,12 @@ export function MiningContent() {
                   busyLabel="Collecting reward"
                 />
               </div>
+            )}
+            {needsCollection && !session.canSettle && (
+              <p className="mt-5 text-sm text-muted-foreground">
+                Settlement is paused on this network, so collection is unavailable right now. Your
+                earned reward stays on your account and nothing is lost.
+              </p>
             )}
             {!needsCollection && session.status !== "active" && (
               <p className="mt-5 text-sm text-muted-foreground">
@@ -533,9 +645,16 @@ export function MiningContent() {
               </div>
             )}
             {!needsCollection && session.status === "active" && (
-              <p className="mt-5 text-sm text-muted-foreground">
-                Nothing to collect yet — your reward accrues continuously and stays on the server.
-              </p>
+              <div className="mt-5">
+                <BusyButton
+                  label="Collect reward"
+                  icon={Coins01Icon}
+                  busy={busy === "settle"}
+                  onAction={collect}
+                  disabled={busy !== null || !needsCollection}
+                  busyLabel="Collecting reward"
+                />
+              </div>
             )}
           </section>
 
@@ -547,7 +666,7 @@ export function MiningContent() {
                 Drawn by the server for this cycle and fixed until it ends.
               </p>
             </section>
-            <InfoCard />
+            {session.status === "active" ? <MiningLiveLog events={feed} /> : <InfoCard />}
           </div>
         </div>
       )}

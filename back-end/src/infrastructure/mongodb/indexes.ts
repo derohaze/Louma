@@ -280,6 +280,13 @@ export interface EnsureDatabaseIndexesOptions {
    * deletion accepted. Until then the collections keep growing, which is the safe direction.
    */
   retentionTtlEnabled?: boolean;
+  /**
+   * Device-observation retention in seconds (`LMDG_DEVICE_OBSERVATION_TTL_SECONDS`). Unlike the
+   * retention indexes above this is routine evidence expiry, not customer-visible history deletion,
+   * so it applies whenever the value is provided. Absent (tests, older callers), the TTL is left
+   * untouched rather than guessed.
+   */
+  observationTtlSeconds?: number;
 }
 
 async function dropIndexIfExists(db: Db, collection: string, name: string): Promise<void> {
@@ -420,6 +427,10 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("mining_settlements").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "mining_settlements_owner_history" }),
     db.collection("mining_devices").createIndex({ publicId: 1 }, { unique: true, name: "mining_devices_public_id_unique" }),
     db.collection("mining_devices").createIndex({ deviceKeyHash: 1 }, { name: "mining_devices_key_hash" }),
+    // The machine identity is the fan-in of every browser/profile observation of one computer; the
+    // resolution path looks it up directly rather than through the recent-activity sweep, so the
+    // lookup needs its own index and never depends on `lastSeenAt` ordering.
+    db.collection("mining_devices").createIndex({ machineKeyHash: 1 }, { name: "mining_devices_machine_key" }),
     db.collection("mining_devices").createIndex({ normalizedSignalHash: 1 }, { name: "mining_devices_signal_hash" }),
     db.collection("mining_devices").createIndex({ lastSeenAt: -1 }, { name: "mining_devices_last_seen" }),
     db.collection("mining_devices").createIndex({ status: 1, lastSeenAt: -1 }, { name: "mining_devices_status_seen" }),
@@ -452,6 +463,19 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
       dropIndexIfExists(db, "notifications", "notifications_retain"),
       dropIndexIfExists(db, "security_events", "security_events_retain"),
     ]);
+  }
+
+  // Device observations are sampled evidence, not customer history: without a TTL they accumulate
+  // for the life of the deployment while the configured `LMDG_DEVICE_OBSERVATION_TTL_SECONDS`
+  // claims a retention window. Migrating options (rather than a fixed definition) so a changed
+  // window replaces the index instead of wedging startup on boot.
+  if (options.observationTtlSeconds !== undefined) {
+    await createIndexMigratingOptions(
+      db,
+      "mining_device_observations",
+      { observedAt: 1 },
+      { expireAfterSeconds: options.observationTtlSeconds, name: "mining_device_observations_ttl" },
+    );
   }
 
   // Transactions written before the participant list existed are filled in, in bounded batches.

@@ -467,18 +467,28 @@ async function fontsSignature(): Promise<string | null> {
     const container = document.createElement("div");
     container.style.cssText = "position:absolute;left:-9999px;top:-9999px;visibility:hidden;";
     document.documentElement.appendChild(container);
-    const measure = (fontFamily: string): string => {
+    // One batched layout: every span is appended first and measured after, so the
+    // ~60 reads below cost a single layout instead of one forced reflow each.
+    // Metrics are identical to measuring one span at a time (same styles, and
+    // nowrap means siblings never change each other's size).
+    const families = [
+      ...bases,
+      ...candidates.flatMap((font) => bases.map((base) => `"${font}",${base}`)),
+    ];
+    const spans = families.map((family) => {
       const span = document.createElement("span");
-      span.style.cssText = `font-family:${fontFamily};font-size:72px;line-height:normal;white-space:nowrap;`;
+      span.style.cssText = `font-family:${family};font-size:72px;line-height:normal;white-space:nowrap;`;
       span.textContent = sample;
       container.appendChild(span);
-      const metric = `${span.offsetWidth}x${span.offsetHeight}`;
-      span.remove();
-      return metric;
-    };
-    const baselines = bases.map((base) => measure(base));
-    const detected = candidates.filter((font) =>
-      bases.some((base, index) => measure(`"${font}",${base}`) !== baselines[index]),
+      return span;
+    });
+    const metrics = spans.map((span) => `${span.offsetWidth}x${span.offsetHeight}`);
+    const baselines = metrics.slice(0, bases.length);
+    const detected = candidates.filter((font, fontIndex) =>
+      bases.some(
+        (_, baseIndex) =>
+          metrics[bases.length + fontIndex * bases.length + baseIndex] !== baselines[baseIndex],
+      ),
     );
     container.remove();
     return await sha256Hex(detected.join("|"));
@@ -727,7 +737,12 @@ export async function collectDeviceEvidence(): Promise<DeviceEvidencePayload> {
     withTimeout(pluginsSignature(), 300, null),
     withTimeout(mimeTypesSignature(), 300, null),
     withTimeout(storageQuota(), 400, null),
-    withTimeout(mediaInputCounts(), 400, { audio: null, video: null }),
+    // Roomier budget than its neighbours on purpose: this is the one machine trait that has to be
+    // *asked for* rather than read off a synchronous API. The first `enumerateDevices()` call starts
+    // the browser's media stack, which in Firefox takes longer than a few hundred milliseconds — and
+    // a collector that times out reports no capture devices at all, which used to be exactly enough
+    // to make the same computer look like a second machine.
+    withTimeout(mediaInputCounts(), 1500, { audio: null, video: null }),
     withTimeout(clientHints(), 400, { platformVersion: null, architecture: null, bitness: null }),
     getOrCreateKeyPair(),
   ]);
@@ -800,17 +815,20 @@ export async function collectDeviceEvidence(): Promise<DeviceEvidencePayload> {
 // Challenge / prove / start orchestration
 // ---------------------------------------------------------------------------
 
-async function provePossession(nonce: string): Promise<boolean> {
+async function provePossession(nonce: string, payload: string): Promise<boolean> {
   const pair = await getOrCreateKeyPair();
   if (!pair) return false;
   const publicKeyJwk = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as Record<
     string,
     unknown
   >;
+  // The signature covers the server's canonical bound payload (protocol version, action, origin,
+  // account, device, nonce window) — not a bare nonce. The server recomputes the same bytes from
+  // its own records, so a signature minted for another account, origin, or action verifies nowhere.
   const signature = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     pair.privateKey,
-    new TextEncoder().encode(nonce),
+    new TextEncoder().encode(payload),
   );
   await api.post("/api/v1/mining/device/prove", {
     nonce,
@@ -831,8 +849,11 @@ export async function startMiningWithGuard(): Promise<unknown> {
     return await api.post("/api/v1/mining/start", device ? { device } : undefined);
   } catch (error) {
     if (error instanceof ApiError && error.code === "mining_device_challenge_required" && device) {
-      const challenge = await api.post<{ nonce: string }>("/api/v1/mining/device/challenge", {});
-      await provePossession(challenge.nonce);
+      const challenge = await api.post<{ nonce: string; payload: string }>(
+        "/api/v1/mining/device/challenge",
+        {},
+      );
+      await provePossession(challenge.nonce, challenge.payload);
       return api.post("/api/v1/mining/start", { device });
     }
     throw error;

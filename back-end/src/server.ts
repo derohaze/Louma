@@ -8,7 +8,7 @@ const config = loadConfig();
 const { client, db } = await connectMongo(config);
 
 try {
-  await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled });
+  await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled, observationTtlSeconds: config.lmdg.observationTtlSeconds });
   const app = await buildApp({ config, collections: getCollections(db), mongoClient: client });
   const close = async (signal: string) => {
     app.log.info({ signal }, "server_shutdown_started");

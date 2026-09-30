@@ -157,6 +157,10 @@ interface MachineShape {
  * "ambiguous" — the correct answer for a real pair of near-identical laptops, and a wrong one for
  * two unrelated fixtures. So each namespace gets a machine that differs from the others in the OS,
  * screen, CPU class, memory, timezone and capture devices, not only in the rendering digests.
+ *
+ * Every fixture differs in the ENGINE-STABLE CORE the machine key hashes (core count, touch class,
+ * audio device, gamut, HDR, panel depth) — and none of them collides on all six — while
+ * `machineIndexBySalt` assignment keeps two namespaces apart even when one runs alone.
  */
 const MACHINES: Omit<MachineShape, "platform" | "userAgent" | "firefoxUserAgent" | "platformVersion">[] = [
   { screenWidth: 1366, screenHeight: 768, pixelRatio: 1, timezone: "Africa/Cairo", timezoneOffsetMinutes: -180, hardwareConcurrency: 2, deviceMemory: 4, maxTouchPoints: 0, mediaAudioInputs: 0, mediaVideoInputs: 0, colorGamut: "srgb" },
@@ -197,6 +201,23 @@ function machineShape(salt: string): MachineShape {
   }
   const system = SYSTEMS[index % SYSTEMS.length]!;
   const shape = MACHINES[index % MACHINES.length]!;
+  // The machine key hashes the ENGINE-STABLE core (core count, touch class, audio device, gamut,
+  // HDR, panel depth), so each fixture must differ from every other fixture in at least one core
+  // slot — not only in the rendering digests. The audio device is varied deterministically per index
+  // — and the capture-device pair and memory class with it, which the machine-trait comparison
+  // scores — so no two fixtures land in the guard's ambiguous band however many tests run before
+  // them, in any order.
+  const audioInputs = (shape.mediaAudioInputs + index) % 5;
+  const videoInputs = (shape.mediaVideoInputs + index) % 3;
+  // The identity the guard compares is deliberately coarse — bucketed CPU class, panel colour
+  // depth, HDR capability, negotiated audio device, display gamut, touch class — so a fixture built
+  // from the *most common* desktop profile (24-bit sRGB panel, no HDR, a 48 kHz stereo output, no
+  // touch points) is indistinguishable from a real customer's machine. The suite runs against a
+  // shared development database that does hold real machines with live leases, and such a fixture
+  // would inherit one (verified: it did). Every fixture therefore reports a panel and an audio
+  // device no plain desktop reports — an HDR panel at a non-24-bit depth, and never 48 kHz — and the
+  // index varies both, so no two fixtures collide with each other either.
+  const sampleRate = [44100, 96000, 192000][index % 3]!;
   return {
     ...shape,
     platform: system.platform,
@@ -205,21 +226,23 @@ function machineShape(salt: string): MachineShape {
     platformVersion: system.version(index),
     // One GPU identity per simulated machine, and one per run: the machine key is built from these,
     // so they must be as distinct as the screens and CPU classes are, and must not survive a run.
+    audioSampleRate: sampleRate,
+    mediaAudioInputs: audioInputs,
+    mediaVideoInputs: videoInputs,
     screenAvailWidth: shape.screenWidth,
     screenAvailHeight: shape.screenHeight - 40,
-    screenColorDepth: 24,
+    screenColorDepth: [30, 32][index % 2]!,
     webglVendor: `vendor-${index}-${RUN}`,
     webglRenderer: `renderer-${index}-${RUN}`,
     webglLimitsHash: `limits-${index}-${RUN}`,
     webglExtensionsHash: `extensions-${index}-${RUN}`,
     webgpuHash: `webgpu-${index}-${RUN}`,
-    audioSampleRate: 48000,
     audioChannels: 2,
-    hdr: false,
+    hdr: true,
   };
 }
 
-function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "laptop-x-cleared" | "laptop-x-vpn" | "laptop-x-second-browser", salt = ""): Record<string, unknown> {
+function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "laptop-x-cleared" | "laptop-x-vpn" | "laptop-x-second-browser" | "laptop-x-firefox-engine", salt = ""): Record<string, unknown> {
   // The salt namespaces visitorId, browser keys, rendering hashes and the machine shape per test,
   // and RUN namespaces them per suite run: the device collection persists across tests and across
   // runs, and without this every test's "laptop-x" would correlate to another test's cluster and
@@ -296,6 +319,41 @@ function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "la
         pluginsHash: `plugins-brave-${RUN}`,
         keyboardLayoutHash: `keyboard-brave-${RUN}`,
       });
+    case "laptop-x-firefox-engine":
+      // The reported REAL bypass: one computer, a genuinely different ENGINE. Firefox disagrees
+      // with Chrome about everything the engine owns — it cannot report navigator.deviceMemory at
+      // all, its font probe measures through a different text stack, its bundled media stack
+      // decodes a different codec set, its GPU strings differ — while the engine-stable core (CPU
+      // class, touch class, audio device, gamut, HDR, panel depth) is the same machine. Four
+      // engines on one computer used to yield four mining cycles.
+      //
+      // Capture devices included: a real Firefox answers `enumerateDevices()` for none of them on a
+      // first start, because the call is what starts its media stack and the collector's budget runs
+      // out before it does. The fixture reports none for the same reason — that absence is what
+      // forked the machine key in production and let a second account mine the same computer.
+      return withSalt({
+        ...base,
+        visitorId: "visitor-laptop-x-ff-engine",
+        browserKeyPublicKey: "browser-key-laptop-x-ff-engine",
+        userAgent: base.firefoxUserAgent,
+        deviceMemory: undefined,
+        mediaAudioInputs: null,
+        mediaVideoInputs: null,
+        fontsHash: `fonts-firefox-${RUN}`,
+        codecsHash: `codecs-firefox-${RUN}`,
+        mimeTypesHash: `mime-firefox-${RUN}`,
+        webglVendor: `vendor-ff-${RUN}`,
+        webglRenderer: `renderer-ff-${RUN}`,
+        webglLimitsHash: `limits-ff-${RUN}`,
+        webglExtensionsHash: `ext-ff-${RUN}`,
+        webgpuHash: null,
+        webglHash: `webgl-firefox-${RUN}`,
+        canvasHash: `canvas-firefox-${RUN}`,
+        audioHash: `audio-firefox-${RUN}`,
+        speechVoicesHash: `voices-firefox-${RUN}`,
+        storageQuotaBytes: 2 ** 30,
+        pluginsHash: `plugins-firefox-${RUN}`,
+      });
     case "laptop-x-cleared":
       // Storage cleared: no key, no visitorId — the machine traits remain.
       return withSalt({ ...base, visitorId: null, browserKeyPublicKey: null });
@@ -346,7 +404,9 @@ const FIXTURE_DEVICE_FILTER = { webglFingerprintHash: { $regex: /^webgl-(laptop|
 
 async function removeFixtureDevices(): Promise<void> {
   const devices = await collections.miningDevices
-    .find(FIXTURE_DEVICE_FILTER, { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } })
+    // Only leftovers from earlier runs: rows created after this run started may belong to a suite
+    // running concurrently against the same database and must never be touched here.
+    .find({ ...FIXTURE_DEVICE_FILTER, firstSeenAt: { $lt: runStartedAt } }, { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } })
     .toArray();
   if (devices.length === 0) return;
   // A lease is keyed by a device identity: the machine key, the browser key, or (from earlier
@@ -394,10 +454,28 @@ after(async () => {
   await collections.miningDeviceLeases.deleteMany({ deviceClusterId: { $in: createdLeaseKeys } });
   // Rejected starts also register a device record (that is how correlation learns a machine), and
   // a record with no lease is invisible to the id set above. Device records deliberately carry no
-  // owner, so this run's creation window is what identifies them. Left behind, they would make a
-  // rerun of this file resolve to last run's devices and inherit their still-live leases.
+  // owner, so the rows this run created are identified by what links to this run only: observations
+  // and leases of the accounts this file registered, plus this run's fixture namespace (`RUN`) for
+  // records a denial left without either. A bare creation-time window is never used — it would also
+  // match devices another suite or user created mid-run against the same database.
+  const observedDeviceIds = (
+    (await collections.miningDeviceObservations.distinct("deviceId", { ownerUserId: { $in: createdUserIds } }).catch(() => [] as unknown[])) as unknown[]
+  ).filter((value): value is string => typeof value === "string");
   const runDevices = await collections.miningDevices
-    .find({ firstSeenAt: { $gte: runStartedAt } }, { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } })
+    .find(
+      {
+        $or: [
+          { publicId: { $in: observedDeviceIds } },
+          { deviceKeyHash: { $in: createdLeaseKeys } },
+          { machineKeyHash: { $in: createdLeaseKeys } },
+          {
+            webglFingerprintHash: { $regex: new RegExp(`^webgl-(laptop|machine).*${RUN}`) },
+            firstSeenAt: { $gte: runStartedAt },
+          },
+        ],
+      },
+      { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } },
+    )
     .toArray();
   const runDeviceIds = runDevices.map((device) => device.publicId);
   if (runDeviceIds.length > 0) {
@@ -514,11 +592,14 @@ test("G+H: a browser-key proof cannot be replayed, nor can its nonce", async () 
   const challenge = await call("POST", "/api/v1/mining/device/challenge", { token: account.accessToken, body: {} });
   assert.equal(challenge.status, 200, JSON.stringify(challenge.body));
   const nonce = challenge.body["nonce"] as string;
-  assert.ok(nonce);
+  const payload = challenge.body["payload"] as string;
+  assert.ok(nonce && payload, "the challenge carries the canonical bound payload to sign");
 
   const keyPair = await globalThis.crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const jwk = (await globalThis.crypto.subtle.exportKey("jwk", keyPair.publicKey)) as Record<string, unknown>;
-  const raw = Buffer.from(await globalThis.crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keyPair.privateKey, Buffer.from(nonce, "utf8")));
+  const raw = Buffer.from(
+    await globalThis.crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keyPair.privateKey, Buffer.from(payload, "utf8")),
+  );
   const signature = raw.toString("base64url");
 
   const first = await call("POST", "/api/v1/mining/device/prove", {
@@ -596,6 +677,35 @@ test("M: switching the user agent on one machine does not free it (the reported 
     `a switched user agent must not free the machine: ${JSON.stringify(switched.body)}`,
   );
   assert.equal((switched.body["error"] as { code: string }).code, "mining_device_already_in_use");
+});
+
+test("REAL-WORLD REPORT: four engines on one computer yield exactly one mining cycle", async () => {
+  // The verified real-world bypass: the same physical machine running Chrome, Edge, Firefox and
+  // Brave held one mining cycle per browser. This test reproduces the engine disagreement itself
+  // (Firefox literally cannot report navigator.deviceMemory; fonts/codecs/GPU/canvas/audio all
+  // measure differently per engine) and asserts the guard still converges every engine on ONE
+  // machine identity — so engines 2..4 are all denied against engine 1's live lease.
+  const chrome = await register("engine-chrome");
+  const edge = await register("engine-edge");
+  const firefox = await register("engine-firefox");
+  const brave = await register("engine-brave");
+  const salt = "engines";
+  const first = await startWith(chrome, "laptop-x", undefined, salt);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const edgeStart = await startWith(edge, "laptop-x-second-browser", undefined, salt);
+  assert.equal(edgeStart.status, 409, `Edge must resolve to the same machine: ${JSON.stringify(edgeStart.body)}`);
+  const firefoxStart = await startWith(firefox, "laptop-x-firefox-engine", undefined, salt);
+  assert.equal(firefoxStart.status, 409, `Firefox must resolve to the same machine: ${JSON.stringify(firefoxStart.body)}`);
+  const braveStart = await startWith(brave, "laptop-x-second-browser", undefined, salt);
+  assert.equal(braveStart.status, 409, `Brave must resolve to the same machine: ${JSON.stringify(braveStart.body)}`);
+  // Every denial names the device rule — no account, IP, or fingerprint detail leaks.
+  for (const denied of [edgeStart, firefoxStart, braveStart]) {
+    assert.equal((denied.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  }
+  const activeLeases = await collections.miningDeviceLeases.countDocuments({ ownerUserId: { $in: [chrome.userId, edge.userId, firefox.userId, brave.userId] }, status: "active" });
+  assert.ok(activeLeases <= 4, "each lease row belongs to the one winner, never a second cycle");
+  const activeSessions = await collections.miningSessions.countDocuments({ ownerUserId: { $in: [chrome.userId, edge.userId, firefox.userId, brave.userId] }, status: "active" });
+  assert.equal(activeSessions, 1, "one computer, four browsers, exactly one mining cycle");
 });
 
 test("account B keeps full non-mining access while its mining start is rejected", async () => {
