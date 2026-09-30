@@ -2,6 +2,10 @@ import type { Collection, Db } from "mongodb";
 import type {
   LedgerAccountRecord,
   LedgerEntryRecord,
+  MiningDeviceLeaseRecord,
+  MiningDeviceNonceRecord,
+  MiningDeviceObservationRecord,
+  MiningDeviceRecord,
   MiningSessionRecord,
   MiningSettlementRecord,
   NotificationRecord,
@@ -27,6 +31,10 @@ export interface Collections {
   notifications: Collection<NotificationRecord>;
   miningSessions: Collection<MiningSessionRecord>;
   miningSettlements: Collection<MiningSettlementRecord>;
+  miningDevices: Collection<MiningDeviceRecord>;
+  miningDeviceLeases: Collection<MiningDeviceLeaseRecord>;
+  miningDeviceNonces: Collection<MiningDeviceNonceRecord>;
+  miningDeviceObservations: Collection<MiningDeviceObservationRecord>;
 }
 
 export function getCollections(db: Db): Collections {
@@ -43,5 +51,9 @@ export function getCollections(db: Db): Collections {
     notifications: db.collection<NotificationRecord>("notifications"),
     miningSessions: db.collection<MiningSessionRecord>("mining_sessions"),
     miningSettlements: db.collection<MiningSettlementRecord>("mining_settlements"),
+    miningDevices: db.collection<MiningDeviceRecord>("mining_devices"),
+    miningDeviceLeases: db.collection<MiningDeviceLeaseRecord>("mining_device_leases"),
+    miningDeviceNonces: db.collection<MiningDeviceNonceRecord>("mining_device_nonces"),
+    miningDeviceObservations: db.collection<MiningDeviceObservationRecord>("mining_device_observations"),
   };
 }

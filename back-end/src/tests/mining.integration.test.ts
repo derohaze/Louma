@@ -29,6 +29,18 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const DAY_SECONDS = 24 * 60 * 60;
 
+/**
+ * Namespace and start time for one run of this file.
+ *
+ * A device lease lives for the full 24-hour cycle, so without a per-run namespace a second run's
+ * "machine 0" would resolve to the first run's device and inherit its still-live lease — the suite
+ * would then fail on its own leftovers instead of on the behaviour under test. The timestamp bounds
+ * the cleanup: device records carry no owner on purpose, so creation time is what identifies the
+ * rows this run produced.
+ */
+const RUN = randomUUID().slice(0, 8);
+const runStartedAt = new Date();
+
 let app: FastifyInstance;
 let client: MongoClient;
 let config: AppConfig;
@@ -52,6 +64,92 @@ interface Account {
   refreshCookie: string;
   walletId: string;
   ledgerAccountId: string;
+  /** Index of the distinct simulated machine this account mines from. */
+  machine: number;
+}
+
+let nextMachine = 0;
+
+/**
+ * Device evidence for one simulated machine.
+ *
+ * Mining requires device evidence while LMDG is enabled, and this suite needs several accounts
+ * mining at the same time — so each account gets its own machine, derived from its index: a distinct
+ * OS, screen class, CPU/memory class and rendering stack. Two accounts in one run must not look like
+ * one device, or the guard would (correctly) refuse the second start.
+ */
+const WINDOWS_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+const MAC_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+const LINUX_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+const MACHINE_RESOLUTIONS: [number, number, number][] = [
+  [1366, 768, 1], [1440, 900, 2], [1600, 900, 1], [1728, 1117, 2], [1920, 1080, 1],
+  [1920, 1200, 1.25], [2048, 1536, 2], [2560, 1080, 1], [2560, 1440, 1], [2560, 1600, 2],
+  [2880, 1800, 2], [3840, 2160, 1.5],
+];
+const MACHINE_ZONES: [string, number][] = [
+  ["Africa/Cairo", -180], ["Europe/London", 0], ["America/New_York", 300],
+  ["Asia/Dubai", -240], ["Europe/Berlin", -120], ["Asia/Riyadh", -180],
+];
+const MACHINE_SYSTEMS = [
+  { platform: "Win32", userAgent: WINDOWS_UA },
+  { platform: "MacIntel", userAgent: MAC_UA },
+  { platform: "Linux x86_64", userAgent: LINUX_UA },
+];
+
+function deviceEvidence(machine: number): Record<string, unknown> {
+  // Each account mines from its own machine, and the dimensions are coprime enough that the first
+  // sixty accounts differ in the OS, screen, CPU class, memory, timezone or capture devices. That
+  // matters now that the matcher weighs those traits: two fixtures sharing them all and differing
+  // only in the GPU correlate as "ambiguous", which is the right answer for near-identical real
+  // laptops and the wrong one here — a test that merely reads its neighbour's live lease would fail.
+  const [width, height, pixelRatio] = MACHINE_RESOLUTIONS[machine % MACHINE_RESOLUTIONS.length]!;
+  const [timezone, timezoneOffsetMinutes] = MACHINE_ZONES[machine % MACHINE_ZONES.length]!;
+  const system = MACHINE_SYSTEMS[machine % MACHINE_SYSTEMS.length]!;
+  return {
+    visitorId: `visitor-machine-${RUN}-${machine}`,
+    fingerprintConfidence: 0.95,
+    fingerprintVersion: "v5",
+    platform: system.platform,
+    userAgent: system.userAgent,
+    screenWidth: width,
+    screenHeight: height,
+    pixelRatio,
+    timezone,
+    timezoneOffsetMinutes,
+    language: "en-US",
+    hardwareConcurrency: [2, 3, 4, 6, 8, 10, 12, 16, 20, 24][machine % 10]!,
+    deviceMemory: [1, 2, 4, 8, 16, 32][machine % 6]!,
+    maxTouchPoints: machine % 5 === 0 ? 10 : 0,
+    // The GPU identity, its limits, its extensions and the audio device are part of the machine
+    // identity the server derives, and they are what makes each simulated machine distinct for any
+    // number of accounts: the screen/CPU/memory pattern repeats every 60 indices, and a collision
+    // there would (correctly) refuse the second account's start.
+    screenAvailWidth: width,
+    screenAvailHeight: height - (machine % 5) * 8,
+    screenColorDepth: 24,
+    webglVendor: `vendor-machine-${RUN}-${machine}`,
+    webglRenderer: `renderer-machine-${RUN}-${machine}`,
+    webglLimitsHash: `limits-machine-${RUN}-${machine}`,
+    webglExtensionsHash: `extensions-machine-${RUN}-${machine}`,
+    webgpuHash: `webgpu-machine-${RUN}-${machine}`,
+    audioSampleRate: 48000,
+    audioChannels: 2,
+    hdr: machine % 7 === 0,
+    webglHash: `webgl-machine-${RUN}-${machine}`,
+    canvasHash: `canvas-machine-${RUN}-${machine}`,
+    audioHash: `audio-machine-${RUN}-${machine}`,
+    fontsHash: `fonts-machine-${RUN}-${machine}`,
+    colorGamut: ["srgb", "p3", "rec2020"][machine % 3]!,
+    mediaAudioInputs: machine % 5,
+    mediaVideoInputs: machine % 4,
+    platformVersion: `${machine}.${machine % 7}.${machine % 5}`,
+    browserKeyPublicKey: `browser-key-machine-${RUN}-${machine}`,
+    integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
+  };
 }
 
 async function call(
@@ -81,6 +179,23 @@ async function call(
   return { status: response.statusCode, body, cookie: Array.isArray(setCookie) ? (setCookie[0] ?? "") : ((setCookie as string | undefined) ?? "") };
 }
 
+const FIXTURE_DEVICE_FILTER = { webglFingerprintHash: { $regex: /^webgl-(machine|laptop)/ } };
+
+async function removeFixtureDevices(): Promise<void> {
+  const devices = await collections.miningDevices
+    .find(FIXTURE_DEVICE_FILTER, { projection: { publicId: 1, deviceKeyHash: 1, machineKeyHash: 1 } })
+    .toArray();
+  if (devices.length === 0) return;
+  // Every identity a lease can be keyed by: the machine key, the browser key, or an older record id.
+  const leaseKeys = [
+    ...new Set(
+      devices.flatMap((device) => [device.publicId, device.deviceKeyHash, device.machineKeyHash]),
+    ),
+  ].filter((key): key is string => key !== null);
+  await collections.miningDeviceLeases.deleteMany({ deviceClusterId: { $in: leaseKeys } });
+  await collections.miningDevices.deleteMany({ publicId: { $in: devices.map((device) => device.publicId) } });
+}
+
 async function register(label: string): Promise<Account> {
   const email = `mining.${label}.${randomUUID()}@example.test`;
   const response = await call("POST", "/api/v1/auth/register", {
@@ -100,6 +215,7 @@ async function register(label: string): Promise<Account> {
     refreshCookie: response.cookie.split(";")[0] ?? "",
     walletId: wallet.id,
     ledgerAccountId: account.publicId,
+    machine: nextMachine++,
   };
 }
 
@@ -131,7 +247,10 @@ async function miningState(account: Account) {
 }
 
 async function startMining(account: Account) {
-  const response = await call("POST", "/api/v1/mining/start", { token: account.accessToken });
+  const response = await call("POST", "/api/v1/mining/start", {
+    token: account.accessToken,
+    body: { device: deviceEvidence(account.machine) },
+  });
   assert.equal(response.status, 200, JSON.stringify(response.body));
   const state = response.body as { status: string; session: MiningSession };
   createdSessionIds.push(state.session.id);
@@ -204,6 +323,10 @@ before(async () => {
   client = connection.client;
   collections = getCollections(connection.db);
   await ensureDatabaseIndexes(connection.db);
+  // Fixture devices from an earlier run of this file (or of the LMDG suite): their leases live for a
+  // full 24 hours and would correlate with this run's machines. Only test rows can match — a real
+  // client reports a SHA-256 of its GPU string, never a `webgl-machine-*` label.
+  await removeFixtureDevices();
   app = await buildApp({ config, collections, mongoClient: client, logger: false });
   const csrf = await call("GET", "/api/v1/auth/csrf");
   assert.equal(csrf.status, 200, JSON.stringify(csrf.body));
@@ -221,6 +344,18 @@ after(async () => {
     await collections.wallets.deleteMany({ ownerUserId: userId });
     await collections.users.deleteMany({ publicId: userId });
   }
+  // Device identity and its leases, so a finished run leaves nothing that can refuse the next
+  // one's starts. Device records deliberately carry no owner, so the run window scopes the delete.
+  const devices = await collections.miningDevices
+    .find({ firstSeenAt: { $gte: runStartedAt } }, { projection: { publicId: 1 } })
+    .toArray();
+  const deviceIds = devices.map((device) => device.publicId);
+  if (deviceIds.length > 0) {
+    await collections.miningDeviceLeases.deleteMany({ deviceClusterId: { $in: deviceIds } });
+    await collections.miningDevices.deleteMany({ publicId: { $in: deviceIds } });
+  }
+  await collections.miningDeviceLeases.deleteMany({ ownerUserId: { $in: createdUserIds } });
+  await collections.miningDeviceObservations.deleteMany({ ownerUserId: { $in: createdUserIds } });
   await collections.ledgerEntries.deleteMany({ transactionId: { $in: createdTransactionIds } });
   await collections.transactions.deleteMany({ publicId: { $in: createdTransactionIds } });
   await collections.ledgerEntries.deleteMany({ ledgerAccountId: { $in: createdWalletAccountIds } });
@@ -234,7 +369,9 @@ after(async () => {
 
 test("mining requires a session", async () => {
   assert.equal((await call("GET", "/api/v1/mining/state")).status, 401);
-  assert.equal((await call("POST", "/api/v1/mining/start")).status, 401);
+  // An empty JSON body, not no body: the request schema is validated before the auth hook, so a
+  // bodyless POST is refused as malformed (400) before it can be refused as unauthenticated.
+  assert.equal((await call("POST", "/api/v1/mining/start", { body: {} })).status, 401);
 });
 
 test("start opens exactly a 24-hour cycle with a server-chosen rate inside the configured band", async () => {
@@ -256,7 +393,10 @@ test("start opens exactly a 24-hour cycle with a server-chosen rate inside the c
   assert.equal(started.session.canSettle, false);
 
   // A second start while the cycle runs is refused rather than silently replacing the window.
-  const second = await call("POST", "/api/v1/mining/start", { token: account.accessToken });
+  const second = await call("POST", "/api/v1/mining/start", {
+    token: account.accessToken,
+    body: { device: deviceEvidence(account.machine) },
+  });
   assert.equal(second.status, 409);
   assert.equal((second.body["error"] as { code: string }).code, "mining_cycle_active");
 });

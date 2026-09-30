@@ -6,8 +6,9 @@ import { assertBalanced, formatMoney } from "../ledger/money.js";
 import { ensureTreasuryAccount } from "../wallets/service.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { accruedMinorFor, pickRateUnits, rateToString, totalAccrualMinor } from "./rate.js";
-import { conflict, notFound, serviceUnavailable } from "../../shared/errors.js";
-import { LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
+import { badRequest, conflict, forbidden, notFound, serviceUnavailable } from "../../shared/errors.js";
+import { DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE, DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE } from "../mining-device/policy.js";
+import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 import type {
   LedgerAccountRecord,
   MiningEffectiveStatus,
@@ -144,16 +145,22 @@ async function loadWalletAndAccount(collections: Collections, ownerUserId: strin
   return { wallet, walletAccount };
 }
 
-function stateFromRecord(record: MiningSessionRecord | null, nowMs: number, enabled: boolean, cycleDurationSeconds: number): PublicMiningState {
+/** Projects a stored cycle (or its absence) into the customer-facing state. Exported for testing. */
+export function stateFromRecord(record: MiningSessionRecord | null, nowMs: number, enabled: boolean, settlementEnabled: boolean, cycleDurationSeconds: number): PublicMiningState {
   const session = record ? toPublicSession(record, nowMs) : null;
+  // Capability flags mirror what the write paths will actually accept: settlement refuses while
+  // paused, and a start past an expired-but-unsettled cycle needs a settlement first.
+  if (session) session.canSettle = enabled && settlementEnabled && session.canSettle;
   const status: MiningEffectiveStatus = session?.status ?? "idle";
+  const needsClose = status === "completed";
   return {
     status,
     serverNow: new Date(nowMs).toISOString(),
     enabled,
     // A new cycle may start whenever the account has no running one. An expired-but-unsettled cycle
-    // is `completed`, and `start` settles it before opening the next, so nothing is stranded.
-    canStart: enabled && status !== "active",
+    // is `completed`, and `start` settles it before opening the next, so nothing is stranded —
+    // which is why a `completed` state additionally requires settlement to be enabled.
+    canStart: enabled && status !== "active" && (settlementEnabled || !needsClose),
     cycleDurationSeconds,
     session,
   };
@@ -166,13 +173,12 @@ export async function getMiningState(input: {
   ownerUserId: string;
 }): Promise<PublicMiningState> {
   const nowMs = Date.now();
-  if (!input.config.mining.enabled) {
-    return stateFromRecord(null, nowMs, false, input.config.mining.cycleDurationSeconds);
-  }
+  // Reads stay available while mining is disabled: an account with an accrued-but-unsettled reward
+  // must still see its cycle. Disabling stops writes (start/settle refuse), never visibility.
   // One read in the running case. Only an idle account pays for the second, to show its last cycle.
   const active = await loadActiveSession(input.collections, input.ownerUserId);
   const record = active ?? (await loadLatestSession(input.collections, input.ownerUserId));
-  return stateFromRecord(record, nowMs, true, input.config.mining.cycleDurationSeconds);
+  return stateFromRecord(record, nowMs, input.config.mining.enabled, input.config.mining.settlementEnabled, input.config.mining.cycleDurationSeconds);
 }
 
 /**
@@ -184,12 +190,20 @@ export async function getMiningState(input: {
  * through the unique index as much as through the check — and an expired-but-unsettled cycle is
  * settled first so its reward is never stranded and the one-active slot is freed.
  */
+export interface MiningStartDeviceContext {
+  /** Raw client device evidence (sanitized server-side; never trusted as-is). */
+  evidenceRaw: unknown;
+  /** Server-observed client IP (from Fastify/trustProxy), never a client claim. */
+  ip: string | null;
+}
+
 export async function startMining(input: {
   collections: Collections;
   mongoClient: MongoClient;
-  config: Pick<AppConfig, "mining">;
+  config: Pick<AppConfig, "mining" | "lmdg" | "ipinfoToken" | "ipinfoTimeoutMs" | "proxycheckKey" | "proxycheckTimeoutMs" | "encryptionKey">;
   ownerUserId: string;
   correlationId: string;
+  device?: MiningStartDeviceContext;
 }): Promise<PublicMiningState> {
   const { collections, config } = input;
   if (!config.mining.enabled) {
@@ -218,7 +232,22 @@ export async function startMining(input: {
     if (!config.mining.settlementEnabled) {
       throw serviceUnavailable("mining_settlement_disabled", "Mining settlement is temporarily paused; the finished cycle must be closed before a new one can start.");
     }
-    await settleSession({ collections, mongoClient: input.mongoClient, config, session: active, wallet, walletAccount, correlationId: input.correlationId });
+    const closed = await settleSession({ collections, mongoClient: input.mongoClient, config, session: active, wallet, walletAccount, correlationId: input.correlationId });
+    // An unconfirmed close is a failure, not a success: opening a new cycle now would collide
+    // with the still-active one on the unique index and converge on the old cycle, reporting
+    // "success" for a start that never happened.
+    if (!closed.confirmed) {
+      throw serviceUnavailable("mining_settlement_failed", "The previous cycle could not be closed. Try again.");
+    }
+    const stillActive = await loadActiveSession(collections, input.ownerUserId);
+    if (stillActive) {
+      if (Date.now() < stillActive.endsAt.getTime()) {
+        throw conflict("mining_cycle_active", "A mining cycle is already running for this account.");
+      }
+      // The window is over but the close did not land: fail loudly instead of inserting a cycle
+      // that the unique index would refuse and then converging on the stale one.
+      throw serviceUnavailable("mining_settlement_failed", "The previous cycle could not be closed. Try again.");
+    }
   }
 
   const previous = await collections.miningSessions.findOne(
@@ -229,6 +258,26 @@ export async function startMining(input: {
   const now = new Date();
   const startedAtMs = now.getTime();
   const rateUnits = pickRateUnits(config.mining.rate);
+  // Defense in depth behind the boot-time config validation: never open a cycle whose 24-hour
+  // total cannot be represented exactly or posted through the ledger. A bad rate fails the start
+  // instead of stranding an unsettleable, irreplaceable active cycle on the account.
+  const endsAtMs = startedAtMs + config.mining.cycleDurationSeconds * 1000;
+  const cycleTotalMinor = totalAccrualMinor(
+    { rateUnits, rateScale: config.mining.rate.scale },
+    { startedAtMs, endsAtMs, durationSeconds: config.mining.cycleDurationSeconds },
+  );
+  if (cycleTotalMinor < 1 || cycleTotalMinor > LEDGER_AMOUNT_MAX_MINOR) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: input.ownerUserId,
+      sessionId: null,
+      eventType: "mining_rejected",
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { reason: "rate_total_out_of_range" },
+    }).catch(() => undefined);
+    throw serviceUnavailable("mining_rate_unavailable", "Mining is temporarily unavailable.");
+  }
   const session: Omit<MiningSessionRecord, "_id"> = {
     publicId: randomUUID(),
     ownerUserId: input.ownerUserId,
@@ -237,7 +286,7 @@ export async function startMining(input: {
     status: "active",
     cycleNumber: (previous?.cycleNumber ?? 0) + 1,
     startedAt: now,
-    endsAt: new Date(startedAtMs + config.mining.cycleDurationSeconds * 1000),
+    endsAt: new Date(endsAtMs),
     durationSeconds: config.mining.cycleDurationSeconds,
     rateUnits,
     rateScale: config.mining.rate.scale,
@@ -251,13 +300,158 @@ export async function startMining(input: {
     updatedAt: now,
   };
 
-  try {
-    await collections.miningSessions.insertOne({ _id: new ObjectId(), ...session } as MiningSessionRecord);
-  } catch (error) {
-    // A concurrent start won the one-active index. That is the API working as designed: converge on
-    // the cycle that exists rather than surfacing a duplicate-key fault to the customer.
-    if (isDuplicateKeyError(error)) return getMiningState({ collections, config, ownerUserId: input.ownerUserId });
-    throw error;
+  // LMDG admission control: resolve the device cluster and enforce one active lease per device.
+  //
+  // While the guard is enabled a start MUST carry device evidence. Accepting an evidence-less body
+  // as "legacy" would make the one-cycle-per-device rule optional for anyone who omits the field —
+  // i.e. the first thing an abuser would do — so a start without evidence is refused instead.
+  // `LMDG_ENABLED=false` remains the operational escape hatch.
+  const deviceLeaseEnabled = config.lmdg?.enabled === true && config.lmdg?.leaseEnabled === true;
+  if (deviceLeaseEnabled && input.device === undefined) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: input.ownerUserId,
+      sessionId: null,
+      eventType: "mining_device_evidence_missing",
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { reason: "device_evidence_absent" },
+    }).catch(() => undefined);
+    throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
+  }
+  // The device identities this start leases (the resolved device's key hash, plus its exact
+  // duplicates). A racing start cannot take a duplicate row and open a second cycle on one machine.
+  let leaseKeys: string[] = [];
+  if (deviceLeaseEnabled && input.device) {
+    const guard = await import("../mining-device/service.js");
+    const intel = await guard.resolveIpIntel({ config, ip: input.device.ip });
+    const resolution = await guard.resolveOrCreateDevice({
+      collections,
+      config,
+      evidenceRaw: input.device.evidenceRaw,
+      ip: input.device.ip,
+      intel,
+      ownerUserId: input.ownerUserId,
+      correlationId: input.correlationId,
+    });
+    // Leases this account already holds on this machine's identities.
+    const leaseNowMs = Date.now();
+    const ownLeases = await collections.miningDeviceLeases
+      .find({ deviceClusterId: { $in: resolution.equivalentLeaseKeys }, status: "active", ownerUserId: input.ownerUserId })
+      .toArray();
+    if (ownLeases.length > 0) {
+      // A cycle that is still running on this machine keeps its lease: the account converges on it
+      // instead of opening a second one. The check is a fresh, clock-bounded query rather than the
+      // earlier read, so a start that was in flight while this one ran is still respected.
+      const runningLeases = await collections.miningSessions.countDocuments({
+        ownerUserId: input.ownerUserId,
+        status: "active",
+        endsAt: { $gt: new Date(leaseNowMs) },
+      });
+      if (runningLeases > 0) return getMiningState({ collections, config, ownerUserId: input.ownerUserId });
+      // Nothing is running on this machine for this account, so these rows are leftovers: an expired
+      // cycle's lease, or a lease an earlier build took on the browser key. They are released because
+      // the partial unique index refuses a new lease while a row is still marked active — which is
+      // what lets the account mine again on its own device, and never frees a machine mid-cycle.
+      await collections.miningDeviceLeases.updateMany(
+        { _id: { $in: ownLeases.map((lease) => lease._id) } },
+        { $set: { status: "released", updatedAt: new Date(leaseNowMs) } },
+      );
+    }
+    const eligibility = await guard.assessMiningStart({
+      collections,
+      config,
+      ownerUserId: input.ownerUserId,
+      resolution,
+      correlationId: input.correlationId,
+      ip: input.device ? input.device.ip : null,
+      intel,
+    });
+    if (config.lmdg.riskMode !== "monitor") {
+      if (eligibility.decision === "deny") {
+        if (eligibility.reasonCode === "device_lease_active" || eligibility.reasonCode === "device_cluster_lease_ambiguous") {
+          await recordSecurityEvent({
+            collections,
+            ownerUserId: input.ownerUserId,
+            sessionId: null,
+            eventType: "mining_device_rejected",
+            outcome: "failure",
+            correlationId: input.correlationId,
+            metadata: { reason: eligibility.reasonCode },
+          }).catch(() => undefined);
+          throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
+        }
+        throw forbidden("mining_device_rejected", DEVICE_IN_USE_MESSAGE);
+      }
+      if (eligibility.decision === "challenge") {
+        throw conflict("mining_device_challenge_required", "Additional device verification is required before mining can start.");
+      }
+      leaseKeys = eligibility.equivalentLeaseKeys;
+    } else {
+      // Rollout mode: a conflict is audited above and never enforced — including the lease it would
+      // otherwise have taken, which is the whole point of running in monitor. Enforce mode (the
+      // configured mode in this deployment) is the one that takes the lease and therefore refuses.
+      leaseKeys = eligibility.decision === "deny" ? [] : eligibility.equivalentLeaseKeys;
+    }
+  }
+
+  if (leaseKeys.length > 0) {
+    // Atomic commit: the cycle and its device lease land together or not at all. The partial
+    // unique index on active leases is the concurrency lock — two accounts racing on one device
+    // cannot both insert; the loser maps to the dedicated rejection code below.
+    const guard = await import("../mining-device/service.js");
+    const mongoSession: ClientSession = input.mongoClient.startSession();
+    try {
+      await mongoSession.withTransaction(
+        async () => {
+          await collections.miningSessions.insertOne({ _id: new ObjectId(), ...session } as MiningSessionRecord, { session: mongoSession });
+          await guard.insertLeaseInSession({
+            collections,
+            leaseKeys,
+            ownerUserId: input.ownerUserId,
+            miningSessionId: session.publicId,
+            leaseEndsAt: session.endsAt,
+            mongoSession,
+          });
+        },
+        { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } },
+      );
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        // Distinguish the loser's cause: a lease conflict means another account holds this
+        // device; otherwise it was this account's own concurrent start converging.
+        const lease = await collections.miningDeviceLeases.findOne({ deviceClusterId: { $in: leaseKeys }, status: "active" });
+        if (lease && lease.ownerUserId !== input.ownerUserId && lease.leaseEndsAt.getTime() > Date.now()) {
+          throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
+        }
+        const converged = await getMiningState({ collections, config, ownerUserId: input.ownerUserId });
+        // A duplicate that leaves the account with no running cycle means the start did not land and
+        // nothing else produced a cycle for it: report a retryable failure instead of the 200 the
+        // customer would read as "mining started" when it never did.
+        if (converged.status !== "active") {
+          throw serviceUnavailable("mining_start_failed", "Mining could not start. Try again.");
+        }
+        return converged;
+      }
+      throw error;
+    } finally {
+      await mongoSession.endSession();
+    }
+  } else {
+    try {
+      await collections.miningSessions.insertOne({ _id: new ObjectId(), ...session } as MiningSessionRecord);
+    } catch (error) {
+      // A concurrent start won the one-active index. That is the API working as designed: converge on
+      // the cycle that exists rather than surfacing a duplicate-key fault to the customer.
+      if (isDuplicateKeyError(error)) {
+        const converged = await getMiningState({ collections, config, ownerUserId: input.ownerUserId });
+        if (converged.status !== "active") {
+          throw serviceUnavailable("mining_start_failed", "Mining could not start. Try again.");
+        }
+        return converged;
+      }
+      throw error;
+    }
   }
 
   await recordSecurityEvent({
@@ -283,9 +477,9 @@ export async function startMining(input: {
  * clamped to the window, even an unbounded number of retries can never credit more than the 24-hour
  * accrual.
  */
-async function settleSession(input: MiningSettlementInput): Promise<{ postedMinor: number; session: MiningSessionRecord }> {
+async function settleSession(input: MiningSettlementInput): Promise<{ postedMinor: number; session: MiningSessionRecord; confirmed: boolean }> {
   const { collections, config } = input;
-  if (!config.mining.settlementEnabled) return { postedMinor: 0, session: input.session };
+  if (!config.mining.settlementEnabled) return { postedMinor: 0, session: input.session, confirmed: true };
 
   let current = input.session;
   for (let attempt = 1; attempt <= MAX_SETTLE_ATTEMPTS; attempt += 1) {
@@ -316,9 +510,21 @@ async function settleSession(input: MiningSettlementInput): Promise<{ postedMino
             correlationId: input.correlationId,
             metadata: { sessionId: current.publicId, settledMinor: current.settledMinor },
           }).catch(() => undefined);
+          const reloaded = await collections.miningSessions.findOne({ _id: current._id });
+          return { postedMinor: 0, session: reloaded ?? current, confirmed: true };
         }
+        // Lost the close race: re-read and re-decide instead of reporting a close that never
+        // landed — the winner's write is the one that counts.
+        const reloaded = await collections.miningSessions.findOne({ _id: current._id });
+        if (!reloaded) return { postedMinor: 0, session: current, confirmed: false };
+        current = reloaded;
+        if (attempt < MAX_SETTLE_ATTEMPTS) {
+          await sleep(RETRY_BACKOFF_BASE_MS * 2 ** (attempt - 1));
+          continue;
+        }
+        return { postedMinor: 0, session: current, confirmed: false };
       }
-      return { postedMinor: 0, session: current };
+      return { postedMinor: 0, session: current, confirmed: true };
     }
 
     const delta = accrued - current.settledMinor;
@@ -434,20 +640,30 @@ async function settleSession(input: MiningSettlementInput): Promise<{ postedMino
       );
 
       const updated = await collections.miningSessions.findOne({ _id: current._id });
-      return { postedMinor: delta, session: updated ?? current };
+      return { postedMinor: delta, session: updated ?? current, confirmed: true };
     } catch (error) {
       // A lost race, a transient fault, or an ambiguous commit all mean the same thing here: re-read
       // the cycle and decide again. The compare-and-set makes re-deciding safe — a reward already
       // posted is never posted twice.
       if (error instanceof ConcurrentSettlementError || isDuplicateKeyError(error) || isTransientTransactionError(error)) {
         const reloaded = await collections.miningSessions.findOne({ _id: current._id });
-        if (!reloaded) return { postedMinor: 0, session: current };
+        if (!reloaded) return { postedMinor: 0, session: current, confirmed: false };
         current = reloaded;
         if (attempt < MAX_SETTLE_ATTEMPTS) {
           await sleep(RETRY_BACKOFF_BASE_MS * 2 ** (attempt - 1));
           continue;
         }
-        return { postedMinor: 0, session: current };
+        // Retries exhausted with the outcome still uncertain: report failure, never success.
+        await recordSecurityEvent({
+          collections,
+          ownerUserId: current.ownerUserId,
+          sessionId: null,
+          eventType: "mining_settlement_unconfirmed",
+          outcome: "failure",
+          correlationId: input.correlationId,
+          metadata: { sessionId: current.publicId },
+        }).catch(() => undefined);
+        return { postedMinor: 0, session: current, confirmed: false };
       }
       throw error;
     } finally {
@@ -455,7 +671,7 @@ async function settleSession(input: MiningSettlementInput): Promise<{ postedMino
     }
   }
 
-  return { postedMinor: 0, session: current };
+  return { postedMinor: 0, session: current, confirmed: false };
 }
 
 /** Explicit settlement for the account's running cycle. Idempotent: nothing to post means no write. */
@@ -476,7 +692,10 @@ export async function settleMining(input: {
   const active = await loadActiveSession(collections, input.ownerUserId);
   if (active) {
     const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
-    await settleSession({ collections, mongoClient: input.mongoClient, config, session: active, wallet, walletAccount, correlationId: input.correlationId });
+    const result = await settleSession({ collections, mongoClient: input.mongoClient, config, session: active, wallet, walletAccount, correlationId: input.correlationId });
+    if (!result.confirmed) {
+      throw serviceUnavailable("mining_settlement_failed", "The reward could not be confirmed. Try again.");
+    }
   }
   return getMiningState({ collections, config, ownerUserId: input.ownerUserId });
 }
@@ -497,12 +716,12 @@ export async function settleMiningForOwner(input: {
   wallet: WalletRecord;
   walletAccount: LedgerAccountRecord;
   correlationId: string;
-}): Promise<{ postedMinor: number }> {
+}): Promise<{ postedMinor: number; confirmed: boolean }> {
   const { collections, config } = input;
-  if (!config.mining.enabled || !config.mining.settlementEnabled) return { postedMinor: 0 };
+  if (!config.mining.enabled || !config.mining.settlementEnabled) return { postedMinor: 0, confirmed: true };
 
   const active = await loadActiveSession(collections, input.ownerUserId);
-  if (!active) return { postedMinor: 0 };
+  if (!active) return { postedMinor: 0, confirmed: true };
 
   const nowMs = Date.now();
   const accrued = accruedMinorFor({
@@ -514,7 +733,7 @@ export async function settleMiningForOwner(input: {
     nowMs,
   });
   const closedButUnmarked = nowMs >= active.endsAt.getTime() && active.status !== "settled";
-  if (accrued <= active.settledMinor && !closedButUnmarked) return { postedMinor: 0 };
+  if (accrued <= active.settledMinor && !closedButUnmarked) return { postedMinor: 0, confirmed: true };
 
   const result = await settleSession({
     collections,
@@ -525,7 +744,9 @@ export async function settleMiningForOwner(input: {
     walletAccount: input.walletAccount,
     correlationId: input.correlationId,
   });
-  return { postedMinor: result.postedMinor };
+  // The transfer path ignores `confirmed`: a side-effect accrual that cannot be confirmed must not
+  // fail the user's transfer, and the transfer itself reports only its own outcome.
+  return { postedMinor: result.postedMinor, confirmed: result.confirmed };
 }
 
 const MAX_PAGE_SIZE = 50;

@@ -339,6 +339,116 @@ export interface PublicMiningState {
   session: PublicMiningSession | null;
 }
 
+/**
+ * Louma Mining Device Guard (LMDG): server-side device identity for the mining feature.
+ *
+ * Honest scope: this is multi-signal correlation + proof-of-possession, not a cryptographically
+ * guaranteed physical-machine identity. A browser cannot provide that across profiles/VMs/private
+ * windows, and FingerprintJS output is spoofable evidence — never the decision by itself.
+ */
+export type MiningDeviceStatus = "active" | "quarantined" | "blocked";
+
+/**
+ * Learned, bounded feature history for one device: per feature key, the last few keyed digests
+ * (most recent last) plus how often it was observed.
+ *
+ * Values are keyed digests, never raw fingerprint data, and the ring is bounded (see
+ * MAX_FEATURE_VALUES in mining-device/identity.ts) so a hostile client cannot grow the document.
+ * Keeping a small history is what lets a device with one drifting field (a browser update, a driver
+ * update) still compare as the same machine instead of forking into a new identity.
+ */
+export interface MiningDeviceFeatureProfile {
+  [featureKey: string]: { digests: string[]; count: number };
+}
+
+export interface MiningDeviceRecord {
+  _id: ObjectId;
+  publicId: string;
+  /**
+   * HMAC(secret, browser public key) when a key is registered, else HMAC(secret, signature).
+   * Identifies the *browser*: it changes with a profile, a private window or cleared storage.
+   */
+  deviceKeyHash: string;
+  /**
+   * HMAC over the machine traits only (CPU and memory class, display scale and colour depth,
+   * capture devices, audio device, display gamut, installed fonts, codec set). Identifies the
+   * *computer and its operating system*: two browsers on one machine produce the same value, and a
+   * user-agent change or a new browser profile does not move it. It is what a mining lease is taken
+   * on. Null when the client reported too few machine traits for the key to mean anything.
+   */
+  machineKeyHash: string | null;
+  browserKeyPublicKey: string | null;
+  fingerprintVisitorIdHash: string | null;
+  fingerprintVersion: string | null;
+  fingerprintConfidence: number | null;
+  normalizedSignalHash: string | null;
+  osFamily: string | null;
+  browserFamily: string | null;
+  platform: string | null;
+  screenClass: string | null;
+  timezone: string | null;
+  languageClass: string | null;
+  webglFingerprintHash: string | null;
+  hardwareConcurrencyBucket: number | null;
+  deviceMemoryBucket: number | null;
+  /** Latest normalized observation, mirroring the columns above, as one comparable snapshot. */
+  featureSnapshot: Record<string, string> | null;
+  /** Learned digest history per feature; the correlation primitive. Null on records from before it existed. */
+  featureProfile: MiningDeviceFeatureProfile | null;
+  /** The same history, restricted to the machine traits that form `machineKeyHash`. */
+  machineFeatureProfile: MiningDeviceFeatureProfile | null;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  lastIpHash: string | null;
+  lastAsn: string | null;
+  lastCountry: string | null;
+  status: MiningDeviceStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type MiningDeviceLeaseStatus = "active" | "released";
+
+/**
+ * One mining-cycle device lease. Validity is derived from the clock
+ * (`serverNow < leaseEndsAt`): no timers, no jobs. An expired row is simply not active.
+ */
+export interface MiningDeviceLeaseRecord {
+  _id: ObjectId;
+  publicId: string;
+  deviceClusterId: string;
+  ownerUserId: string;
+  miningSessionId: string;
+  leasedAt: Date;
+  leaseEndsAt: Date;
+  status: MiningDeviceLeaseStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MiningDeviceNonceRecord {
+  _id: ObjectId;
+  publicId: string;
+  ownerUserId: string;
+  deviceKeyHash: string | null;
+  nonce: string;
+  issuedAt: Date;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
+
+export interface MiningDeviceObservationRecord {
+  _id: ObjectId;
+  deviceId: string;
+  ownerUserId: string;
+  observedAt: Date;
+  ipHash: string | null;
+  asn: string | null;
+  country: string | null;
+  riskScore: number;
+  decision: string;
+}
+
 export interface NotificationRecord {
   _id: ObjectId;
   ownerUserId: string;

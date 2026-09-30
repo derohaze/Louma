@@ -854,27 +854,33 @@ test("a custom address replaces the receiving address, stays unique, and is lock
   const generatedAddress = owner.address;
   assert.match(generatedAddress, /^LMA(-[A-Z0-9]{4}){3}$/);
 
+  // Handles are unique platform-wide against every account that has ever claimed one, including real
+  // accounts on this shared cluster. A hardcoded handle would collide the moment a person takes it,
+  // so this run claims one of its own.
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+  const handle = `louma_pocket_${suffix}`;
+
   // The handle rules are enforced before anything is written.
   for (const invalid of ["ab", "a".repeat(25), "no spaces", "dash-handle"]) {
     const refused = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: invalid } });
     assert.equal(refused.status, 400, `${JSON.stringify(invalid)} is refused`);
   }
 
-  const changed = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: "@Louma_Pocket" } });
+  const changed = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: `@${handle}` } });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
   const wallet = changed.body["wallet"] as Record<string, unknown>;
-  assert.equal(wallet["address"], "@louma_pocket", "the handle is normalised: lowercase, without the @ prefix");
-  assert.equal(wallet["customAddress"], "@louma_pocket");
+  assert.equal(wallet["address"], handle, "the handle is normalised: lowercase, without the @ prefix");
+  assert.equal(wallet["customAddress"], `@${handle}`);
   assert.ok(typeof wallet["customAddressChangedAt"] === "string", "the cooldown clock starts when it changes");
 
   // Handles are unique platform-wide, whatever case they were typed in.
-  const taken = await call("PATCH", "/api/v1/wallet/custom-address", { token: other.accessToken, body: { address: "LOUMA_POCKET" } });
+  const taken = await call("PATCH", "/api/v1/wallet/custom-address", { token: other.accessToken, body: { address: handle.toUpperCase() } });
   assert.equal(taken.status, 409, JSON.stringify(taken.body));
   assert.equal((taken.body["error"] as Record<string, unknown>)["code"], "address_unavailable");
 
   // Both the new handle and the original generated address keep resolving as recipients.
   await fund(other, FUNDING_MINOR);
-  assert.equal((await transfer("@Louma_Pocket", "1.0000", other.accessToken)).status, 201);
+  assert.equal((await transfer(`@${handle}`, "1.0000", other.accessToken)).status, 201);
   assert.equal((await transfer(generatedAddress, "1.0000", other.accessToken)).status, 201);
   assert.equal(await balanceOf(owner), "1.9800", "each transfer credits 1.0000 less the 1% fee");
 
@@ -883,7 +889,7 @@ test("a custom address replaces the receiving address, stays unique, and is lock
   assert.equal(cooldown.status, 409, JSON.stringify(cooldown.body));
   assert.equal((cooldown.body["error"] as Record<string, unknown>)["code"], "address_change_cooldown");
   const unchanged = (await call("GET", "/api/v1/wallet", { token: owner.accessToken })).body["wallet"] as Record<string, unknown>;
-  assert.equal(unchanged["address"], "@louma_pocket");
+  assert.equal(unchanged["address"], `@${handle}`);
   assert.equal(unchanged["customAddressChangedAt"], wallet["customAddressChangedAt"]);
 
   await assertLedgerConsistency();

@@ -1,3 +1,5 @@
+import { LEDGER_AMOUNT_MAX_MINOR, MONEY_SCALE } from "../shared/types.js";
+
 export type RuntimeEnvironment = "development" | "test" | "production";
 export type CookieSameSite = "lax" | "strict" | "none";
 export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
@@ -27,6 +29,21 @@ export interface MiningConfig {
   /** The product allows one live cycle per account; the database enforces it as well. */
   maxActiveCyclesPerUser: number;
   rate: MiningRateSpec;
+}
+
+export type LmdgRiskMode = "monitor" | "challenge" | "enforce";
+
+export interface LmdgConfig {
+  enabled: boolean;
+  leaseEnabled: boolean;
+  highConfidenceThreshold: number;
+  ambiguousThreshold: number;
+  observationTtlSeconds: number;
+  ipIntelTtlSeconds: number;
+  browserKeyRequired: boolean;
+  riskMode: LmdgRiskMode;
+  challengeTtlSeconds: number;
+  nonceTtlSeconds: number;
 }
 
 export interface AppConfig {
@@ -64,6 +81,18 @@ export interface AppConfig {
   ipinfoToken: string | null;
   ipinfoTimeoutMs: number;
   /**
+   * proxycheck.io key for MINING-path IP intelligence only (VPN/proxy/Tor/hosting + ASN/country).
+   * Signup geolocation stays on ipinfo. Null disables the lookup; LMDG degrades to cached or
+   * unknown network signals and mining keeps working.
+   */
+  proxycheckKey: string | null;
+  proxycheckTimeoutMs: number;
+  /**
+   * Reserved for proxycheck callback payload verification if that integration is ever enabled.
+   * Stored, never logged, currently unused by the pull queries LMDG performs.
+   */
+  proxycheckHmacKey: string | null;
+  /**
    * The proxies whose `X-Forwarded-*` headers may be believed, by address or CIDR, or false when the
    * API terminates connections itself. A trusted *proxy*, never "any": believing every hop lets a
    * client prepend an address to `X-Forwarded-For` and choose the one the API stores at registration
@@ -71,6 +100,7 @@ export interface AppConfig {
    */
   trustProxy: boolean | string[];
   mining: MiningConfig;
+  lmdg: LmdgConfig;
 }
 
 function required(name: string, values: NodeJS.ProcessEnv): string {
@@ -217,13 +247,48 @@ function loadMiningConfig(values: NodeJS.ProcessEnv): MiningConfig {
   if (minUnits > maxUnits) {
     throw new Error("MINING_RATE_MIN_LMA_PER_HOUR must not exceed MINING_RATE_MAX_LMA_PER_HOUR");
   }
+  // The hourly rate alone is not the bound that matters: a settlement posts up to the FULL 24-hour
+  // accrual in ledger lines, and every money integer must stay inside the exact-integer range.
+  // Without this check an operator could configure a rate whose daily total overflows safe-integer
+  // arithmetic — creating cycles that can never settle and can never be replaced while active.
+  const scale = 10 ** decimals;
+  const maxTotalMinor = (BigInt(maxUnits) * BigInt(MONEY_SCALE) * BigInt(MINING_CYCLE_SECONDS)) / (BigInt(scale) * 3600n);
+  if (maxTotalMinor < 1n || maxTotalMinor > BigInt(LEDGER_AMOUNT_MAX_MINOR)) {
+    throw new Error("MINING_RATE_MAX_LMA_PER_HOUR is too large: its 24-hour total must fit in one ledger movement");
+  }
 
   return {
     enabled,
     settlementEnabled,
     cycleDurationSeconds,
     maxActiveCyclesPerUser,
-    rate: { minUnits, maxUnits, scale: 10 ** decimals, decimals },
+    rate: { minUnits, maxUnits, scale, decimals },
+  };
+}
+
+function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
+  const enabled = booleanFlag("LMDG_ENABLED", values["LMDG_ENABLED"], true);
+  const leaseEnabled = booleanFlag("LMDG_DEVICE_LEASE_ENABLED", values["LMDG_DEVICE_LEASE_ENABLED"], true);
+  const high = Number(values["LMDG_HIGH_CONFIDENCE_MATCH_THRESHOLD"] ?? "78");
+  const ambiguous = Number(values["LMDG_AMBIGUOUS_MATCH_THRESHOLD"] ?? "55");
+  if (!Number.isFinite(high) || high < 50 || high > 100) throw new Error("LMDG_HIGH_CONFIDENCE_MATCH_THRESHOLD must be 50..100");
+  if (!Number.isFinite(ambiguous) || ambiguous < 20 || ambiguous >= high) throw new Error("LMDG_AMBIGUOUS_MATCH_THRESHOLD must be 20..high-1");
+  const observationTtlSeconds = positiveInteger("LMDG_DEVICE_OBSERVATION_TTL_SECONDS", values["LMDG_DEVICE_OBSERVATION_TTL_SECONDS"] ?? String(90 * 24 * 60 * 60), 3600);
+  const ipIntelTtlSeconds = positiveInteger("LMDG_IP_INTELLIGENCE_TTL_SECONDS", values["LMDG_IP_INTELLIGENCE_TTL_SECONDS"] ?? String(24 * 60 * 60), 300);
+  const browserKeyRequired = booleanFlag("LMDG_BROWSER_KEY_REQUIRED", values["LMDG_BROWSER_KEY_REQUIRED"], false);
+  const rawMode = (values["LMDG_RISK_MODE"] ?? "enforce").trim();
+  if (rawMode !== "monitor" && rawMode !== "challenge" && rawMode !== "enforce") throw new Error("LMDG_RISK_MODE must be monitor, challenge, or enforce");
+  return {
+    enabled,
+    leaseEnabled,
+    highConfidenceThreshold: high,
+    ambiguousThreshold: ambiguous,
+    observationTtlSeconds,
+    ipIntelTtlSeconds,
+    browserKeyRequired,
+    riskMode: rawMode,
+    challengeTtlSeconds: positiveInteger("LMDG_CHALLENGE_TTL_SECONDS", values["LMDG_CHALLENGE_TTL_SECONDS"] ?? "300", 60),
+    nonceTtlSeconds: positiveInteger("LMDG_NONCE_TTL_SECONDS", values["LMDG_NONCE_TTL_SECONDS"] ?? "300", 60),
   };
 }
 
@@ -281,7 +346,11 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     retentionTtlEnabled: (values["RETENTION_TTL_ENABLED"] ?? "false").trim() === "true",
     ipinfoToken: optionalString("IPINFO_TOKEN", values),
     ipinfoTimeoutMs: positiveInteger("IPINFO_TIMEOUT_MS", values["IPINFO_TIMEOUT_MS"] ?? "2500"),
+    proxycheckKey: optionalString("PROXYCHECK_KEY", values),
+    proxycheckTimeoutMs: positiveInteger("PROXYCHECK_TIMEOUT_MS", values["PROXYCHECK_TIMEOUT_MS"] ?? "2500"),
+    proxycheckHmacKey: optionalString("PROXYCHECK_HMAC_KEY", values),
     trustProxy: parseTrustedProxies("TRUST_PROXY", values),
     mining: loadMiningConfig(values),
+    lmdg: loadLmdgConfig(values),
   };
 }

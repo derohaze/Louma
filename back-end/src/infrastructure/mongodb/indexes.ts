@@ -155,6 +155,67 @@ const schemas: Record<string, Document> = {
       },
     },
   },
+  mining_devices: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["publicId", "deviceKeyHash", "firstSeenAt", "lastSeenAt", "status", "createdAt", "updatedAt"],
+      properties: {
+        publicId: { bsonType: "string" },
+        deviceKeyHash: { bsonType: "string" },
+        browserKeyPublicKey: { bsonType: ["string", "null"] },
+        fingerprintVisitorIdHash: { bsonType: ["string", "null"] },
+        normalizedSignalHash: { bsonType: ["string", "null"] },
+        status: { enum: ["active", "quarantined", "blocked"] },
+        firstSeenAt: { bsonType: "date" },
+        lastSeenAt: { bsonType: "date" },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+  mining_device_leases: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["publicId", "deviceClusterId", "ownerUserId", "miningSessionId", "leasedAt", "leaseEndsAt", "status", "createdAt", "updatedAt"],
+      properties: {
+        publicId: { bsonType: "string" },
+        deviceClusterId: { bsonType: "string" },
+        ownerUserId: { bsonType: "string" },
+        miningSessionId: { bsonType: "string" },
+        leasedAt: { bsonType: "date" },
+        leaseEndsAt: { bsonType: "date" },
+        status: { enum: ["active", "released"] },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+  mining_device_nonces: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["publicId", "ownerUserId", "nonce", "issuedAt", "expiresAt", "consumedAt"],
+      properties: {
+        publicId: { bsonType: "string" },
+        ownerUserId: { bsonType: "string" },
+        nonce: { bsonType: "string" },
+        issuedAt: { bsonType: "date" },
+        expiresAt: { bsonType: "date" },
+      },
+    },
+  },
+  mining_device_observations: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["deviceId", "ownerUserId", "observedAt", "riskScore", "decision"],
+      properties: {
+        deviceId: { bsonType: "string" },
+        ownerUserId: { bsonType: "string" },
+        observedAt: { bsonType: "date" },
+        riskScore: { bsonType: "number" },
+        decision: { bsonType: "string" },
+      },
+    },
+  },
   mining_settlements: {
     $jsonSchema: {
       bsonType: "object",
@@ -303,6 +364,11 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
 
   for (const [name, validator] of Object.entries(schemas)) await ensureCollection(db, name, validator);
 
+  // A database created by an earlier release holds the unique form of the session index, which
+  // cannot coexist with a lease per device identity (see the plain index below). It is removed
+  // before the batch so no index build races the drop on the same collection.
+  await dropIndexIfExists(db, "mining_device_leases", "mining_device_leases_session_unique");
+
   await Promise.all([
     db.collection("users").createIndex({ publicId: 1 }, { unique: true, name: "users_public_id_unique" }),
     db.collection("users").createIndex({ email: 1 }, { unique: true, name: "users_email_unique" }),
@@ -352,6 +418,24 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("mining_settlements").createIndex({ sessionPublicId: 1, sequenceNumber: 1 }, { unique: true, name: "mining_settlements_session_sequence_unique" }),
     db.collection("mining_settlements").createIndex({ idempotencyKey: 1 }, { unique: true, name: "mining_settlements_idempotency_unique" }),
     db.collection("mining_settlements").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "mining_settlements_owner_history" }),
+    db.collection("mining_devices").createIndex({ publicId: 1 }, { unique: true, name: "mining_devices_public_id_unique" }),
+    db.collection("mining_devices").createIndex({ deviceKeyHash: 1 }, { name: "mining_devices_key_hash" }),
+    db.collection("mining_devices").createIndex({ normalizedSignalHash: 1 }, { name: "mining_devices_signal_hash" }),
+    db.collection("mining_devices").createIndex({ lastSeenAt: -1 }, { name: "mining_devices_last_seen" }),
+    db.collection("mining_devices").createIndex({ status: 1, lastSeenAt: -1 }, { name: "mining_devices_status_seen" }),
+    // One active lease per device cluster: the database guarantee behind "one device, one cycle".
+    db.collection("mining_device_leases").createIndex({ deviceClusterId: 1 }, { unique: true, partialFilterExpression: { status: "active" }, name: "mining_device_leases_one_active_per_device" }),
+    db.collection("mining_device_leases").createIndex({ ownerUserId: 1, status: 1 }, { name: "mining_device_leases_owner_active" }),
+    db.collection("mining_device_leases").createIndex({ deviceClusterId: 1, leaseEndsAt: -1 }, { name: "mining_device_leases_device_ends" }),
+    // Deliberately NOT unique: one cycle leases every identity its machine is known by (the machine
+    // key plus the browser key, and any duplicate record), so one session owns several rows. The
+    // uniqueness that matters is one *active lease per device identity*, which is the index above.
+    // A unique index here contradicts the multi-identity lease and made every multi-key start abort.
+    db.collection("mining_device_leases").createIndex({ miningSessionId: 1 }, { name: "mining_device_leases_session" }),
+    db.collection("mining_device_nonces").createIndex({ nonce: 1 }, { unique: true, name: "mining_device_nonces_unique" }),
+    db.collection("mining_device_nonces").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_device_nonces_ttl" }),
+    db.collection("mining_device_observations").createIndex({ deviceId: 1, observedAt: -1 }, { name: "mining_device_observations_device_time" }),
+    db.collection("mining_device_observations").createIndex({ ownerUserId: 1, observedAt: -1 }, { name: "mining_device_observations_owner_time" }),
   ]);
 
   if (options.retentionTtlEnabled) {

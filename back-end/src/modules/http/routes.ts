@@ -7,6 +7,7 @@ import * as security from "../security/service.js";
 import * as wallets from "../wallets/service.js";
 import * as transfers from "../transfers/service.js";
 import * as mining from "../mining/service.js";
+import * as deviceGuard from "../mining-device/service.js";
 import {
   ensureNotificationWatcher,
   NOTIFICATION_HEARTBEAT_FRAME,
@@ -259,8 +260,57 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     mining.getMiningState({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }),
   );
 
-  app.post("/api/v1/mining/start", { ...authenticated, config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, async (request) =>
-    mining.startMining({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ownerUserId: getAuth(request).userId, correlationId: request.id }),
+  app.post("/api/v1/mining/start", { ...authenticated, config: { rateLimit: { max: 10, timeWindow: 60_000 } }, schema: authBody(z.object({ device: z.unknown().optional() }).loose()) }, async (request) => {
+    // Device evidence is optional: old clients and existing tests keep working, and the
+    // per-account unique index still applies. When present it is sanitized server-side and
+    // enforced through the LMDG lease — the server stays authoritative, never the client.
+    const body = (request.body ?? {}) as { device?: unknown };
+    const current = getAuth(request);
+    return mining.startMining({
+      collections: app.collections,
+      mongoClient: app.mongoClient,
+      config: app.config,
+      ownerUserId: current.userId,
+      correlationId: request.id,
+      ...(body.device === undefined ? {} : { device: { evidenceRaw: body.device, ip: request.ip.slice(0, 45) } }),
+    });
+  });
+
+  /**
+   * LMDG device endpoints. None of them exposes another account, an IP, a fingerprint, or a risk
+   * score — only this account's own lease state and its own challenge nonces.
+   */
+  app.post("/api/v1/mining/device/challenge", { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 3_600_000 } } }, async (request) => {
+    const current = getAuth(request);
+    const body = parseBody(z.object({ deviceKeyHash: z.string().max(128).optional() }).strict(), request.body ?? {});
+    return deviceGuard.issueChallenge({
+      collections: app.collections,
+      config: app.config,
+      ownerUserId: current.userId,
+      deviceKeyHash: body.deviceKeyHash ?? null,
+      correlationId: request.id,
+    });
+  });
+
+  app.post("/api/v1/mining/device/prove", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 3_600_000 } } }, async (request) => {
+    const current = getAuth(request);
+    const body = parseBody(
+      z.object({ nonce: z.string().min(16).max(128), signature: z.string().min(16).max(2048), publicKeyJwk: z.record(z.string(), z.unknown()) }).strict(),
+      request.body,
+    );
+    return deviceGuard.verifyProof({
+      collections: app.collections,
+      config: app.config,
+      ownerUserId: current.userId,
+      nonce: body.nonce,
+      signature: body.signature,
+      publicKeyJwk: body.publicKeyJwk,
+      correlationId: request.id,
+    });
+  });
+
+  app.get("/api/v1/mining/device/status", authenticated, async (request) =>
+    deviceGuard.getDeviceStatus({ collections: app.collections, ownerUserId: getAuth(request).userId }),
   );
 
   app.post("/api/v1/mining/settle", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (request) =>

@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  BitcoinCpuIcon,
   ChartIncreaseIcon,
   Coins01Icon,
-  Mining01Icon,
   Timer01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { Loader } from "@/components/ui/loader";
 import { useWallet } from "@/hooks/wallet-context";
+import { toast } from "sonner";
 import { api, messageForError, type ApiMiningSession, type ApiMiningState } from "@/lib/api";
+import {
+  DEVICE_IN_USE_MESSAGE,
+  messageForMiningError,
+  startMiningWithGuard,
+} from "@/lib/device-guard";
 import {
   accountFetchers,
   hasBrowserSession,
@@ -16,7 +23,9 @@ import {
   serverStateKeys,
 } from "@/lib/server-state";
 import { MONEY_SCALE, currency, dateText, moneyFromMinorUnits } from "@/lib/wallet-format";
+import { cn } from "@/lib/utils";
 import { EmptyState, Icon, PageHeader } from "./wallet-shell";
+import { MiningOrb } from "./mining-orb";
 import { FactList, FormMessage, Panel } from "./security-ui";
 
 const SECONDS_PER_HOUR = 3600n;
@@ -57,6 +66,53 @@ function countdown(totalSeconds: number): string {
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
 }
 
+/**
+ * Action button that keeps its exact size while busy: the label stays in
+ * the layout invisibly and the loader overlays it centered, so the button
+ * never shrinks or grows when the text swaps for the spinner. While busy
+ * the button stays fully opaque (no faded disabled look); extra clicks are
+ * ignored by the guard and announced via aria-disabled.
+ */
+function BusyButton({
+  label,
+  icon,
+  busy,
+  onAction,
+  disabled,
+  busyLabel,
+}: {
+  label: string;
+  icon: Parameters<typeof Icon>[0]["icon"];
+  busy: boolean;
+  onAction: () => void;
+  disabled: boolean;
+  busyLabel: string;
+}) {
+  return (
+    <Button
+      onClick={() => {
+        if (!busy) void onAction();
+      }}
+      disabled={!busy && disabled}
+      aria-disabled={busy || disabled || undefined}
+      className="relative"
+    >
+      <span
+        aria-hidden={busy || undefined}
+        className={cn("inline-flex items-center gap-2", busy && "invisible motion-reduce:visible")}
+      >
+        <Icon icon={icon} size={17} />
+        {label}
+      </span>
+      {busy && (
+        <span className="absolute inset-0 grid place-items-center motion-reduce:hidden">
+          <Loader aria-label={busyLabel} />
+        </span>
+      )}
+    </Button>
+  );
+}
+
 export function MiningContent() {
   const { refresh } = useWallet();
   const queryClient = useQueryClient();
@@ -76,7 +132,6 @@ export function MiningContent() {
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const [tick, setTick] = useState(() => Date.now());
   const [busy, setBusy] = useState<"start" | "settle" | null>(null);
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   /** Cycles whose completion the page has already asked to settle, so it asks exactly once each. */
   const settleRequested = useRef<Set<string>>(new Set());
@@ -111,43 +166,62 @@ export function MiningContent() {
     [session, serverNowMs],
   );
 
-  const settle = useCallback(async () => {
+  /**
+   * Settles the running cycle. Returns true only when the server confirmed the write — a refused
+   * or failed request resolves false, so no caller can mistake it for a collected reward.
+   */
+  const settle = useCallback(async (): Promise<boolean> => {
     try {
       setError("");
       await api.post("/api/v1/mining/settle");
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
       // A settlement moves the wallet balance, so the balance shown elsewhere has to be re-read.
       await refresh();
+      return true;
     } catch (cause) {
       setError(messageForError(cause));
+      return false;
     }
   }, [queryClient, refresh]);
 
+  /** Last failed auto-collect per cycle, so a failing request backs off instead of refiring. */
+  const autoSettleFailedAt = useRef<Map<string, number>>(new Map());
+
   /**
-   * A finished cycle collects itself once. It is not polling: this fires when the local countdown
-   * reaches the end of a cycle the server already described, and the server credits only what the
-   * 24-hour window actually accrued.
+   * A finished cycle collects itself once it is confirmed. It is not polling: this fires when the
+   * local countdown reaches the end of a cycle the server already described, and the server
+   * credits only what the 24-hour window actually accrued. The cycle is marked done only after a
+   * confirmed result; a failure records its time and retries after a cooldown, so the reward can
+   * never be stranded by one bad request while the page stays open.
    */
   useEffect(() => {
     if (!session || !live) return;
     if (!live.completed || session.status === "settled") return;
     if (session.settledMinor >= live.accruedMinor) return;
     if (settleRequested.current.has(session.id)) return;
-    settleRequested.current.add(session.id);
-    void settle();
+    const failedAt = autoSettleFailedAt.current.get(session.id) ?? 0;
+    if (Date.now() - failedAt < 30_000) return;
+    void settle().then((ok) => {
+      if (ok) {
+        settleRequested.current.add(session.id);
+        autoSettleFailedAt.current.delete(session.id);
+      } else {
+        autoSettleFailedAt.current.set(session.id, Date.now());
+      }
+    });
   }, [session, live, settle]);
 
+  // LMDG: submits multi-signal device evidence with the start; the server alone decides
+  // eligibility. A rejection names no account, IP, or detection detail — just the device rule.
   const start = async () => {
     setBusy("start");
     setError("");
-    setMessage("");
     try {
-      await api.post("/api/v1/mining/start");
-      setMessage("Mining started. Your rate is locked for the next 24 hours.");
+      await startMiningWithGuard();
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
       await refresh();
     } catch (cause) {
-      setError(messageForError(cause));
+      setError(messageForMiningError(cause, messageForError));
     } finally {
       setBusy(null);
     }
@@ -156,16 +230,44 @@ export function MiningContent() {
   const collect = async () => {
     setBusy("settle");
     setError("");
-    setMessage("");
+    const settledBefore = session?.settledMinor ?? 0;
     try {
-      await settle();
-      setMessage("Reward collected into your wallet.");
+      const ok = await settle();
+      if (!ok) return;
+      // Success is claimed only against fresh server state: the settled total must have advanced
+      // past what this click saw, or already cover everything the window accrued.
+      const fresh = await refetch();
+      const next = fresh.data?.session;
+      if (next && (next.settledMinor > settledBefore || next.settledMinor >= next.accruedMinor)) {
+        toast.success("Reward collected into your wallet.", { position: "top-center" });
+      } else {
+        setError("The reward could not be confirmed yet. Try again.");
+      }
     } finally {
       setBusy(null);
     }
   };
 
-  if (mining.data && !mining.data.enabled) {
+  // A failed read is never "Ready to mine": the account may hold a running cycle, and a Start
+  // pressed on a guessed state would be refused or misleading. The error names the failure and
+  // offers the retry that re-renders this state.
+  if (mining.isError && !mining.data) {
+    return (
+      <>
+        <PageHeader title="Mining" subtitle="Earn LMA by mining a 24-hour cycle." />
+        <EmptyState
+          title="Couldn't load mining state"
+          detail={messageForError(mining.error)}
+          action={<Button onClick={() => void refetch()}>Try again</Button>}
+        />
+      </>
+    );
+  }
+
+  // Mining switched off hides the actions but never an existing cycle: an accrued-but-unsettled
+  // reward stays visible (read-only) until settlement is available again.
+  const actionsEnabled = mining.data?.enabled === true;
+  if (mining.data && !mining.data.enabled && !mining.data.session) {
     return (
       <>
         <PageHeader title="Mining" subtitle="Earn LMA by mining a 24-hour cycle." />
@@ -178,41 +280,59 @@ export function MiningContent() {
   }
 
   const loading = mining.isPending && !mining.data;
+  // A device-guard block replaces the whole Ready card instead of rendering
+  // above it: the message is the verdict, so it owns the card's content.
+  const isDeviceBlocked = !session && error === DEVICE_IN_USE_MESSAGE;
+  const isChecking = !session && busy === "start";
   const rateText = session ? `${session.rate} LMA / hour` : "—";
   const remaining = live?.remainingSeconds ?? session?.remainingSeconds ?? 0;
   const accruedMinor = live?.accruedMinor ?? session?.accruedMinor ?? 0;
   const progressPercent =
     session && live ? Math.min(100, (live.elapsedSeconds / session.durationSeconds) * 100) : 0;
   const needsCollection = session ? session.settledMinor < accruedMinor : false;
+  // Header action follows the same rules as the body: collect while anything is pending, start
+  // the next cycle once the old one is done and the server allows it, nothing while paused.
+  const headerAction =
+    !actionsEnabled || !mining.data ? null : !session ? (
+      <BusyButton
+        label="Start mining"
+        icon={BitcoinCpuIcon}
+        busy={busy === "start"}
+        onAction={start}
+        disabled={busy !== null || loading}
+        busyLabel="Start mining in progress"
+      />
+    ) : session.status === "active" || needsCollection ? (
+      <BusyButton
+        label="Collect reward"
+        icon={Coins01Icon}
+        busy={busy === "settle"}
+        onAction={collect}
+        disabled={busy !== null || !needsCollection}
+        busyLabel="Collecting reward"
+      />
+    ) : mining.data.canStart ? (
+      <BusyButton
+        label="Start next cycle"
+        icon={BitcoinCpuIcon}
+        busy={busy === "start"}
+        onAction={start}
+        disabled={busy !== null}
+        busyLabel="Start mining in progress"
+      />
+    ) : null;
 
   return (
     <>
       <PageHeader
         title="Mining"
         subtitle="A 24-hour cycle at a rate chosen for your account by the server."
-        action={
-          session ? (
-            <Button onClick={() => void collect()} disabled={busy !== null || !needsCollection}>
-              <Icon icon={Coins01Icon} size={17} />
-              {busy === "settle" ? "Collecting…" : "Collect reward"}
-            </Button>
-          ) : (
-            <Button onClick={() => void start()} disabled={busy !== null || loading}>
-              <Icon icon={Mining01Icon} size={17} />
-              {busy === "start" ? "Starting…" : "Start mining"}
-            </Button>
-          )
-        }
+        action={headerAction}
       />
 
-      {error && (
+      {error && !isDeviceBlocked && (
         <div className="mb-4">
           <FormMessage tone="error">{error}</FormMessage>
-        </div>
-      )}
-      {message && (
-        <div className="mb-4">
-          <FormMessage tone="ok">{message}</FormMessage>
         </div>
       )}
 
@@ -223,18 +343,80 @@ export function MiningContent() {
         />
       ) : !session ? (
         <div className="grid gap-4 sm:grid-cols-3">
-          <section className="rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2">
-            <h2 className="font-display font-semibold">Ready to mine</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Start a cycle and the server assigns your rate for the next 24 hours. The rate is
-              drawn per cycle and cannot be changed while the cycle runs.
-            </p>
-            <div className="mt-5">
-              <Button onClick={() => void start()} disabled={busy !== null}>
-                <Icon icon={Mining01Icon} size={17} />
-                {busy === "start" ? "Starting…" : "Start mining"}
-              </Button>
-            </div>
+          <section className="overflow-hidden rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2">
+            {isChecking ? (
+              <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
+                <div>
+                  <h2 className="font-display font-semibold">Running security check</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Verifying this device with the protection system. This takes a few seconds — do
+                    not close the page.
+                  </p>
+                </div>
+                <MiningOrb
+                  state="solving"
+                  size={180}
+                  label="Running device security check"
+                  caption="Checking security…"
+                  captionShimmer
+                />
+              </div>
+            ) : isDeviceBlocked ? (
+              <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
+                <div>
+                  <h2 className="font-display font-semibold">Mining blocked on this device</h2>
+                  <p role="alert" className="mt-2 text-sm text-muted-foreground">
+                    {error}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    This decision comes from the protection system, not from this browser. Mining
+                    will not start on this device until the current cycle ends.
+                  </p>
+                  <div className="mt-4">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setError("");
+                        void refetch();
+                      }}
+                    >
+                      Check again
+                    </Button>
+                  </div>
+                </div>
+                <MiningOrb
+                  state="working"
+                  size={180}
+                  label="Mining blocked on this device"
+                  caption="Blocked"
+                />
+              </div>
+            ) : (
+              <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
+                <div>
+                  <h2 className="font-display font-semibold">Ready to mine</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Start a cycle and the server assigns your rate for the next 24 hours. The rate
+                    is drawn per cycle and cannot be changed while the cycle runs.
+                  </p>
+                  <ul className="mt-4 flex flex-wrap gap-2 text-[11px] font-semibold">
+                    <li className="rounded-full border bg-secondary px-3 py-1 text-secondary-foreground">
+                      24-hour lock
+                    </li>
+                    <li className="rounded-full border bg-secondary px-3 py-1 text-secondary-foreground">
+                      Server-assigned rate
+                    </li>
+                    <li className="rounded-full border bg-secondary px-3 py-1 text-secondary-foreground">
+                      Resumes on any device
+                    </li>
+                  </ul>
+                  <p className="mt-4 text-xs text-muted-foreground">
+                    Use the Start mining action above — the orb shows the idle prospector.
+                  </p>
+                </div>
+                <MiningOrb state="working" size={180} label="Mining prospector idle" />
+              </div>
+            )}
           </section>
           <InfoCard />
         </div>
@@ -257,6 +439,24 @@ export function MiningContent() {
                   {session.status === "active" ? "remaining" : "window closed"}
                 </p>
               </div>
+              <MiningOrb
+                state={session.status === "active" || needsCollection ? "composing" : "shaping"}
+                size={120}
+                label={
+                  needsCollection
+                    ? "Mining reward ready to collect"
+                    : session.status === "active"
+                      ? "Mining cycle hashing"
+                      : "Mining cycle settled"
+                }
+                caption={
+                  needsCollection
+                    ? "Reward ready"
+                    : session.status === "active"
+                      ? "Hashing…"
+                      : "Settled"
+                }
+              />
               <div className="text-end">
                 <p className="text-xs text-muted-foreground">Earned this cycle</p>
                 <p className="mt-1 font-display text-2xl font-bold tabular-nums">
@@ -303,16 +503,34 @@ export function MiningContent() {
 
             {needsCollection && (
               <div className="mt-5">
-                <Button onClick={() => void collect()} disabled={busy !== null}>
-                  <Icon icon={Coins01Icon} size={17} />
-                  {busy === "settle" ? "Collecting…" : "Collect reward"}
-                </Button>
+                <BusyButton
+                  label="Collect reward"
+                  icon={Coins01Icon}
+                  busy={busy === "settle"}
+                  onAction={collect}
+                  disabled={busy !== null}
+                  busyLabel="Collecting reward"
+                />
               </div>
             )}
             {!needsCollection && session.status !== "active" && (
               <p className="mt-5 text-sm text-muted-foreground">
                 This cycle is fully collected. Start a new one to keep mining.
               </p>
+            )}
+            {!actionsEnabled && (
+              <p className="mt-5 text-sm text-muted-foreground">
+                Mining is paused on this network, so actions are unavailable. Your earned reward
+                stays on your account and nothing is lost.
+              </p>
+            )}
+            {actionsEnabled && mining.data?.canStart && session.status !== "active" && (
+              <div className="mt-5">
+                <Button onClick={() => void start()} disabled={busy !== null}>
+                  <Icon icon={BitcoinCpuIcon} size={17} />
+                  {busy === "start" ? "Starting…" : "Start next cycle"}
+                </Button>
+              </div>
             )}
             {!needsCollection && session.status === "active" && (
               <p className="mt-5 text-sm text-muted-foreground">
