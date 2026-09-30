@@ -13,6 +13,16 @@ import { Toaster } from "@/components/ui/sonner";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
+/**
+ * Kept in one place so the preload hint and the stylesheet below can never drift apart.
+ * Loaded non-blocking (see RootShell): a render-blocking font stylesheet turns any slow or
+ * hanging fonts.googleapis.com request into a blank page, which is exactly what a first visit
+ * looks like on a flaky network. `display=swap` already accepts a font swap, so painting first
+ * with system fonts changes nothing visually once the webfonts arrive.
+ */
+const FONT_CSS_URL =
+  "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap";
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -100,10 +110,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap",
-      },
+      // Preload only — the stylesheet itself is applied non-blocking in RootShell below, so a
+      // slow fonts request never holds the first paint hostage.
+      { rel: "preload", as: "style", href: FONT_CSS_URL },
       {
         rel: "icon",
         type: "image/png",
@@ -137,6 +146,19 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
+        {/*
+         * The font stylesheet loads with `media="print"` so it never blocks rendering, then flips
+         * to `all` once fetched (standard non-blocking-CSS pattern). Without this, the browser
+         * waits for fonts.googleapis.com before painting anything.
+         */}
+        <link
+          rel="stylesheet"
+          href={FONT_CSS_URL}
+          media="print"
+          onLoad={(event) => {
+            event.currentTarget.media = "all";
+          }}
+        />
       </head>
       {/*
        * `suppressHydrationWarning`: browser extensions add attributes to <body> before React

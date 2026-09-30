@@ -64,11 +64,17 @@ export function moneyChartValue(value: string | number): number {
 }
 
 function groupedMoneyValue(value: string | number): string {
-  const minor = moneyToMinorUnits(value);
-  const whole = Math.floor(minor / MONEY_SCALE);
-  const fraction = String(minor % MONEY_SCALE).padStart(MONEY_DECIMALS, "0");
+  // Totals from sumMoney() can exceed the safe-integer range, so this parses exactly like the
+  // aggregator instead of going through the range-limited moneyToMinorUnits(): the overview passes
+  // those totals straight into currency(), and throwing here would blank the whole page.
+  const minor = minorUnitsBigInt(value);
+  const scale = BigInt(MONEY_SCALE);
+  // The whole part itself can exceed the safe-integer range, so it is grouped as text rather than
+  // formatted as a Number.
+  const groupedWhole = (minor / scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const fraction = (minor % scale).toString().padStart(MONEY_DECIMALS, "0");
   const visibleFraction = fraction.replace(/0+$/, "").padEnd(2, "0");
-  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(whole)}.${visibleFraction}`;
+  return `${groupedWhole}.${visibleFraction}`;
 }
 
 export const currency = (amount: string | number) => `${groupedMoneyValue(amount)} ${CURRENCY}`;

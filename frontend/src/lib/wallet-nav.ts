@@ -2,6 +2,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
   Home04Icon,
+  Mining01Icon,
   QrCodeIcon,
   Settings01Icon,
   TransactionHistoryIcon,
@@ -16,6 +17,7 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 export type NavHref =
   | "/"
   | "/transfer"
+  | "/mining"
   | "/wallet"
   | "/history"
   | "/custom-address"
@@ -93,6 +95,18 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         href: "/transfer",
         icon: ArrowUpRight01Icon,
         searchTerms: "send receive funds",
+      },
+    ],
+  },
+  {
+    title: "Mining",
+    icon: Mining01Icon,
+    items: [
+      {
+        title: "Mining",
+        href: "/mining",
+        icon: Mining01Icon,
+        searchTerms: "mining rewards rate cycle earn lma earn",
       },
     ],
   },

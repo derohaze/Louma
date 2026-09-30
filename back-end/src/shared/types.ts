@@ -220,6 +220,125 @@ export interface TransferPasswordCredentialRecord {
   changedAt: Date;
 }
 
+/**
+ * Lifecycle of a persisted mining cycle. The stored status only ever says whether the cycle is
+ * still open or has been closed and fully settled; whether an open cycle has run out of time is a
+ * property of the clock, computed on read (`MiningEffectiveStatus`), so expiry never requires a
+ * scheduled write.
+ */
+export type MiningSessionStatus = "active" | "settled";
+/** What the customer sees: idle with no cycle, running, out of time, or closed and fully settled. */
+export type MiningEffectiveStatus = "idle" | "active" | "completed" | "settled";
+
+/**
+ * One mining cycle. The rate and the window are fixed at creation and never rewritten: every reward
+ * number the API ever returns is recomputed from these fields, so a cycle is reproducible from the
+ * record alone and no random seed is kept in memory.
+ */
+export interface MiningSessionRecord {
+  _id: ObjectId;
+  publicId: string;
+  ownerUserId: string;
+  walletId: string;
+  ledgerAccountId: string;
+  status: MiningSessionStatus;
+  cycleNumber: number;
+  startedAt: Date;
+  /** Exactly `startedAt + durationSeconds`, fixed at creation and never extended. */
+  endsAt: Date;
+  durationSeconds: number;
+  /** The drawn rate as an exact integer count of `1 / rateScale` LMA per hour. */
+  rateUnits: number;
+  rateScale: number;
+  rateDecimals: number;
+  /** `rateUnits / rateScale` rendered once, for display; the integers above stay the source of truth. */
+  rate: string;
+  rateUnit: "LMA/hour";
+  /** Total already posted to the ledger, in minor units. Never exceeds the 24-hour accrual. */
+  settledMinor: number;
+  /** How many settlements this cycle has posted; the sequence number of the next one. */
+  settlementSequence: number;
+  lastSettledAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * The journal header of one mining settlement, so a reward's ledger lines resolve to a transaction
+ * the way every other financial movement in this codebase does.
+ */
+export interface MiningSettlementRecord {
+  _id: ObjectId;
+  /** Doubles as the ledger `transactionId` of the settlement's two lines. */
+  publicId: string;
+  ownerUserId: string;
+  walletId: string;
+  sessionPublicId: string;
+  sequenceNumber: number;
+  amountMinor: number;
+  treasuryAccountId: string;
+  walletAccountId: string;
+  correlationId: string;
+  idempotencyKey: string;
+  createdAt: Date;
+}
+
+/** The `transactions` row a mining settlement writes: an issuance, not a transfer. */
+export interface MiningJournalRecord {
+  _id: ObjectId;
+  publicId: string;
+  type: "mining";
+  currency: typeof CURRENCY;
+  status: "completed";
+  ownerUserId: string;
+  walletId: string;
+  miningSessionId: string;
+  sequenceNumber: number;
+  amountMinor: number;
+  treasuryAccountId: string;
+  correlationId: string;
+  idempotencyKey: string;
+  createdAt: Date;
+  completedAt: Date;
+}
+
+/** A mining cycle as the customer-facing API reports it, with the live accrual already computed. */
+export interface PublicMiningSession {
+  id: string;
+  status: MiningEffectiveStatus;
+  cycleNumber: number;
+  startedAt: string;
+  endsAt: string;
+  durationSeconds: number;
+  rate: string;
+  rateUnit: "LMA/hour";
+  /** Rates as exact integers, so the renderer can extend the accrual without a second guess. */
+  rateUnits: number;
+  rateScale: number;
+  serverNow: string;
+  elapsedSeconds: number;
+  remainingSeconds: number;
+  accruedMinor: number;
+  accrued: string;
+  settledMinor: number;
+  settled: string;
+  /** The most this cycle can ever pay, i.e. the 24-hour accrual. */
+  totalAccruedMinor: number;
+  totalAccrued: string;
+  progress: number;
+  canSettle: boolean;
+  lastSettledAt: string | null;
+}
+
+export interface PublicMiningState {
+  status: MiningEffectiveStatus;
+  serverNow: string;
+  enabled: boolean;
+  canStart: boolean;
+  cycleDurationSeconds: number;
+  session: PublicMiningSession | null;
+}
+
 export interface NotificationRecord {
   _id: ObjectId;
   ownerUserId: string;

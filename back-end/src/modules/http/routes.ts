@@ -6,6 +6,7 @@ import * as auth from "../auth/service.js";
 import * as security from "../security/service.js";
 import * as wallets from "../wallets/service.js";
 import * as transfers from "../transfers/service.js";
+import * as mining from "../mining/service.js";
 import {
   ensureNotificationWatcher,
   NOTIFICATION_HEARTBEAT_FRAME,
@@ -244,8 +245,31 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   app.post("/api/v1/transfers", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } }, schema: { headers: { type: "object", properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 128 } } }, body: { type: "object", required: ["recipientAddress", "amount"], additionalProperties: false, properties: { recipientAddress: { type: "string", minLength: 1, maxLength: 128 }, amount: { type: "string", minLength: 1, maxLength: 32 }, note: { type: "string", maxLength: MAX_NOTE_LENGTH }, transferPassword: { type: "string", minLength: 1, maxLength: 128 } } } } }, async (request, reply) => {
     const current = getAuth(request);
     const body = parseBody(transferSchema.extend({ transferPassword: z.string().max(128).optional() }).strict(), request.body);
-    const result = await transfers.createTransfer({ collections: app.collections, mongoClient: app.mongoClient, ownerUserId: current.userId, ...body, idempotencyKey: Array.isArray(request.headers["idempotency-key"]) ? request.headers["idempotency-key"][0] : request.headers["idempotency-key"], transferPassword: body.transferPassword, requestId: request.id });
+    const result = await transfers.createTransfer({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ownerUserId: current.userId, ...body, idempotencyKey: Array.isArray(request.headers["idempotency-key"]) ? request.headers["idempotency-key"][0] : request.headers["idempotency-key"], transferPassword: body.transferPassword, requestId: request.id });
     return reply.code(result.replayed ? 200 : 201).send({ transaction: result, transfer: result });
+  });
+
+  /**
+   * Mining is a persisted cycle plus a clock, so these endpoints read and settle state; they never
+   * accept a rate, a window, or an elapsed time from the caller. `start` and `settle` are the only
+   * writes, and both are safe to repeat: `start` while a cycle runs is refused, and a settle with
+   * nothing new to post writes nothing.
+   */
+  app.get("/api/v1/mining/state", { ...authenticated, config: { rateLimit: { max: 240, timeWindow: 60_000 } } }, async (request) =>
+    mining.getMiningState({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }),
+  );
+
+  app.post("/api/v1/mining/start", { ...authenticated, config: { rateLimit: { max: 10, timeWindow: 60_000 } } }, async (request) =>
+    mining.startMining({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ownerUserId: getAuth(request).userId, correlationId: request.id }),
+  );
+
+  app.post("/api/v1/mining/settle", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (request) =>
+    mining.settleMining({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ownerUserId: getAuth(request).userId, correlationId: request.id }),
+  );
+
+  app.get("/api/v1/mining/history", authenticated, async (request) => {
+    const query = parseBody(z.object({ cursor: z.string().uuid().optional(), limit: pageLimitSchema }).strict(), request.query);
+    return mining.listMiningHistory({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, cursor: query.cursor, limit: query.limit });
   });
 
   app.get("/api/v1/transfers/:id", authenticated, async (request) => {

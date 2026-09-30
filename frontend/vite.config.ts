@@ -32,5 +32,21 @@ export default defineConfig({
         "/api": { target: apiTarget, changeOrigin: false },
       },
     },
+    optimizeDeps: {
+      // The overview pulls recharts (plus its d3 chain) and every page pulls the Hugeicons
+      // barrel through the shell: left to per-module dev transforms, that graph is hundreds of
+      // files the browser requests one by one on first load, which is where the minutes-long
+      // first paint comes from. Pre-bundling collapses each package into one cached esbuild
+      // chunk (node_modules/.vite) instead. Only ESM packages with a single cheap entry belong
+      // here — never add a thousands-module barrel like lucide-react, it would make the
+      // optimization step itself slower and the chunk bigger.
+      include: [
+        "recharts",
+        "sonner",
+        "qrcode.react",
+        "@hugeicons/react",
+        "@hugeicons/core-free-icons",
+      ],
+    },
   },
 });

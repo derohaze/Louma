@@ -6,6 +6,8 @@ cryptonel-website-main/
 .freebuff/
 AGENTS.md
 .workbuddy-ai
+# Local-only developer tooling, never part of the shipped app.
+port-killer.py
 # ---------------------------------------------------------------------------
 # Dependencies and build output (frontend/.gitignore covers these too, repeated
 # here so they are ignored wherever the tooling runs from).

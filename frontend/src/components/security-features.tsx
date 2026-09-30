@@ -838,7 +838,7 @@ export function DevicesContent() {
         {message && <FormMessage tone="ok">{message}</FormMessage>}
         <div className="text-sm text-muted-foreground">
           Lost a device?{" "}
-          <Link to="/security/freeze" className="font-semibold text-primary">
+          <Link to="/security/freeze" className="font-semibold text-primary-soft">
             Freeze the wallet
           </Link>{" "}
           first, then revoke the session.

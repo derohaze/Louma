@@ -57,8 +57,8 @@ export function StatusPill({
       className={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold",
         enabled
-          ? "border-success/40 bg-success/10 text-[#1F7A5A]"
-          : "border-border bg-secondary text-[#58585E]",
+          ? "border-success/40 bg-success/10 text-[#1F7A5A] dark:text-emerald-400"
+          : "border-border bg-secondary text-[#58585E] dark:text-zinc-300",
       )}
     >
       <span

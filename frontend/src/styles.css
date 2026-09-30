@@ -36,6 +36,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -73,6 +74,9 @@
   --popover-foreground: oklch(0.129 0.042 264.695);
   --primary: oklch(0.57 0.25 293);
   --primary-foreground: oklch(1 0 0);
+  /* Brand purple for accent text and icons. On a light surface the fill purple
+     is already legible, so it is the same value here; dark mode lightens it. */
+  --primary-soft: oklch(0.57 0.25 293);
   --secondary: oklch(0.968 0.007 247.896);
   --secondary-foreground: oklch(0.208 0.042 265.755);
   --muted: oklch(0.968 0.007 247.896);
@@ -88,6 +92,13 @@
   --panel: oklch(0.965 0.006 292);
   /* Single source of truth for the shell's rounded corner radius. */
   --app-corner-size: 28px;
+  /*
+   * Top edge of the app surface: a faint highlight that reads as the light content
+   * surface catching light above the dark chrome. It deliberately does NOT come from
+   * --primary-foreground — that token means "text on primary" and is white in both
+   * themes, so dark mode drew a bright white line right under the header.
+   */
+  --app-surface-edge: color-mix(in oklab, #ffffff 14%, transparent);
   --success: oklch(0.69 0.16 160);
   --warning: oklch(0.75 0.16 75);
   --magenta: oklch(0.65 0.26 328);
@@ -107,38 +118,66 @@
 }
 
 .dark {
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
+  --background: #101011;
+  --foreground: #f5f5f5;
+  --card: #18181a;
+  --card-foreground: #f5f5f5;
+  --popover: #18181a;
+  --popover-foreground: #f5f5f5;
+  /*
+   * Hostinger's dark palette. The neutrals (#000000 shell — see --shell below,
+   * #18181a surface, #303031 border) already match, but the brand purple has to stay
+   * the accent:
+   * the previous near-white --primary turned every button, switch track and
+   * progress bar into grey. Two purples, as Hostinger ships them — #673de6 fills
+   * surfaces (white text on top), #9d99ff carries accent text and icons, because
+   * #673de6 on a #18181a card is only 2.8:1 and fails WCAG AA for body text.
+   */
+  --primary: #673de6;
+  --primary-foreground: #ffffff;
+  --primary-soft: #9d99ff;
+  --secondary: #303031;
+  --secondary-foreground: #f5f5f5;
+  --muted: #232326;
+  --muted-foreground: #a1a1aa;
+  /* One step above --border, so hover on a menu row or ghost button stays
+     visible against --card instead of blending into it. */
+  --accent: #3a3a3c;
+  --accent-foreground: #ffffff;
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.984 0.003 247.858);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
+  /* #303031 is the value that reads crisp against both --background and --card.
+     Softening it (tried #242428) sank the hairline below the card's own fill step and
+     the panels went muddy — they lost their edge instead of gaining a surface. The
+     stray "white line" that was worth removing is the app-surface top edge, which is a
+     separate token (see --app-surface-edge). */
+  --border: #303031;
+  --input: #303031;
+  --ring: #673de6;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.208 0.042 265.755);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --sidebar: #18181a;
+  --sidebar-foreground: #f5f5f5;
+  --sidebar-primary: #303031;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #303031;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #303031;
+  --sidebar-ring: #52525b;
+  /* Chrome is pure black in dark mode. Light mode keeps oklch(0.16 0.055 293)
+     (= #0f0722); the two themes deliberately differ here. The header, the surface
+     behind the rounded corners and the mobile scrim all read from it. */
+  --shell: #000000;
+  --panel: #101011;
+  /*
+   * No lit top edge on the surface. It used to be a white hairline across the full
+   * width under the header, which is the line that had to go. The shell/surface colour
+   * step already separates them, and on a dark UI a lit edge just reads as a stray line.
+   */
+  --app-surface-edge: transparent;
 }
 
 @layer base {
@@ -192,7 +231,7 @@
 
 @utility app-surface {
   border-radius: var(--app-corner-size) var(--app-corner-size) 0 0;
-  border-top: 1px solid color-mix(in oklab, var(--primary-foreground) 14%, transparent);
+  border-top: 1px solid var(--app-surface-edge);
   /*
    * `clip` instead of `hidden`: both still clip the rounded top corners, but
    * `hidden` would make this box a scroll container and silently kill the

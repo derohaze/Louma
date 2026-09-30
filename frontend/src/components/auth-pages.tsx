@@ -211,7 +211,7 @@ function SubmitButton({ children, disabled = false }: { children: ReactNode; dis
     <button
       type="submit"
       disabled={disabled}
-      className="h-12 w-full cursor-pointer rounded-full bg-shell font-display text-[15px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+      className="h-12 w-full cursor-pointer rounded-full bg-shell font-display text-[15px] font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 dark:text-white"
     >
       {children}
     </button>
@@ -422,7 +422,7 @@ export function ForgotPasswordContent() {
             to="/login"
             className={cn(
               "mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-full",
-              "bg-shell font-display text-[15px] font-semibold text-primary-foreground hover:opacity-90",
+              "bg-shell font-display text-[15px] font-semibold text-primary-foreground hover:opacity-90 dark:text-white",
             )}
           >
             <AuthIcon icon={ArrowLeft01Icon} size={18} />

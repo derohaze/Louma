@@ -2,6 +2,33 @@ export type RuntimeEnvironment = "development" | "test" | "production";
 export type CookieSameSite = "lax" | "strict" | "none";
 export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
 
+/**
+ * The range a mining cycle's rate is drawn from, held as exact integers rather than decimals.
+ *
+ * A rate is an amount of LMA per hour, and money in this codebase is never a float. The range is
+ * therefore expressed in rate units: `1 / scale` LMA per hour, where `scale` is `10 ** decimals`.
+ * A cycle's rate is one integer in `[minUnits, maxUnits]`, which makes it exact, comparable, and
+ * safe to persist — no rounding creeps in between the draw, the database, and the accrued reward.
+ */
+export interface MiningRateSpec {
+  minUnits: number;
+  maxUnits: number;
+  /** Units per LMA/hour: `10 ** decimals`. */
+  scale: number;
+  /** Decimal places a drawn rate carries; the unit of `minUnits` and `maxUnits`. */
+  decimals: number;
+}
+
+export interface MiningConfig {
+  enabled: boolean;
+  settlementEnabled: boolean;
+  /** Fixed length of a cycle. The product is a 24-hour cycle, so this is validated, not merely read. */
+  cycleDurationSeconds: number;
+  /** The product allows one live cycle per account; the database enforces it as well. */
+  maxActiveCyclesPerUser: number;
+  rate: MiningRateSpec;
+}
+
 export interface AppConfig {
   environment: RuntimeEnvironment;
   host: string;
@@ -43,6 +70,7 @@ export interface AppConfig {
    * and rate-limits by.
    */
   trustProxy: boolean | string[];
+  mining: MiningConfig;
 }
 
 function required(name: string, values: NodeJS.ProcessEnv): string {
@@ -122,6 +150,83 @@ function logLevel(raw: string): LogLevel {
   return raw as LogLevel;
 }
 
+/** The product's mining cycle is 24 hours; a deployment may not lengthen or shorten it. */
+const MINING_CYCLE_SECONDS = 24 * 60 * 60;
+/**
+ * Upper bound on rate precision. Reward arithmetic is exact integer math, so the limit exists only
+ * to keep the drawn rate inside the safe-integer range and the PERSISTED document readable — not
+ * because the arithmetic would round.
+ */
+const MINING_MAX_RATE_DECIMALS = 8;
+
+function booleanFlag(name: string, raw: string | undefined, fallback: boolean): boolean {
+  const value = raw?.trim();
+  if (value === undefined || value === "") return fallback;
+  if (value !== "true" && value !== "false") throw new Error(`${name} must be true or false`);
+  return value === "true";
+}
+
+/**
+ * Parses a decimal LMA/hour rate into exact rate units.
+ *
+ * Precision is enforced rather than rounded: a value carrying more decimal places than
+ * `MINING_RATE_DECIMALS` is rejected, so an operator who writes `0.03751` under a 4-decimal setting
+ * is told the setting cannot represent it instead of silently having it truncated. Trailing zeroes
+ * within the configured precision are accepted.
+ */
+function rateUnits(name: string, raw: string, decimals: number): number {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(raw.trim());
+  if (!match) throw new Error(`${name} must be a non-negative decimal number`);
+  const fraction = match[2] ?? "";
+  if (fraction.length > decimals) {
+    throw new Error(`${name} has more decimal places than MINING_RATE_DECIMALS (${decimals}) can represent`);
+  }
+  const units = Number(match[1]) * 10 ** decimals + Number(fraction.padEnd(decimals, "0"));
+  if (!Number.isSafeInteger(units) || units <= 0) {
+    throw new Error(`${name} must be a positive value within the safe integer range`);
+  }
+  return units;
+}
+
+function loadMiningConfig(values: NodeJS.ProcessEnv): MiningConfig {
+  const enabled = booleanFlag("MINING_ENABLED", values["MINING_ENABLED"], true);
+  const settlementEnabled = booleanFlag("MINING_SETTLEMENT_ENABLED", values["MINING_SETTLEMENT_ENABLED"], true);
+
+  const cycleDurationSeconds = positiveInteger(
+    "MINING_CYCLE_DURATION_SECONDS",
+    values["MINING_CYCLE_DURATION_SECONDS"] ?? String(MINING_CYCLE_SECONDS),
+  );
+  if (cycleDurationSeconds !== MINING_CYCLE_SECONDS) {
+    throw new Error(`MINING_CYCLE_DURATION_SECONDS must be exactly ${MINING_CYCLE_SECONDS} (24 hours)`);
+  }
+
+  const maxActiveCyclesPerUser = positiveInteger(
+    "MINING_MAX_ACTIVE_CYCLES_PER_USER",
+    values["MINING_MAX_ACTIVE_CYCLES_PER_USER"] ?? "1",
+  );
+  if (maxActiveCyclesPerUser !== 1) {
+    throw new Error("MINING_MAX_ACTIVE_CYCLES_PER_USER must be 1: the product runs one cycle per account");
+  }
+
+  const decimals = positiveInteger("MINING_RATE_DECIMALS", values["MINING_RATE_DECIMALS"] ?? "6");
+  if (decimals > MINING_MAX_RATE_DECIMALS) {
+    throw new Error(`MINING_RATE_DECIMALS must be at most ${MINING_MAX_RATE_DECIMALS}`);
+  }
+  const minUnits = rateUnits("MINING_RATE_MIN_LMA_PER_HOUR", values["MINING_RATE_MIN_LMA_PER_HOUR"] ?? "0.0100", decimals);
+  const maxUnits = rateUnits("MINING_RATE_MAX_LMA_PER_HOUR", values["MINING_RATE_MAX_LMA_PER_HOUR"] ?? "0.0500", decimals);
+  if (minUnits > maxUnits) {
+    throw new Error("MINING_RATE_MIN_LMA_PER_HOUR must not exceed MINING_RATE_MAX_LMA_PER_HOUR");
+  }
+
+  return {
+    enabled,
+    settlementEnabled,
+    cycleDurationSeconds,
+    maxActiveCyclesPerUser,
+    rate: { minUnits, maxUnits, scale: 10 ** decimals, decimals },
+  };
+}
+
 export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
   const environment = values["NODE_ENV"] ?? "development";
   if (!["development", "test", "production"].includes(environment)) {
@@ -177,5 +282,6 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     ipinfoToken: optionalString("IPINFO_TOKEN", values),
     ipinfoTimeoutMs: positiveInteger("IPINFO_TIMEOUT_MS", values["IPINFO_TIMEOUT_MS"] ?? "2500"),
     trustProxy: parseTrustedProxies("TRUST_PROXY", values),
+    mining: loadMiningConfig(values),
   };
 }

@@ -177,7 +177,7 @@ function LaunchAppWindow(props: HTMLAttributes<HTMLDivElement>) {
       className={cn('overflow-hidden rounded-md border bg-fd-popover shadow-lg', props.className)}
     >
       <p className="text-xs text-fd-muted-foreground text-center px-4 py-2 border-b">
-        localhost:3000
+        localhost:3001
       </p>
       <p className="text-sm px-4 py-2">New App launched!</p>
     </div>

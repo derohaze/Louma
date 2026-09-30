@@ -14,6 +14,7 @@ import { Route as CustomAddressRouteImport } from './routes/custom-address'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as MiningRouteImport } from './routes/mining'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TransferRouteImport } from './routes/transfer'
 import { Route as WalletRouteImport } from './routes/wallet'
@@ -50,6 +51,11 @@ const HistoryRouteRoute = HistoryRouteRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MiningRoute = MiningRouteImport.update({
+  id: '/mining',
+  path: '/mining',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignupRoute = SignupRouteImport.update({
@@ -120,6 +126,7 @@ export interface FileRoutesByFullPath {
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/mining': typeof MiningRoute
   '/signup': typeof SignupRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
@@ -138,6 +145,7 @@ export interface FileRoutesByTo {
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/mining': typeof MiningRoute
   '/signup': typeof SignupRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
@@ -158,6 +166,7 @@ export interface FileRoutesById {
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/mining': typeof MiningRoute
   '/signup': typeof SignupRoute
   '/transfer': typeof TransferRoute
   '/wallet': typeof WalletRoute
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/mining'
     | '/signup'
     | '/transfer'
     | '/wallet'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/mining'
     | '/signup'
     | '/transfer'
     | '/wallet'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/mining'
     | '/signup'
     | '/transfer'
     | '/wallet'
@@ -236,6 +248,7 @@ export interface RootRouteChildren {
   CustomAddressRoute: typeof CustomAddressRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
+  MiningRoute: typeof MiningRoute
   SignupRoute: typeof SignupRoute
   TransferRoute: typeof TransferRoute
   WalletRoute: typeof WalletRoute
@@ -283,6 +296,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mining': {
+      id: '/mining'
+      path: '/mining'
+      fullPath: '/mining'
+      preLoaderRoute: typeof MiningRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signup': {
@@ -392,6 +412,7 @@ const rootRouteChildren: RootRouteChildren = {
   CustomAddressRoute: CustomAddressRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
+  MiningRoute: MiningRoute,
   SignupRoute: SignupRoute,
   TransferRoute: TransferRoute,
   WalletRoute: WalletRoute,
