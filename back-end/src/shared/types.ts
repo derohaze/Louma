@@ -370,6 +370,17 @@ export interface MiningDeviceFeatureProfile {
   };
 }
 
+/**
+ * Server-owned trust state of one device cluster. Distinct from `status`, which is the operator's
+ * enforcement flag: an `active` device can still be `provisional` (not yet worth trusting).
+ *
+ *   - `provisional` — enrolled from an observation, not yet corroborated by independent evidence.
+ *   - `established` — corroborated across admissions (and/or a bound proof): trusted for merging.
+ *   - `suspicious`  — repeated contradictions / churn findings; stricter risk, never silently trusted.
+ *   - `blocked`     — terminal (mirrors `status`).
+ */
+export type MiningDeviceTrustState = "provisional" | "established" | "suspicious" | "blocked";
+
 export interface MiningDeviceRecord {
   _id: ObjectId;
   publicId: string;
@@ -412,8 +423,52 @@ export interface MiningDeviceRecord {
   lastAsn: string | null;
   lastCountry: string | null;
   status: MiningDeviceStatus;
+  /**
+   * Server-owned trust state. Optional so device rows written before this model existed stay
+   * readable; readers default a missing value to `provisional`, never to `established`.
+   */
+  trustState?: MiningDeviceTrustState;
+  /**
+   * The immutable machine anchor recorded at enrollment: the keyed digest over the machine core the
+   * server derived when it created this cluster. It is NEVER rewritten from a later observation —
+   * a device that reports different traits is either the same cluster (accepted through the
+   * append-only alias list) or a different observation, never an identity rewrite.
+   */
+  anchorHash?: string | null;
+  /**
+   * Append-only machine-key aliases the server accepted for this cluster (a browser/driver update
+   * that moved a core trait, or a tolerant cross-engine match). Bounded; only appended on an
+   * allowed admission, never by a rejected request.
+   */
+  aliasHashes?: string[];
+  /** The account whose start enrolled this cluster. Evidence for abuse budgets, not ownership. */
+  enrollmentUserId?: string | null;
+  /** Allowed admissions folded into this cluster (a start that passed admission, not a rejected try). */
+  admissionCount?: number;
+  /** Verified single-use proof-of-possession handshakes bound to this cluster. */
+  proofCount?: number;
+  /** When the cluster became `established`; null while provisional. */
+  establishedAt?: Date | null;
+  /** Bounded counter of consistency/drift findings; feeds the risk engine, never a verdict alone. */
+  findingCount?: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * One enrollment-rate counter bucket.
+ *
+ * `_id` is `${scope}:${window}:${bucketStartMs}`, so the `$inc` upsert that consumes a unit is a
+ * single atomic document write — the rate limit is enforced by MongoDB, not by a read-then-write in
+ * the application. `expiresAt` is a TTL index: buckets are evidence with a short life, not history.
+ */
+export interface MiningDeviceQuotaRecord {
+  _id: string;
+  scope: "account" | "network";
+  windowMs: number;
+  bucketStart: Date;
+  count: number;
+  expiresAt: Date;
 }
 
 export type MiningDeviceLeaseStatus = "active" | "released";
@@ -426,6 +481,8 @@ export interface MiningDeviceLeaseRecord {
   _id: ObjectId;
   publicId: string;
   deviceClusterId: string;
+  /** The device record (its `publicId`) this lease was taken for — survives a later key change. */
+  deviceId: string | null;
   ownerUserId: string;
   miningSessionId: string;
   leasedAt: Date;
@@ -440,6 +497,13 @@ export interface MiningDeviceNonceRecord {
   publicId: string;
   ownerUserId: string;
   deviceKeyHash: string | null;
+  /**
+   * Server-resolved device binding recorded when the challenge is issued: the machine anchor the
+   * evidence describes and (when it resolves to one) the enrolled cluster. The signed payload
+   * commits to the anchor, and a proof can only be spent on the enrollment it was issued for.
+   */
+  boundAnchorHash?: string | null;
+  boundClusterId?: string | null;
   nonce: string;
   issuedAt: Date;
   expiresAt: Date;

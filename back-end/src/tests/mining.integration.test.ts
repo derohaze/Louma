@@ -51,10 +51,15 @@ const createdUserIds: string[] = [];
 const createdSessionIds: string[] = [];
 const createdTransactionIds: string[] = [];
 const createdWalletAccountIds: string[] = [];
-let treasuryDeltaMinor = 0;
-
-let requestIp = 0;
-const nextIp = () => `10.9.0.${(requestIp++ % 250) + 1}`;
+let treasuryDeltaMinor = 0;let requestIp = 0;
+// A fresh address per request, in this suite's own range. The guard scopes *new-identity*
+// admission to a network, so a recycled address would carry an earlier test's live lease into a
+// later one (and into another suite sharing the database), making a test fail on its fixture
+// rather than on the rule under test.
+const nextIp = () => {
+  const index = requestIp++;
+  return `10.4.${Math.floor(index / 254) % 254}.${(index % 254) + 1}`;
+};
 let preauthCsrfTokenValue = "";
 const csrfByAccessToken = new Map<string, string>();
 
@@ -131,13 +136,20 @@ function deviceEvidence(machine: number): Record<string, unknown> {
     // there would (correctly) refuse the second account's start.
     screenAvailWidth: width,
     screenAvailHeight: height - (machine % 5) * 8,
-    screenColorDepth: 24,
+    // The machine key hashes only the engine-stable core (core count, touch class, audio device,
+    // gamut, HDR, panel depth), and the coarse CPU/memory/screen pattern below repeats every twelve
+    // entries — so a fixture that left the audio device at a constant 48 kHz and the panel at 24-bit
+    // produced an identical core for two different machines (indices 2/11, 4/13, 9/18 all matched),
+    // and the later account then inherited the earlier one's live lease. A unique negotiated rate and
+    // a non-default panel depth make every simulated machine distinct by construction. Neither value
+    // is what a plain desktop reports, which also keeps a fixture from colliding with a real machine.
+    audioSampleRate: 22050 + machine * 750,
+    screenColorDepth: [30, 32][machine % 2]!,
     webglVendor: `vendor-machine-${RUN}-${machine}`,
     webglRenderer: `renderer-machine-${RUN}-${machine}`,
     webglLimitsHash: `limits-machine-${RUN}-${machine}`,
     webglExtensionsHash: `extensions-machine-${RUN}-${machine}`,
     webgpuHash: `webgpu-machine-${RUN}-${machine}`,
-    audioSampleRate: 48000,
     audioChannels: 2,
     hdr: machine % 7 === 0,
     webglHash: `webgl-machine-${RUN}-${machine}`,
@@ -349,9 +361,12 @@ after(async () => {
   }
   // Device identity and its leases, so a finished run leaves nothing that can refuse the next
   // one's starts. Device records deliberately carry no owner, so the rows this run created are
-  // identified by what links to this run only: observations of the accounts this file registered,
-  // plus this run's fixture namespace (`RUN`). A bare creation-time window is never used — it would
-  // also match devices another suite or user created mid-run against the same database.
+  // identified by what links to this run only: observations of the accounts this file registered
+  // (a denied start still records an observation, so the observed set alone is not proof this run
+  // created the device — the creation-time bound is what excludes a pre-existing device a fixture
+  // merely resolved to), plus this run's fixture namespace (`RUN`). A bare creation-time window is
+  // never used alone — it would also match devices another suite or user created mid-run against
+  // the same database.
   const observedDeviceIds = (
     (await collections.miningDeviceObservations.distinct("deviceId", { ownerUserId: { $in: createdUserIds } }).catch(() => [] as unknown[])) as unknown[]
   ).filter((value): value is string => typeof value === "string");
@@ -359,7 +374,7 @@ after(async () => {
     .find(
       {
         $or: [
-          { publicId: { $in: observedDeviceIds } },
+          { publicId: { $in: observedDeviceIds }, firstSeenAt: { $gte: runStartedAt } },
           {
             webglFingerprintHash: { $regex: new RegExp(`^webgl-(machine|laptop).*${RUN}`) },
             firstSeenAt: { $gte: runStartedAt },

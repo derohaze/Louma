@@ -39,6 +39,39 @@ export async function findDeviceByPublicKey(
 }
 
 /**
+ * The server-owned enrollment anchor of one observation, plus every alias the server has since
+ * accepted for that cluster.
+ *
+ * This is the identity lookup: an observation whose server-derived machine key equals a cluster's
+ * immutable anchor, or one of the bounded aliases a trust transition appended to it, IS that
+ * cluster. Both are indexed direct lookups — never a scan of the recent population — so an old or
+ * idle cluster cannot fall out of enforcement.
+ */
+export async function findDeviceByAnchor(
+  collections: Pick<Collections, "miningDevices">,
+  anchorHash: string,
+): Promise<MiningDeviceRecord | null> {
+  return collections.miningDevices.findOne({ $or: [{ anchorHash }, { aliasHashes: anchorHash }] }, OLDEST_FIRST);
+}
+
+/**
+ * Device clusters last observed on one server-observed network identity (a keyed IP hash).
+ * Bounded and served by `mining_devices_network_seen`; used for the network-scoped admission checks,
+ * not for identity.
+ */
+export async function findDevicesOnNetwork(
+  collections: Pick<Collections, "miningDevices">,
+  ipHashValue: string,
+  limit: number,
+): Promise<MiningDeviceRecord[]> {
+  return collections.miningDevices
+    .find({ lastIpHash: ipHashValue, status: { $ne: "blocked" } })
+    .sort({ lastSeenAt: -1 })
+    .limit(limit)
+    .toArray();
+}
+
+/**
  * The machine identity of one observation, resolved directly.
  *
  * A record that already carries this observation's machine key IS the same machine — identity, not

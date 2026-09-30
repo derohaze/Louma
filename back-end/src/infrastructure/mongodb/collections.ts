@@ -5,6 +5,7 @@ import type {
   MiningDeviceLeaseRecord,
   MiningDeviceNonceRecord,
   MiningDeviceObservationRecord,
+  MiningDeviceQuotaRecord,
   MiningDeviceRecord,
   MiningSessionRecord,
   MiningSettlementRecord,
@@ -35,6 +36,7 @@ export interface Collections {
   miningDeviceLeases: Collection<MiningDeviceLeaseRecord>;
   miningDeviceNonces: Collection<MiningDeviceNonceRecord>;
   miningDeviceObservations: Collection<MiningDeviceObservationRecord>;
+  miningDeviceQuotas: Collection<MiningDeviceQuotaRecord>;
 }
 
 export function getCollections(db: Db): Collections {
@@ -55,5 +57,6 @@ export function getCollections(db: Db): Collections {
     miningDeviceLeases: db.collection<MiningDeviceLeaseRecord>("mining_device_leases"),
     miningDeviceNonces: db.collection<MiningDeviceNonceRecord>("mining_device_nonces"),
     miningDeviceObservations: db.collection<MiningDeviceObservationRecord>("mining_device_observations"),
+    miningDeviceQuotas: db.collection<MiningDeviceQuotaRecord>("mining_device_quotas"),
   };
 }

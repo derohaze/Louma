@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "check:skeletons": "node scripts/check-skeletons.mjs",
     "format": "prettier --write ."
   },
   "overrides": {

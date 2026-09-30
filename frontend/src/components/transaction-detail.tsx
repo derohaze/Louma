@@ -5,6 +5,7 @@ import { useWallet, type Transaction } from "@/hooks/wallet-context";
 import { api, messageForError } from "@/lib/api";
 import { currency, dateText, transferNet, transferTax } from "@/lib/wallet-format";
 import { CopyButton, EmptyState, PageHeader } from "./wallet-shell";
+import { TransactionDetailSkeleton } from "./page-skeletons";
 import { FactList, FormMessage, Panel } from "./security-ui";
 
 /**
@@ -43,7 +44,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
 
   const transaction = known ?? fetched;
   if (loading) {
-    return <p className="py-20 text-center text-muted-foreground">Loading transaction…</p>;
+    return <TransactionDetailSkeleton title="Transaction" />;
   }
   if (!transaction) {
     return (

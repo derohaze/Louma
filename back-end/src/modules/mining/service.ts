@@ -7,7 +7,14 @@ import { ensureTreasuryAccount } from "../wallets/service.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { accruedMinorFor, pickRateUnits, rateToString, totalAccrualMinor } from "./rate.js";
 import { badRequest, conflict, forbidden, notFound, serviceUnavailable } from "../../shared/errors.js";
-import { DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE, DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE } from "../mining-device/policy.js";
+import {
+  DEVICE_EVIDENCE_MISSING_CODE,
+  DEVICE_EVIDENCE_MISSING_MESSAGE,
+  DEVICE_IN_USE_CODE,
+  DEVICE_IN_USE_MESSAGE,
+  DEVICE_NETWORK_IN_USE_CODE,
+  DEVICE_NETWORK_IN_USE_MESSAGE,
+} from "../mining-device/policy.js";
 import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 import type {
   LedgerAccountRecord,
@@ -322,6 +329,7 @@ export async function startMining(input: {
   // The device identities this start leases (the resolved device's key hash, plus its exact
   // duplicates). A racing start cannot take a duplicate row and open a second cycle on one machine.
   let leaseKeys: string[] = [];
+  let leaseDeviceId: string | null = null;
   if (deviceLeaseEnabled && input.device) {
     const guard = await import("../mining-device/service.js");
     // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
@@ -341,6 +349,27 @@ export async function startMining(input: {
       throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
     }
     const intel = await guard.resolveIpIntel({ config, ip: input.device.ip });
+    // Evidence with neither a machine identity nor a browser key cannot name a device. This is
+    // checked from the sanitized evidence *before* registration: resolving first would insert a
+    // device row that the insufficient-evidence rejection then abandons, so repeated rejected
+    // junk requests would accumulate unused records in `miningDevices`.
+    const { sanitizeEvidence, normalizeSignals } = await import("../mining-device/signals.js");
+    const { buildFeatureMap, machineFeatureMap, machineKeyHash } = await import("../mining-device/identity.js");
+    const preEvidence = sanitizeEvidence(input.device.evidenceRaw);
+    const preSignals = normalizeSignals(preEvidence);
+    const preMachineKey = machineKeyHash(config.encryptionKey, machineFeatureMap(buildFeatureMap(preSignals)));
+    if (preMachineKey === null && !preEvidence.browserKeyPublicKey) {
+      await recordSecurityEvent({
+        collections,
+        ownerUserId: input.ownerUserId,
+        sessionId: null,
+        eventType: "mining_device_evidence_missing",
+        outcome: "failure",
+        correlationId: input.correlationId,
+        metadata: { reason: "device_evidence_insufficient" },
+      }).catch(() => undefined);
+      throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
+    }
     const resolution = await guard.resolveOrCreateDevice({
       collections,
       config,
@@ -350,10 +379,8 @@ export async function startMining(input: {
       ownerUserId: input.ownerUserId,
       correlationId: input.correlationId,
     });
-    // Evidence with neither a machine identity nor a browser key cannot name a device: without this
-    // check a junk payload leases a fallback identity and a second account on the same machine
-    // leases a different one, opening a second cycle. Rich clients (including cleared storage, which
-    // keeps its machine traits) always produce one of the two.
+    // Defense in depth: the post-resolution check below repeats the same refusal on the resolved
+    // identities, in case sanitization and resolution ever disagree about what counts as evidence.
     if (resolution.machineKey === null && !resolution.evidence.browserKeyPublicKey) {
       await recordSecurityEvent({
         collections,
@@ -413,17 +440,35 @@ export async function startMining(input: {
           }).catch(() => undefined);
           throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
         }
+        // An untrusted identity on a network that is already mining: same conflict semantics for the
+        // caller (this environment is occupied), distinct message so an honest new device knows to
+        // wait for the cycle to end. This is a hard refusal — a browser key cannot clear it, because
+        // a caller can generate one at will and that is exactly how the bypass worked.
+        if (eligibility.reasonCode === DEVICE_NETWORK_IN_USE_CODE) {
+          await recordSecurityEvent({
+            collections,
+            ownerUserId: input.ownerUserId,
+            sessionId: null,
+            eventType: "mining_device_rejected",
+            outcome: "failure",
+            correlationId: input.correlationId,
+            metadata: { reason: eligibility.reasonCode },
+          }).catch(() => undefined);
+          throw conflict(DEVICE_NETWORK_IN_USE_CODE, DEVICE_NETWORK_IN_USE_MESSAGE);
+        }
         throw forbidden("mining_device_rejected", DEVICE_IN_USE_MESSAGE);
       }
       if (eligibility.decision === "challenge") {
         throw conflict("mining_device_challenge_required", "Additional device verification is required before mining can start.");
       }
       leaseKeys = eligibility.equivalentLeaseKeys;
+      leaseDeviceId = eligibility.device.publicId;
     } else {
       // Rollout mode: a conflict is audited above and never enforced — including the lease it would
       // otherwise have taken, which is the whole point of running in monitor. Enforce mode (the
       // configured mode in this deployment) is the one that takes the lease and therefore refuses.
       leaseKeys = eligibility.decision === "deny" ? [] : eligibility.equivalentLeaseKeys;
+      leaseDeviceId = eligibility.decision === "deny" ? null : eligibility.device.publicId;
     }
   }
 
@@ -449,6 +494,7 @@ export async function startMining(input: {
           await guard.insertLeaseInSession({
             collections,
             leaseKeys,
+            deviceId: leaseDeviceId,
             ownerUserId: input.ownerUserId,
             miningSessionId: session.publicId,
             leaseEndsAt: session.endsAt,

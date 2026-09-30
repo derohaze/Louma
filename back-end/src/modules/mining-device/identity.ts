@@ -503,9 +503,13 @@ export function learnFeatureProfileChecked(
       continue;
     }
     const driftRun = entry.drift ?? [];
-    if (featureEstablished(entry) && featureReset(driftRun.length)) {
+    // The reset run is *consecutive repeats of the same value*: a different contradiction restarts
+    // it instead of extending it, so three different values can never pool their counts to smuggle
+    // a fourth arbitrary value into the trusted ring.
+    const run = driftRun.length > 0 && driftRun[driftRun.length - 1] !== digest ? [] : driftRun;
+    if (featureEstablished(entry) && featureReset(run.length)) {
       // Established value, contradiction not yet repeated enough times: record, never learn.
-      next[key] = { digests: entry.digests, count: entry.count, drift: [...driftRun, digest].slice(-MAX_FEATURE_VALUES) };
+      next[key] = { digests: entry.digests, count: entry.count, drift: [...run, digest].slice(-MAX_FEATURE_VALUES) };
       drift.push(key);
       continue;
     }
@@ -596,9 +600,10 @@ export function matchDeviceFeatures(
     const observedDigest = observed.digests[feature.key];
     const entry = candidate.featureProfile?.[feature.key];
     const ring = entry?.digests ?? [];
-    // A value the candidate was observed contradicting itself with: during the reset window it is
-    // as identifying as a stored value, and without it a genuinely moving trait would be blind to
-    // the candidate for LEARN_DRIFT_RESET_OBSERVATIONS observations.
+  // A value the candidate was observed contradicting itself with: during the reset window it is
+  // as identifying as a stored value (except for class traits, where it must still veto), and
+  // without it a genuinely moving trait would be blind to the candidate for
+  // LEARN_DRIFT_RESET_OBSERVATIONS observations.
     const driftRing = entry?.drift ?? [];
     const snapshotValue = candidate.featureSnapshot?.[feature.key];
     // Snapshots persisted as digests compare directly; legacy raw snapshots are digested here.
@@ -616,7 +621,12 @@ export function matchDeviceFeatures(
       continue;
     }
     totalWeight += feature.weight;
-    const agreed = ring.includes(observedDigest) || snapshotDigest === observedDigest || driftRing.includes(observedDigest);
+    // A value the candidate was observed contradicting itself with is as identifying as a stored
+    // value during the reset window — except for class traits. A CPU or memory class contradiction
+    // is a difference of machine, so counting it as agreement would suppress the class veto and
+    // let a reported contradiction help produce a "same machine" verdict.
+    const driftAgreed = !feature.machineClass && driftRing.includes(observedDigest);
+    const agreed = ring.includes(observedDigest) || snapshotDigest === observedDigest || driftAgreed;
     // Class traits veto regardless of engine availability: they carry a difference of MACHINE, not
     // of browser. A trait one engine cannot report (deviceMemory in Firefox) is simply not compared.
     if (feature.machineClass) {

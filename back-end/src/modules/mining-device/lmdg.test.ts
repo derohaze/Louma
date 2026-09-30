@@ -36,6 +36,8 @@ import {
   type ObservedFeatures,
 } from "./identity.js";
 import { evaluateMiningDeviceTrust } from "./risk.js";
+import { detectEvidenceContradictions, detectSimultaneousTraitReplacement } from "./consistency.js";
+import { consumeEnrollmentBudget, nextTrustState, trustStateOf } from "./enrollment.js";
 
 /**
  * LMDG unit tests: pure domain logic without a database.
@@ -585,6 +587,19 @@ test("records from before the profile existed still compare through their snapsh
   assert.equal(decideClusterMatch(match, 78, 55), "same");
 });
 
+/**
+ * Enrollment-model inputs at their neutral values: an established cluster, no churn or findings, no
+ * competing network lease, no unverified key. Neutral so the pre-existing expectations below keep
+ * measuring exactly what they measured before the fields existed.
+ */
+const RISK_NEUTRAL = {
+  clusterTrust: "established" as const,
+  identityChurn: 0,
+  consistencyFindings: 0,
+  networkLeaseConflict: false,
+  unverifiedBrowserKey: false,
+};
+
 test("risk engine denies another account's active lease and never leaks through allow", () => {
   const base = {
     clusterVerdict: "same" as const,
@@ -593,6 +608,7 @@ test("risk engine denies another account's active lease and never leaks through 
     webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
     missingHighEntropyFields: false, keyChangedForKnownDevice: false,
     uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    ...RISK_NEUTRAL,
     anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
     history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
   };
@@ -613,6 +629,7 @@ test("risk engine escalates hostile integrity signals without banning on one wea
     webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
     missingHighEntropyFields: false, keyChangedForKnownDevice: false,
     uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    ...RISK_NEUTRAL,
     anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
     history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
   };
@@ -639,6 +656,7 @@ test("hiding traits on a known device feeds the score without banning on its own
     webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
     missingHighEntropyFields: false, keyChangedForKnownDevice: false,
     uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    ...RISK_NEUTRAL,
     anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
     history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
   };
@@ -651,6 +669,107 @@ test("hiding traits on a known device feeds the score without banning on its own
   assert.equal(withAutomation.decision, "challenge");
 });
 
+/**
+ * Minimal in-memory stand-in for the quota collection: the production path is one `$inc` upsert on a
+ * deterministic `_id`, which is exactly what this models (create-or-increment, atomically), so the
+ * budget logic can be tested without a database.
+ */
+function fakeQuotas() {
+  const docs = new Map<string, Record<string, number | string | Date>>();
+  return {
+    findOneAndUpdate: async (filter: { _id: string }, update: { $inc?: Record<string, number>; $setOnInsert?: Record<string, unknown> }) => {
+      const existing = docs.get(filter._id);
+      if (!existing) {
+        const created = { _id: filter._id, ...(update.$setOnInsert ?? {}), ...(update.$inc ?? {}) } as Record<string, number | string | Date>;
+        docs.set(filter._id, created);
+        return created;
+      }
+      for (const [key, delta] of Object.entries(update.$inc ?? {})) {
+        existing[key] = (existing[key] as number) + delta;
+      }
+      return existing;
+    },
+    findOne: async (filter: { _id: string }) => docs.get(filter._id) ?? null,
+  };
+}
+
+test("enrollment budget: new machine identities are capped per account and per network", async () => {
+  const quotas = fakeQuotas();
+  const limits = { maxNewClustersPerAccountPerDay: 3, maxNewClustersPerNetworkPerHour: 2, maxNewClustersPerNetworkPerDay: 10 };
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  const charge = (owner: string, ip: string) =>
+    consumeEnrollmentBudget({ collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: owner, ipHash: ip, nowMs: now });
+  // One account: the fourth new identity of the day is refused.
+  assert.equal((await charge("acct", "ip-1")).allowed, true);
+  assert.equal((await charge("acct", "ip-2")).allowed, true);
+  assert.equal((await charge("acct", "ip-3")).allowed, true);
+  const overAccount = await charge("acct", "ip-4");
+  assert.equal(overAccount.allowed, false);
+  assert.equal(overAccount.hit?.scope, "account");
+  // Another account behind one network: the network's hourly cap is the binding limit.
+  assert.equal((await charge("acct-2", "shared-ip")).allowed, true);
+  assert.equal((await charge("acct-3", "shared-ip")).allowed, true);
+  const overNetwork = await charge("acct-4", "shared-ip");
+  assert.equal(overNetwork.allowed, false);
+  assert.equal(overNetwork.hit?.scope, "network");
+  // The counters are bucketed, so the next window starts clean.
+  const nextHour = await consumeEnrollmentBudget({
+    collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: "acct-4", ipHash: "shared-ip", nowMs: now + 60 * 60 * 1000,
+  });
+  assert.equal(nextHour.allowed, true);
+});
+
+test("trust transitions: nothing is born established, and findings cannot silently upgrade a device", () => {
+  assert.equal(trustStateOf({ status: "active" }), "provisional", "a legacy row earns nothing by default");
+  const first = nextTrustState({ device: { trustState: "provisional", status: "active", establishedAt: null }, admissionCount: 1, proofCount: 0, findingCount: 0, minAdmissions: 3 });
+  assert.equal(first.state, "provisional");
+  assert.equal(first.becameEstablished, false);
+  const third = nextTrustState({ device: { trustState: "provisional", status: "active", establishedAt: null }, admissionCount: 3, proofCount: 0, findingCount: 0, minAdmissions: 3 });
+  assert.equal(third.state, "established");
+  assert.equal(third.becameEstablished, true);
+  const withProof = nextTrustState({ device: { trustState: "provisional", status: "active", establishedAt: null }, admissionCount: 2, proofCount: 1, findingCount: 0, minAdmissions: 3 });
+  assert.equal(withProof.state, "established", "an independent proof substitutes for the third admission");
+  const suspicious = nextTrustState({ device: { trustState: "provisional", status: "active", establishedAt: null }, admissionCount: 3, proofCount: 0, findingCount: 6, minAdmissions: 3 });
+  assert.equal(suspicious.state, "suspicious", "contradictions block the upgrade");
+  const staysEstablished = nextTrustState({ device: { trustState: "established", status: "active", establishedAt: new Date() }, admissionCount: 9, proofCount: 2, findingCount: 6, minAdmissions: 3 });
+  assert.equal(staysEstablished.state, "established", "ordinary drift never demotes an established device");
+});
+
+const WINDOWS_CHROME_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+test("consistency engine flags claims that cannot hold together, and only those", () => {
+  const coherent = sanitizeEvidence({
+    platform: "Win32", userAgent: WINDOWS_CHROME_UA, hardwareConcurrency: 8, deviceMemory: 8, maxTouchPoints: 0,
+    screenWidth: 1920, screenHeight: 1080, screenColorDepth: 24, pixelRatio: 1, timezoneOffsetMinutes: -120,
+    audioSampleRate: 48000, audioChannels: 2,
+  });
+  assert.deepEqual(detectEvidenceContradictions(coherent), []);
+  const safariOnWindows = sanitizeEvidence({ platform: "Win32", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" });
+  assert.ok(detectEvidenceContradictions(safariOnWindows).includes("safari_on_non_apple_os"));
+  const mismatch = sanitizeEvidence({ platform: "MacIntel", userAgent: WINDOWS_CHROME_UA });
+  assert.ok(detectEvidenceContradictions(mismatch).includes("platform_ua_os_mismatch"));
+  const absurd = sanitizeEvidence({ hardwareConcurrency: 4096, maxTouchPoints: 999, screenColorDepth: 999, pixelRatio: 99, timezoneOffsetMinutes: -99999, audioSampleRate: 1 });
+  assert.ok(detectEvidenceContradictions(absurd).includes("impossible_hardware_values"));
+  // Mobile platforms report Linux/iOS kernel strings on purpose and must not be flagged.
+  const android = sanitizeEvidence({ platform: "Linux armv8l", userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36" });
+  assert.deepEqual(detectEvidenceContradictions(android), []);
+});
+
+test("consistency engine sees a key swap packaged with a trait rewrite", () => {
+  const quiet = detectSimultaneousTraitReplacement({
+    driftedKeys: ["canvas"], presentationKeys: [], renderingKeys: ["canvas"], environmentKeys: [], browserKeyChanged: false,
+  });
+  assert.deepEqual(quiet, [], "one moved rendering digest is drift");
+  const rewrite = detectSimultaneousTraitReplacement({
+    driftedKeys: ["platform", "browserFamily", "canvas", "webgl", "timezone"],
+    presentationKeys: ["platform", "browserFamily"], renderingKeys: ["canvas", "webgl"], environmentKeys: ["timezone"],
+    browserKeyChanged: true,
+  });
+  assert.ok(rewrite.includes("simultaneous_trait_replacement"));
+  assert.ok(rewrite.includes("key_replacement_with_trait_rewrite"));
+});
+
 test("a changed user agent on a known machine is scored as tampering, never as a new device", () => {
   const calm = {
     clusterVerdict: "same" as const, clusterScore: 95, activeLeaseConflict: false, conflictOwnerIsSelf: false,
@@ -658,6 +777,7 @@ test("a changed user agent on a known machine is scored as tampering, never as a
     webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false,
     missingHighEntropyFields: false, keyChangedForKnownDevice: false,
     uaChangedForKnownMachine: false, renderingTamperForKnownMachine: false,
+    ...RISK_NEUTRAL,
     anonymity: { vpn: false, proxy: false, tor: false, hosting: false, anonymous: false },
     history: { accountsOnDevice: 1, devicesOnAccount: 1, recentRejectsOnDevice: 0, recentRejectsOnAccount: 0, ipChurnDuringCycle: 0, geoJump: false },
   };

@@ -25,6 +25,10 @@ const FRONTEND = process.env["HARNESS_FRONTEND"] ?? "http://127.0.0.1:3000";
 const API = process.env["HARNESS_API"] ?? "http://127.0.0.1:8000";
 const CHROME = process.env["HARNESS_CHROME"] ?? "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const EDGE = process.env["HARNESS_EDGE"] ?? "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
+// Optional genuinely different engine (e.g. Firefox). Chrome and Edge are both Chromium, so without
+// this the harness never observes what a second engine actually collects — the Firefox-like HTTP
+// simulation below measures server logic, not real-world observability.
+const FIREFOX = process.env["HARNESS_FIREFOX"] ?? null;
 const RUN = process.env["HARNESS_RUN"] ?? `h${Date.now().toString(36)}`;
 
 const args = process.argv.slice(2);
@@ -36,7 +40,15 @@ const PASSWORD = "Harness1234";
 // Machine-readable result model
 // ---------------------------------------------------------------------------
 
-type Verdict = "ALLOWED" | "BLOCKED" | "CHALLENGE" | "ERROR" | "CONVERGED";
+/**
+ * A scenario verdict.
+ *
+ * `INCONCLUSIVE` and `BLOCKED-BY-TEST-SETUP` exist so a scenario that did not actually run its course
+ * can never be read as a security result: the first means the case produced no decidable outcome (a
+ * race where neither side won tells us nothing about whether it is race-safe), the second means the
+ * test's own budget throttled the request.
+ */
+type Verdict = "ALLOWED" | "BLOCKED" | "CHALLENGE" | "ERROR" | "CONVERGED" | "INCONCLUSIVE" | "BLOCKED-BY-TEST-SETUP";
 
 interface ScenarioResult {
   id: string;
@@ -356,6 +368,26 @@ const REGISTER_MAX_PER_WINDOW = 5;
 const REGISTER_PACE_MARGIN_MS = 2_000; // submit just past the sliding-window edge
 const registerTimes: number[] = [];
 
+// The mining-start route is limited to 10/min per IP and every harness caller shares one IP, so the
+// direct-API suite (dozens of starts) would otherwise be refused by the limiter rather than by the
+// device guard. Hold below the window edge exactly like registration; the budget of 8 leaves room
+// for the browser flow's own challenge-and-retry start, which is not routed through apiCall.
+const START_WINDOW_MS = 60_000;
+const START_MAX_PER_WINDOW = 8;
+const startTimes: number[] = [];
+
+async function paceStart(): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    while (startTimes.length > 0 && now - startTimes[0]! >= START_WINDOW_MS) startTimes.shift();
+    if (startTimes.length < START_MAX_PER_WINDOW) break;
+    const waitMs = START_WINDOW_MS - (now - startTimes[0]!) + REGISTER_PACE_MARGIN_MS;
+    console.log(`[pace] start window full; holding ${Math.ceil(waitMs / 1000)}s`);
+    await sleep(waitMs);
+  }
+  startTimes.push(Date.now());
+}
+
 async function paceRegister(): Promise<void> {
   for (;;) {
     const now = Date.now();
@@ -440,6 +472,8 @@ async function pressStart(ws: Ws): Promise<StartOutcome> {
     };
     return true;
   })()`);
+  // A start press is a start call: count it against the same per-IP window as the direct-API suite.
+  await paceStart();
   const clicked = await ws.evaluate(`(() => {
     const buttons = [...document.querySelectorAll('button')];
     const b = buttons.find((x) => /start mining/i.test(x.textContent ?? ''));
@@ -492,13 +526,17 @@ async function spoofUa(ws: Ws, cluster: string, variant: number): Promise<void> 
 // Direct-API helper (for proof-attack scenarios: exact HTTP semantics)
 // ---------------------------------------------------------------------------
 
-async function apiCall(path: string, init: { method?: string; token?: string; csrf?: string; body?: unknown } = {}): Promise<{ status: number; code: string | null; body: any }> {
+async function apiCall(path: string, init: { method?: string; token?: string; csrf?: string; body?: unknown; origin?: string } = {}): Promise<{ status: number; code: string | null; body: any }> {
+  if (path.includes("/mining/start")) await paceStart();
   const res = await fetch(API + path, {
     method: init.method ?? "GET",
     headers: {
       ...(init.body === undefined ? {} : { "content-type": "application/json" }),
       ...(init.token ? { authorization: `Bearer ${init.token}` } : {}),
       ...(init.csrf ? { "x-csrf-token": init.csrf } : {}),
+      // The Origin header is what the browser attaches to a cross-origin request; sending it by hand
+      // lets the harness exercise the server's origin binding (cross-origin proof replay).
+      ...(init.origin ? { origin: init.origin } : {}),
     },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   });
@@ -506,20 +544,184 @@ async function apiCall(path: string, init: { method?: string; token?: string; cs
   return { status: res.status, code: body?.error?.code ?? null, body };
 }
 
-async function directAccount(label: string): Promise<{ email: string; token: string; csrf: string }> {
+/**
+ * Direct read-only probe into the database the LOCAL API is configured against.
+ *
+ * The API deliberately exposes no cluster internals, so "how many logical machine identities did
+ * this run create?" is measured where the identities actually live. Returns null (never throws) when
+ * the connection string is absent or unreachable: the harness must still run.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function dbProbe<T>(fn: (collections: Record<string, any>) => Promise<T>): Promise<T | null> {
+  const uri = process.env["MONGODB_URI"] ?? "mongodb://127.0.0.1:27017";
+  const dbName = process.env["MONGODB_DATABASE"] ?? "louma_lmdg_dev";
+  try {
+    const { MongoClient } = await import("mongodb");
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 3000 });
+    await client.connect();
+    try {
+      const db = client.db(dbName);
+      return await fn({
+        devices: db.collection("mining_devices"),
+        leases: db.collection("mining_device_leases"),
+        observations: db.collection("mining_device_observations"),
+        nonces: db.collection("mining_device_nonces"),
+        events: db.collection("security_events"),
+        sessions: db.collection("mining_sessions"),
+        quotas: db.collection("mining_device_quotas"),
+      });
+    } finally {
+      await client.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * TEST-ONLY isolation: clear the enrollment budget counters.
+ *
+ * The whole harness talks to the API from one client address, so the per-network new-identity budget
+ * (8/hour by default) is spent by the identity-churn scenarios long before the drift scenarios run.
+ * A 403 from a spent *test budget* says nothing about drift protection, and crediting it as a pass
+ * would be exactly the "green tests mean secure" mistake this harness exists to avoid. Phases that
+ * measure something other than the budget therefore reset it first, and any 403 that still reaches a
+ * scenario is reported as BLOCKED-BY-TEST-SETUP rather than as a verdict. Returns null when the probe
+ * cannot reach the database — the harness must still run.
+ */
+async function resetEnrollmentBudget(): Promise<number | null> {
+  return await dbProbe(async (c) => {
+    const result = await c["quotas"].deleteMany({});
+    return result.deletedCount ?? 0;
+  });
+}
+
+/**
+ * TEST-ONLY isolation: release every live device lease.
+ *
+ * A race measured while an earlier scenario still holds the machine's lease is not a race, it is two
+ * calls queueing behind a lease that was already taken (the original harness reported exactly that:
+ * 409/409, neither side able to win). Releasing the leases first gives the round an unambiguous
+ * starting state, so "exactly one wins" is a statement about the race.
+ */
+async function releaseAllLeases(): Promise<number | null> {
+  return await dbProbe(async (c) => {
+    const result = await c["leases"].updateMany({ status: "active" }, { $set: { status: "released", updatedAt: new Date() } });
+    return result.modifiedCount ?? 0;
+  });
+}
+
+/** Live leases / active cycles in the database the API is configured against. */
+async function liveStateCounts(): Promise<{ leases: number | null; sessions: number | null }> {
+  const counts = await dbProbe(async (c) => ({
+    leases: await c["leases"].countDocuments({ status: "active" }),
+    sessions: await c["sessions"].countDocuments({ status: "active" }),
+  }));
+  return counts ?? { leases: null, sessions: null };
+}
+
+/**
+ * A verdict the harness must never read as a security result: the scenario could not run its course
+ * because the test setup itself (a spent budget, an unreachable probe) stopped it.
+ */
+const BLOCKED_BY_TEST_SETUP: Verdict = "BLOCKED-BY-TEST-SETUP";
+
+/** What the drift phase actually isolated, so the report can show it rather than assert it. */
+const driftIsolation: { leasesReleased: number | null; quotaRowsCleared: number | null } = { leasesReleased: null, quotaRowsCleared: null };
+
+/** True when a start was refused by the identity budget rather than by a device rule. */
+const isBudgetRefusal = (code: string | null): boolean => code === "mining_device_enrollment_limited";
+
+/** Machine identities (device records) created at or after a wall-clock instant. */
+async function clustersSince(sinceMs: number): Promise<number | null> {
+  return dbProbe(async (c) => c["devices"].countDocuments({ firstSeenAt: { $gte: new Date(sinceMs) } }));
+}
+
+async function directAccount(label: string): Promise<{ email: string; token: string; csrf: string; userId: string }> {
   await paceRegister();
   const csrf0 = await apiCall("/api/v1/auth/csrf");
   const email = `${RUN}.${label}.${Math.random().toString(36).slice(2)}@example.test`;
   const reg = await apiCall("/api/v1/auth/register", { method: "POST", csrf: csrf0.body?.csrfToken, body: { email, password: PASSWORD, displayName: `H ${label}` } });
   if (reg.status !== 201) throw new Error(`direct register failed: ${reg.status} ${JSON.stringify(reg.body)}`);
-  return { email, token: reg.body.accessToken, csrf: reg.body.csrfToken };
+  const token = String(reg.body.accessToken ?? "");
+  // The account id is only needed to plant an expired nonce row in the database probe; the access
+  // token is a JWT and its payload carries it. Decoded, never verified — this is a test client.
+  let userId = "";
+  try {
+    const part = token.split(".")[1] ?? "";
+    userId = (JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as { sub?: string }).sub ?? "";
+  } catch {
+    userId = "";
+  }
+  return { email, token, csrf: reg.body.csrfToken, userId };
 }
 
 // ---------------------------------------------------------------------------
 // Scenario suite
 // ---------------------------------------------------------------------------
 
+/**
+ * Derived security metrics. Deliberately explicit about which scenario verdicts feed each figure:
+ * a rate the harness cannot observe (a false merge, for instance) is reported as null, never
+ * guessed.
+ */
+async function computeMetrics(runStartedAt: number): Promise<Record<string, unknown>> {
+  const byId = new Map(results.map((r) => [r.id, r]));
+  const verdict = (id: string): Verdict | "NOT RUN" => byId.get(id)?.finalResult ?? "NOT RUN";
+  const blockedOver = (ids: string[]): { blocked: number; total: number; rate: number | null } => {
+    const present = ids.map((id) => byId.get(id)).filter((r): r is ScenarioResult => r !== undefined);
+    const blocked = present.filter((r) => r.finalResult === "BLOCKED").length;
+    return { blocked, total: present.length, rate: present.length > 0 ? Math.round((blocked / present.length) * 100) / 100 : null };
+  };
+  // Scenarios in which a second account (or a replayed/forged caller) must NOT obtain a cycle:
+  // they are all attempts on a machine identity that is already known or already leased.
+  const sameMachineIds = ["BASELINE-A2", "STORAGE-WIPE", "UA-SWITCH", "CROSS-BROWSER", "CROSS-ENGINE", "API-KEY-REPLACEMENT", "API-IDENTITY-STOCKPILE"];
+  const proofAttacks = ["PROOF-REPLAY", "PROOF-WRONG-ACCOUNT", "PROOF-WRONG-KEY", "PROOF-MALFORMED-JWK", "PROOF-ALTERED-CHALLENGE", "PROOF-BARE-NONCE", "PROOF-CROSS-ORIGIN", "PROOF-EXPIRED-SIMULATED"];
+  const clusterCount = await clustersSince(runStartedAt);
+  return {
+    runStartedAt: new Date(runStartedAt).toISOString(),
+    clustersCreatedDuringRun: clusterCount,
+    sameMachine: blockedOver(sameMachineIds),
+    proofAttacks: blockedOver(proofAttacks),
+    verdicts: Object.fromEntries(results.map((r) => [r.id, r.finalResult])),
+    secondAccountBlockRate: blockedOver(["BASELINE-A2", "STORAGE-WIPE", "UA-SWITCH", "CROSS-BROWSER", "API-KEY-REPLACEMENT", "API-IDENTITY-STOCKPILE"]).rate,
+    sameMachineRecognitionRate: blockedOver(sameMachineIds).rate,
+    falseSplitRate: blockedOver(sameMachineIds).rate === null ? null : 1 - (blockedOver(sameMachineIds).rate ?? 0),
+    falseMergeRate: null,
+    identityCreationSuccess: { attempts: 19, clustersCreated: clusterCount, note: "12 rotation + 6 account rotation + 1 first forge; clusters counted from firstSeenAt >= run start" },
+    identityPoisoningSuccessCount: verdict("API-KEY-REPLACEMENT") === "ALLOWED" ? 1 : 0,
+    browserKeyReplacementSuccessCount: verdict("API-KEY-REPLACEMENT") === "ALLOWED" ? 1 : 0,
+    replaySuccessCount: ["PROOF-REPLAY", "PROOF-CROSS-ORIGIN", "PROOF-EXPIRED-SIMULATED"].filter((id) => verdict(id) !== "BLOCKED" && verdict(id) !== "NOT RUN").length,
+    // A race "success" for an attacker is two winners. An INCONCLUSIVE round (neither side won) is
+    // not a success and is not protection either — the rate below says out loud which it was.
+    concurrentLeaseRaceSuccessCount: ["RACE-2-BROWSERS", "API-CONCURRENT-10"].filter((id) => verdict(id) === "ALLOWED").length,
+    concurrentLeaseRaceInconclusive: ["RACE-2-BROWSERS", "API-CONCURRENT-10"].filter((id) => verdict(id) === "INCONCLUSIVE").length,
+    concurrentSessionCreationSuccessCount: verdict("API-CONCURRENT-10") === "ALLOWED" ? 1 : 0,
+    // Any scenario the test's own setup throttled, listed by id so it can never be read as a security
+    // verdict: these are re-run with an isolated budget before they mean anything.
+    blockedByTestSetup: results.filter((r) => r.finalResult === "BLOCKED-BY-TEST-SETUP").map((r) => r.id),
+    inconclusive: results.filter((r) => r.finalResult === "INCONCLUSIVE").map((r) => r.id),
+    // Drift tolerance is the property the SIM-* phase exists to measure, with its isolation recorded
+    // alongside it (the phase releases live leases and clears the spent identity budget first).
+    driftIsolation: { leasesReleased: driftIsolation.leasesReleased, quotaRowsCleared: driftIsolation.quotaRowsCleared },
+    proofBypassCount: proofAttacks.filter((id) => verdict(id) !== "BLOCKED" && verdict(id) !== "NOT RUN").length,
+    // A direct-API spoof "succeeds" when a caller invents a machine and ends up mining on it. The
+    // forge scenario is the one that measures exactly that (rotation stays BLOCKED for other reasons,
+    // so reading this metric off rotation — as this harness originally did — reported 0 while the
+    // real bypass was open). `API-FORGE-NEW-MACHINE` answers every challenge the server issues before
+    // it is judged, so its verdict cannot be an intermediate "we asked them to verify".
+    directApiSpoofSuccessCount:
+      ["API-FORGE-NEW-MACHINE", "API-IDENTITY-ROTATION", "API-ACCOUNT-ROTATION"].filter((id) => verdict(id) === "ALLOWED").length,
+    directApiSpoofVerdicts: {
+      "API-FORGE-NEW-MACHINE": verdict("API-FORGE-NEW-MACHINE"),
+      "API-IDENTITY-ROTATION": verdict("API-IDENTITY-ROTATION"),
+      "API-ACCOUNT-ROTATION": verdict("API-ACCOUNT-ROTATION"),
+    },
+  };
+}
+
 async function main(): Promise<void> {
+  const runStartedAt = Date.now();
   console.log(`== LMDG attack harness == run=${RUN}`);
   const chrome = launchBrowser(CHROME, "chrome", `${process.env["TEMP"] ?? "/tmp"}/lmdg-h-${RUN}-chrome`);
   const edge = launchBrowser(EDGE, "edge", `${process.env["TEMP"] ?? "/tmp"}/lmdg-h-${RUN}-edge`);
@@ -584,44 +786,107 @@ async function main(): Promise<void> {
     });
 
     // ------------------------------------------------------------------
-    // CROSS-BROWSER: real Edge profile on the same physical machine
+    // CROSS-BROWSER: real Edge profile on the same physical machine.
+    // Edge is Chromium, i.e. the SAME engine as Chrome with a different profile — this covers a
+    // second profile/vendor build, not a second engine. A genuinely different engine is covered by
+    // the Firefox run below (requires HARNESS_FIREFOX); without it no second-engine claim is made.
     // ------------------------------------------------------------------
     const emailE = `${RUN}.e.${Math.random().toString(36).slice(2)}@example.test`;
     await signup(edgeWs, emailE);
     outcome = await pressStart(edgeWs);
     record({
-      id: "CROSS-BROWSER", name: "second real browser (Edge) on same machine", browser: "edge", context: "different engine+profile",
+      id: "CROSS-BROWSER", name: "second real browser (Edge, same Chromium engine) on same machine", browser: "edge", context: "different profile, same engine",
       account: emailE, identityOutcome: "machine-key-correlated", clusterOutcome: "same-cluster", leaseOutcome: "conflict",
       finalResult: classifyStart(outcome.httpStatus, outcome.code), httpStatus: outcome.httpStatus, reasonCode: outcome.code,
       latencyMs: outcome.latencyMs, evidence: outcome.evidence,
+      notes: "Edge is Chromium: same-engine coverage only. Set HARNESS_FIREFOX for the second-engine run.",
     });
+
+    // ------------------------------------------------------------------
+    // CROSS-ENGINE: a genuinely different browser engine on the same machine (opt-in via
+    // HARNESS_FIREFOX, e.g. a Firefox binary). Without a second engine binary this step is
+    // skipped openly — it must never be reported as covered by the Chromium pair above.
+    // ------------------------------------------------------------------
+    if (FIREFOX) {
+      const firefox = launchBrowser(FIREFOX, "firefox", `${process.env["TEMP"] ?? "/tmp"}/lmdg-h-${RUN}-firefox`);
+      try {
+        const firefoxWs = await connectBrowser(firefox);
+        const emailFx = `${RUN}.fx.${Math.random().toString(36).slice(2)}@example.test`;
+        await signup(firefoxWs, emailFx);
+        outcome = await pressStart(firefoxWs);
+        record({
+          id: "CROSS-ENGINE", name: "genuinely different engine (Firefox) on same machine", browser: "firefox", context: "different engine+profile",
+          account: emailFx, identityOutcome: "machine-key-correlated", clusterOutcome: "same-cluster", leaseOutcome: "conflict",
+          finalResult: classifyStart(outcome.httpStatus, outcome.code), httpStatus: outcome.httpStatus, reasonCode: outcome.code,
+          latencyMs: outcome.latencyMs, evidence: outcome.evidence,
+        });
+      } finally {
+        await shutdown(firefox).catch(() => undefined);
+      }
+    } else {
+      console.log("HARNESS: HARNESS_FIREFOX is unset — no genuine second-engine run; CROSS-BROWSER covers Chromium only.");
+    }
 
     // ------------------------------------------------------------------
     // RACE: two browsers starting at the same wall-clock moment
     // ------------------------------------------------------------------
-    const emailF = `${RUN}.f.${Math.random().toString(36).slice(2)}@example.test`;
-    const emailG = `${RUN}.g.${Math.random().toString(36).slice(2)}@example.test`;
-    // Fresh sessions for both: two brand-new accounts on the same machine racing a start.
-    await freshBrowserSession(edgeWs);
-    await gotoAndSettle(edgeWs, "/signup");
-    await signup(edgeWs, emailF);
-    await freshBrowserSession(chromeWs);
-    await gotoAndSettle(chromeWs, "/signup");
-    await signup(chromeWs, emailG);
-    const [raceF, raceG] = await Promise.all([pressStart(edgeWs), pressStart(chromeWs)]);
-    const allowed = [raceF, raceG].filter((r) => classifyStart(r.httpStatus, r.code) === "ALLOWED").length;
+    // Repeated, on an isolated state each round. The original single attempt inherited the lease a
+    // previous scenario had already taken on this machine and reported 409/409 — neither side able to
+    // win, which is not a race result at all. Each round now releases the live leases and the spent
+    // identity budget first, uses two brand-new accounts, fires both starts in the same tick, and
+    // records the winner, the loser and the resulting lease/session state.
+    const raceRounds: Record<string, unknown>[] = [];
+    const RACE_ROUNDS = 3;
+    let raceLatency = 0;
+    for (let round = 0; round < RACE_ROUNDS; round += 1) {
+      const released = await releaseAllLeases();
+      await resetEnrollmentBudget();
+      const emailF = `${RUN}.race${round}f.${Math.random().toString(36).slice(2)}@example.test`;
+      const emailG = `${RUN}.race${round}g.${Math.random().toString(36).slice(2)}@example.test`;
+      await freshBrowserSession(edgeWs);
+      await gotoAndSettle(edgeWs, "/signup");
+      await signup(edgeWs, emailF);
+      await freshBrowserSession(chromeWs);
+      await gotoAndSettle(chromeWs, "/signup");
+      await signup(chromeWs, emailG);
+      // Same tick, both directions: the second argument is what makes them simultaneous rather than
+      // two sequential requests that happen to look concurrent in the report.
+      const [raceF, raceG] = await Promise.all([pressStart(edgeWs), pressStart(chromeWs)]);
+      const allowances = [raceF, raceG].map((r) => classifyStart(r.httpStatus, r.code));
+      const allowed = allowances.filter((v) => v === "ALLOWED").length;
+      const after = await liveStateCounts();
+      raceLatency = Math.max(raceLatency, raceF.latencyMs ?? 0, raceG.latencyMs ?? 0);
+      raceRounds.push({
+        round, releasedLeases: released, winner: allowed === 1 ? (allowances[0] === "ALLOWED" ? "edge" : "chrome") : null,
+        statuses: `${raceF.httpStatus}/${raceG.httpStatus}`, codes: `${raceF.code ?? "-"} | ${raceG.code ?? "-"}`,
+        allowed, activeLeasesAfter: after.leases, activeSessionsAfter: after.sessions,
+      });
+    }
+    const decisive = raceRounds.filter((r) => r["allowed"] === 1).length;
+    const doubleWin = raceRounds.filter((r) => r["allowed"] === 2).length;
     record({
-      id: "RACE-2-BROWSERS", name: "two browsers racing start simultaneously", browser: "chrome+edge", context: "concurrent",
-      account: `${emailF} + ${emailG}`, identityOutcome: "same-machine", clusterOutcome: "same-cluster",
-      leaseOutcome: allowed === 1 ? "exactly-one" : "invalid", finalResult: allowed === 1 ? "ALLOWED" : "ERROR",
-      httpStatus: raceF.httpStatus, reasonCode: `${raceF.code ?? "-"} | ${raceG.code ?? "-"}`,
-      latencyMs: Math.max(raceF.latencyMs ?? 0, raceG.latencyMs ?? 0), evidence: `allowed=${allowed} statuses=${raceF.httpStatus}/${raceG.httpStatus}`,
+      id: "RACE-2-BROWSERS", name: "two browsers racing start simultaneously (isolated, repeated)", browser: "chrome+edge", context: "concurrent",
+      account: `${RACE_ROUNDS} rounds, two fresh accounts each`, identityOutcome: "same-machine", clusterOutcome: "same-cluster",
+      leaseOutcome: doubleWin > 0 ? "two-winners" : decisive === RACE_ROUNDS ? "exactly-one" : "no-decisive-winner",
+      // BLOCKED means the race behaved (exactly one cycle); ALLOWED means both accounts won, which is
+      // the bypass; INCONCLUSIVE means neither side won and therefore nothing about the race was
+      // measured. The last two must never be reported as race protection.
+      finalResult: doubleWin > 0 ? "ALLOWED" : decisive === RACE_ROUNDS ? "BLOCKED" : "INCONCLUSIVE",
+      httpStatus: null, reasonCode: raceRounds.map((r) => String(r["statuses"])).join(" "),
+      latencyMs: raceLatency,
+      evidence: `rounds=${RACE_ROUNDS} exactly-one=${decisive} two-winners=${doubleWin} ${JSON.stringify(raceRounds)}`,
+      notes: "BLOCKED = exactly one lease/session; INCONCLUSIVE = neither side won, so race safety is UNPROVEN",
     });
 
     // ------------------------------------------------------------------
     // PROOF ATTACKS (direct API, exact HTTP semantics; real ECDSA keys via WebCrypto)
     // ------------------------------------------------------------------
     await proofAttacks();
+
+    // ------------------------------------------------------------------
+    // DIRECT-API IDENTITY ATTACKS: forged machines, identity rotation, stockpiling, races
+    // ------------------------------------------------------------------
+    await directIdentityAttacks();
 
     // ------------------------------------------------------------------
     // DRIFT + NETWORK + FINGERPRINT-RANDOMIZATION (SIMULATED at the HTTP boundary)
@@ -632,8 +897,10 @@ async function main(): Promise<void> {
     await shutdown(edge).catch(() => undefined);
   }
 
+  const metrics = await computeMetrics(runStartedAt);
+  console.log(`== metrics == ${JSON.stringify(metrics)}`);
   if (outPath) {
-    writeFileSync(outPath, JSON.stringify({ run: RUN, generatedAt: new Date().toISOString(), frontend: FRONTEND, api: API, results }, null, 2));
+    writeFileSync(outPath, JSON.stringify({ run: RUN, generatedAt: new Date().toISOString(), frontend: FRONTEND, api: API, metrics, results }, null, 2));
     console.log(`results written: ${outPath}`);
   }
 }
@@ -672,7 +939,10 @@ async function proofAttacks(): Promise<void> {
 
   const ch3 = await apiCall("/api/v1/mining/device/challenge", { method: "POST", token: acct.token, csrf: acct.csrf, body: {} });
   const wrongKey = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  const wrongKeyProof = await apiCall("/api/v1/mining/device/prove", { method: "POST", token: acct.token, csrf: acct.csrf, body: { nonce: ch3.body.nonce, signature: await sig(ch3.body.payload, wrongKey.privateKey), publicKeyJwk: await crypto.subtle.exportKey("jwk", wrongKey.publicKey) } });
+  // A mismatched pair: signed by a different key than the presented JWK. (Signing with the wrong
+  // key *and* presenting its matching public key is a valid proof, not an attack — it verifies by
+  // construction and would wrongly record an error here.)
+  const wrongKeyProof = await apiCall("/api/v1/mining/device/prove", { method: "POST", token: acct.token, csrf: acct.csrf, body: { nonce: ch3.body.nonce, signature: await sig(ch3.body.payload, wrongKey.privateKey), publicKeyJwk: jwk } });
   record({
     id: "PROOF-WRONG-KEY", name: "signature by a different key than the presented JWK", browser: "direct-api", context: "key-confusion",
     account: acct.email, identityOutcome: "-", clusterOutcome: "-", leaseOutcome: "-",
@@ -698,6 +968,314 @@ async function proofAttacks(): Promise<void> {
     id: "PROOF-BARE-NONCE", name: "legacy bare-nonce signature (pre-binding)", browser: "direct-api", context: "payload-binding",
     account: acct.email, identityOutcome: "-", clusterOutcome: "-", leaseOutcome: "-",
     finalResult: bareNonce.status === 401 ? "BLOCKED" : "ERROR", httpStatus: bareNonce.status, reasonCode: bareNonce.code, latencyMs: null, evidence: "api",
+  });
+
+  // Cross-origin replay: the challenge is answered on the legitimate origin, then the same signed
+  // payload is presented with a foreign Origin — the origin the browser itself attaches is part of
+  // the signed payload, so the signature verifies nowhere.
+  const ch4 = await apiCall("/api/v1/mining/device/challenge", { method: "POST", token: acct.token, csrf: acct.csrf, body: {}, origin: FRONTEND });
+  const ch4Signature = await sig(ch4.body.payload);
+  const crossOrigin = await apiCall("/api/v1/mining/device/prove", {
+    method: "POST", token: acct.token, csrf: acct.csrf, origin: "https://evil.example",
+    body: { nonce: ch4.body.nonce, signature: ch4Signature, publicKeyJwk: jwk },
+  });
+  record({
+    id: "PROOF-CROSS-ORIGIN", name: "proof answered on one origin, replayed from another", browser: "direct-api", context: "origin binding",
+    account: acct.email, identityOutcome: "-", clusterOutcome: "-", leaseOutcome: "-",
+    finalResult: crossOrigin.status === 401 ? "BLOCKED" : "ERROR", httpStatus: crossOrigin.status, reasonCode: crossOrigin.code, latencyMs: null, evidence: "api",
+  });
+
+  // Expired nonce: the expiry is written into the nonce record by the server, so the harness plants
+  // an already-expired nonce for this account and presents it (SIMULATED expiry; the wall-clock wait
+  // for a real 60s expiry is not spent here).
+  const expiredInserted = await dbProbe(async (c) => {
+    await c["nonces"].insertOne({
+      publicId: `expired-${RUN}`, ownerUserId: acct.userId, deviceKeyHash: null, nonce: `expired-nonce-${RUN}`,
+      issuedAt: new Date(Date.now() - 10 * 60_000), expiresAt: new Date(Date.now() - 5 * 60_000), consumedAt: null,
+    });
+    return true;
+  });
+  const expired = expiredInserted
+    ? await apiCall("/api/v1/mining/device/prove", { method: "POST", token: acct.token, csrf: acct.csrf, body: { nonce: `expired-nonce-${RUN}`, signature: await sig("anything"), publicKeyJwk: jwk } })
+    : null;
+  record({
+    id: "PROOF-EXPIRED-SIMULATED", name: "SIMULATED: already-expired nonce presented", browser: "direct-api", context: "nonce expiry",
+    account: acct.email, identityOutcome: "-", clusterOutcome: "-", leaseOutcome: "-",
+    finalResult: expired === null ? "ERROR" : expired.status === 401 ? "BLOCKED" : "ERROR", httpStatus: expired?.status ?? null, reasonCode: expired?.code ?? null, latencyMs: null, evidence: "api + planted-db-row",
+    notes: "the nonce row is planted directly in MongoDB with a past expiry; no server behaviour is stubbed",
+  });
+}
+
+/**
+ * Direct-API identity attacks: the suite that measures whether a caller who skips the frontend can
+ * MINT machine identities.
+ *
+ * Every payload here is a syntactically valid, internally consistent synthetic fingerprint with a
+ * fresh browser key — i.e. exactly what a direct caller who is willing to lie looks like. The point
+ * is not "can the caller get one device" (a brand-new real device must also be admitted) but "can
+ * the caller get an unlimited supply of them".
+ */
+
+interface ForgeVariant {
+  label: string;
+  hardwareConcurrency: number;
+  maxTouchPoints: number;
+  audioSampleRate: number;
+  audioChannels: number;
+  colorGamut: string;
+  hdr: boolean;
+  screenColorDepth: number;
+}
+
+/** 12 distinct machine cores (the exact inputs the server hashes into a machine identity). */
+function forgeVariants(): ForgeVariant[] {
+  const cores = [2, 4, 8, 16, 32];
+  const touchers = [0, 1, 5, 10];
+  const rates = [44100, 48000, 96000];
+  const gamuts = ["srgb", "p3", "rec2020"];
+  const depths = [24, 30, 32];
+  const out: ForgeVariant[] = [];
+  for (let i = 0; i < 12; i++) {
+    out.push({
+      label: `v${i + 1}`,
+      hardwareConcurrency: cores[i % cores.length]!,
+      maxTouchPoints: touchers[Math.floor(i / cores.length) % touchers.length]!,
+      audioSampleRate: rates[i % rates.length]!,
+      audioChannels: (i % 2) + 1,
+      colorGamut: gamuts[i % gamuts.length]!,
+      hdr: i % 2 === 0,
+      screenColorDepth: depths[i % depths.length]!,
+    });
+  }
+  return out;
+}
+
+/** A complete synthetic device payload, consistent with itself and unique per call. */
+function forgedEvidence(variant: ForgeVariant, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    visitorId: `fp-${RUN}-${variant.label}-${Math.random().toString(36).slice(2)}`,
+    fingerprintConfidence: 0.99,
+    fingerprintVersion: "v5",
+    platform: "Win32",
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    platformVersion: "10.0.0",
+    architecture: "x86",
+    bitness: "64",
+    screenWidth: 1920,
+    screenHeight: 1080,
+    screenAvailWidth: 1920,
+    screenAvailHeight: 1040,
+    screenColorDepth: variant.screenColorDepth,
+    pixelRatio: 1,
+    hardwareConcurrency: variant.hardwareConcurrency,
+    deviceMemory: 8,
+    maxTouchPoints: variant.maxTouchPoints,
+    webglVendor: `vendor-${RUN}-${variant.label}`,
+    webglRenderer: `ANGLE (${variant.label})`,
+    webglLimitsHash: `limits-${RUN}-${variant.label}`,
+    webglExtensionsHash: `ext-${RUN}-${variant.label}`,
+    webgpuHash: `webgpu-${RUN}-${variant.label}`,
+    audioSampleRate: variant.audioSampleRate,
+    audioChannels: variant.audioChannels,
+    colorGamut: variant.colorGamut,
+    hdr: variant.hdr,
+    canvasHash: `canvas-${RUN}-${variant.label}`,
+    audioHash: `audio-${RUN}-${variant.label}`,
+    fontsHash: `fonts-${RUN}-${variant.label}`,
+    webglHash: `webgl-${RUN}-${variant.label}`,
+    speechVoicesHash: `voices-${RUN}-${variant.label}`,
+    timezone: "Europe/Berlin",
+    timezoneOffsetMinutes: -60,
+    locale: "de-DE",
+    languages: "de-DE,de,en",
+    language: "de-DE",
+    mediaAudioInputs: 1,
+    mediaVideoInputs: 1,
+    storageQuotaBytes: 2 ** 32,
+    pluginsHash: `plugins-${RUN}-${variant.label}`,
+    mimeTypesHash: `mime-${RUN}-${variant.label}`,
+    codecsHash: `codecs-${RUN}-${variant.label}`,
+    keyboardLayoutHash: `kbd-${RUN}-${variant.label}`,
+    pdfViewerEnabled: true,
+    browserKeyPublicKey: JSON.stringify({ kty: "EC", crv: "P-256", x: `x-${RUN}-${variant.label}-${Math.random().toString(36).slice(2)}`, y: `y-${RUN}-${variant.label}`, ext: true }),
+    integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
+    ...over,
+  };
+}
+
+async function directIdentityAttacks(): Promise<void> {
+  const variants = forgeVariants();
+
+  // 1. One forged, internally consistent machine from one brand-new account.
+  //
+  // The forged machine carries a REAL browser key the attacker holds, and the scenario completes the
+  // challenge when the server issues one. Recording only the first refusal would be dishonest: a
+  // `mining_device_challenge_required` answer is not a denial, it is an invitation to prove
+  // possession of a key this attacker generated moments ago. The verdict below is therefore the
+  // FINAL start attempt, after every challenge the server asked for has been answered.
+  const forgeAccount = await directAccount("forge");
+  const forgeKp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const forgeJwk = await crypto.subtle.exportKey("jwk", forgeKp.publicKey);
+  const forgeEvidence = forgedEvidence(variants[0]!, { browserKeyPublicKey: JSON.stringify(forgeJwk) });
+  let forgeResult = await apiCall("/api/v1/mining/start", { method: "POST", token: forgeAccount.token, csrf: forgeAccount.csrf, body: { device: forgeEvidence } });
+  const forgeSteps = [`start=${forgeResult.status}:${forgeResult.code ?? "-"}`];
+  if (forgeResult.status === 409 && forgeResult.code === "mining_device_challenge_required") {
+    const ch = await apiCall("/api/v1/mining/device/challenge", { method: "POST", token: forgeAccount.token, csrf: forgeAccount.csrf, body: { device: forgeEvidence } });
+    forgeSteps.push(`challenge=${ch.status}`);
+    if (ch.status === 200) {
+      const signature = Buffer.from(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, forgeKp.privateKey, new TextEncoder().encode(String(ch.body.payload)))).toString("base64url");
+      const proof = await apiCall("/api/v1/mining/device/prove", { method: "POST", token: forgeAccount.token, csrf: forgeAccount.csrf, body: { nonce: ch.body.nonce, signature, publicKeyJwk: forgeJwk, device: forgeEvidence } });
+      forgeSteps.push(`prove=${proof.status}`);
+      forgeResult = await apiCall("/api/v1/mining/start", { method: "POST", token: forgeAccount.token, csrf: forgeAccount.csrf, body: { device: forgeEvidence } });
+      forgeSteps.push(`retry=${forgeResult.status}:${forgeResult.code ?? "-"}`);
+    }
+  }
+  // The assertion that matters is not the status code but the state it left behind: a refused start
+  // that still created an active lease would be a bypass wearing a 4xx. Read it where leases and
+  // cycles actually live.
+  const forgeLeases = await dbProbe(async (c) => await c["leases"].countDocuments({ ownerUserId: forgeAccount.userId, status: "active" }));
+  const forgeSessions = await dbProbe(async (c) => await c["sessions"].countDocuments({ ownerUserId: forgeAccount.userId, status: "active" }));
+  record({
+    id: "API-FORGE-NEW-MACHINE", name: "direct API invents a new machine identity, then answers every challenge", browser: "direct-api", context: "forged consistent fingerprint + self-generated key",
+    account: forgeAccount.email, identityOutcome: "new-cluster", clusterOutcome: forgeResult.status === 200 ? "enrolled-and-mining" : "enrolled-untrusted",
+    leaseOutcome: forgeResult.status === 200 ? "active" : (forgeLeases === null ? "unknown" : `none(leases=${forgeLeases} sessions=${forgeSessions ?? "?"})`),
+    finalResult: classifyStart(forgeResult.status, forgeResult.code), httpStatus: forgeResult.status, reasonCode: forgeResult.code, latencyMs: null,
+    evidence: `api | ${forgeSteps.join(" ")} | active-leases=${forgeLeases ?? "?"} active-sessions=${forgeSessions ?? "?"}`,
+    notes: "regression for the measured bypass: proof of a key the caller generated must not clear the network lock nor leave an active lease",
+  });
+
+  // 2. IDENTITY ROTATION: one account, 12 different forged machines, fresh browser key each time.
+  // Measures the classic "keep generating new identities" attack.
+  const rotationStart = Date.now();
+  const rotation: { status: number; code: string | null }[] = [];
+  for (const variant of variants) {
+    const res = await apiCall("/api/v1/mining/start", { method: "POST", token: forgeAccount.token, csrf: forgeAccount.csrf, body: { device: forgedEvidence(variant) } });
+    rotation.push({ status: res.status, code: res.code });
+  }
+  const rotationAllowed = rotation.filter((r) => r.status === 200).length;
+  const rotationBlocked = rotation.filter((r) => r.status >= 400).length;
+  const rotationClusters = await clustersSince(rotationStart);
+  const rotationCodes = [...new Set(rotation.map((r) => `${r.status}:${r.code ?? "-"}`))].join(" ");
+  record({
+    id: "API-IDENTITY-ROTATION", name: "one account rotates 12 forged machine identities", browser: "direct-api", context: "identity churn",
+    account: forgeAccount.email, identityOutcome: `new-clusters=${rotationClusters ?? "?"}`, clusterOutcome: `allowed=${rotationAllowed} blocked=${rotationBlocked}`, leaseOutcome: "-",
+    finalResult: rotationBlocked === 0 ? "ALLOWED" : "BLOCKED", httpStatus: null, reasonCode: rotationCodes, latencyMs: null,
+    evidence: `api | allowed=${rotationAllowed}/12 blocked=${rotationBlocked}/12 new-machine-identities=${rotationClusters ?? "?"}`,
+    notes: "success = the count of NEW trusted machine identities stays bounded, not 12",
+  });
+
+  // 3. ACCOUNT ROTATION: three fresh accounts, two forged machines each — the multi-account version.
+  const acctRotationStart = Date.now();
+  const acctRotation: { status: number; code: string | null }[] = [];
+  for (let a = 0; a < 3; a++) {
+    const acct = await directAccount(`rot${a}`);
+    for (const variant of [variants[(a * 2) % variants.length]!, variants[(a * 2 + 1) % variants.length]!]) {
+      const res = await apiCall("/api/v1/mining/start", { method: "POST", token: acct.token, csrf: acct.csrf, body: { device: forgedEvidence(variant) } });
+      acctRotation.push({ status: res.status, code: res.code });
+    }
+  }
+  const acctAllowed = acctRotation.filter((r) => r.status === 200).length;
+  const acctClusters = await clustersSince(acctRotationStart);
+  record({
+    id: "API-ACCOUNT-ROTATION", name: "three accounts each forge two machine identities", browser: "direct-api", context: "multi-account identity churn",
+    account: "3 fresh accounts", identityOutcome: `new-clusters=${acctClusters ?? "?"}`, clusterOutcome: `allowed=${acctAllowed}/6`, leaseOutcome: "-",
+    finalResult: acctAllowed >= 6 ? "ALLOWED" : "BLOCKED", httpStatus: null, reasonCode: [...new Set(acctRotation.map((r) => `${r.status}:${r.code ?? "-"}`))].join(" "), latencyMs: null,
+    evidence: `api | allowed=${acctAllowed}/6 new-machine-identities=${acctClusters ?? "?"}`,
+  });
+
+  // 4. Inconsistent claims: contradictory UA/platform plus absurd hardware values.
+  const inconsistent = await directAccount("inconsistent");
+  const bogus = await apiCall("/api/v1/mining/start", {
+    method: "POST", token: inconsistent.token, csrf: inconsistent.csrf,
+    body: {
+      device: forgedEvidence(variants[1]!, {
+        platform: "MacIntel",
+        userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        hardwareConcurrency: 4096,
+        deviceMemory: 4096,
+        maxTouchPoints: 999,
+        screenColorDepth: 999,
+        hdr: true,
+        colorGamut: "rec2020",
+        pixelRatio: 99,
+        timezoneOffsetMinutes: -99999,
+        languages: "",
+        integrity: { webdriver: true, headlessHint: true, impossibleUaPlatform: true, missingCapabilities: true },
+      }),
+    },
+  });
+  record({
+    id: "API-INCONSISTENT-CLAIMS", name: "internally contradictory / impossible evidence", browser: "direct-api", context: "consistency engine",
+    account: inconsistent.email, identityOutcome: "inconsistent", clusterOutcome: "-", leaseOutcome: "-",
+    finalResult: classifyStart(bogus.status, bogus.code), httpStatus: bogus.status, reasonCode: bogus.code, latencyMs: null, evidence: "api",
+    notes: "expected after hardening: challenge or denial, never a silent trusted allow",
+  });
+
+  // 5. Malformed + missing evidence (must stay refused).
+  const malformedAcct = await directAccount("malformed");
+  const malformed = await apiCall("/api/v1/mining/start", {
+    method: "POST", token: malformedAcct.token, csrf: malformedAcct.csrf,
+    body: { device: { hardwareConcurrency: "many", maxTouchPoints: {}, platform: 42, integrity: "yes" } },
+  });
+  record({
+    id: "API-MALFORMED-EVIDENCE", name: "malformed evidence payload", browser: "direct-api", context: "type confusion",
+    account: malformedAcct.email, identityOutcome: "-", clusterOutcome: "-", leaseOutcome: "-",
+    finalResult: malformed.status >= 400 ? "BLOCKED" : "ERROR", httpStatus: malformed.status, reasonCode: malformed.code, latencyMs: null, evidence: "api",
+  });
+  const missing = await apiCall("/api/v1/mining/start", { method: "POST", token: malformedAcct.token, csrf: malformedAcct.csrf, body: {} });
+  record({
+    id: "API-MISSING-EVIDENCE", name: "start with no device evidence at all", browser: "direct-api", context: "evidence omission",
+    account: malformedAcct.email, identityOutcome: "-", clusterOutcome: "-", leaseOutcome: "-",
+    finalResult: missing.status >= 400 ? "BLOCKED" : "ERROR", httpStatus: missing.status, reasonCode: missing.code, latencyMs: null, evidence: "api",
+  });
+
+  // 6. Key replacement against a machine identity already seen, from a second account.
+  const keyA = await directAccount("keyrot-a");
+  const keyB = await directAccount("keyrot-b");
+  const sharedMachine = variants[3]!;
+  const machineStart = await apiCall("/api/v1/mining/start", { method: "POST", token: keyA.token, csrf: keyA.csrf, body: { device: forgedEvidence(sharedMachine) } });
+  const replacedKey = await apiCall("/api/v1/mining/start", {
+    method: "POST", token: keyB.token, csrf: keyB.csrf,
+    body: { device: forgedEvidence(sharedMachine, { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36", platform: "MacIntel" }) },
+  });
+  record({
+    id: "API-KEY-REPLACEMENT", name: "new key + rewritten presentation on an already-known machine", browser: "direct-api", context: "key replacement + trait rewrite",
+    account: keyB.email, identityOutcome: machineStart.status === 200 ? "machine-established-by-A" : "-", clusterOutcome: "-", leaseOutcome: replacedKey.status === 409 ? "conflict" : "-",
+    finalResult: classifyStart(replacedKey.status, replacedKey.code), httpStatus: replacedKey.status, reasonCode: replacedKey.code, latencyMs: null, evidence: "api",
+    notes: "expected: the machine identity is not replaced and the second account does not start",
+  });
+
+  // 7. Concurrent enrollment race: ten simultaneous starts, one forged machine, two accounts.
+  const raceA = await directAccount("conc-a");
+  const raceB = await directAccount("conc-b");
+  const raceVariant = variants[5]!;
+  const raceEvidence = forgedEvidence(raceVariant);
+  const attempts = await Promise.all([
+    ...Array.from({ length: 5 }, () => apiCall("/api/v1/mining/start", { method: "POST", token: raceA.token, csrf: raceA.csrf, body: { device: raceEvidence } })),
+    ...Array.from({ length: 5 }, () => apiCall("/api/v1/mining/start", { method: "POST", token: raceB.token, csrf: raceB.csrf, body: { device: raceEvidence } })),
+  ]);
+  const raceClusters = await clustersSince(raceVariant.label === "" ? Date.now() : Date.now() - 60_000);
+  const activeLeases = await dbProbe(async (c) => c["leases"].countDocuments({ status: "active", leaseEndsAt: { $gt: new Date() } }));
+  const raceAllowedA = attempts.slice(0, 5).filter((r) => r.status === 200).length;
+  const raceAllowedB = attempts.slice(5).filter((r) => r.status === 200).length;
+  record({
+    id: "API-CONCURRENT-10", name: "10 concurrent starts on one forged device, two accounts", browser: "direct-api", context: "concurrency",
+    account: `${raceA.email} + ${raceB.email}`, identityOutcome: `recent-clusters=${raceClusters ?? "?"}`, clusterOutcome: `accountA-200s=${raceAllowedA}/5 accountB-200s=${raceAllowedB}/5`, leaseOutcome: `active-leases-total=${activeLeases ?? "?"}`,
+    finalResult: raceAllowedA >= 1 && raceAllowedB >= 1 ? "ERROR" : "BLOCKED", httpStatus: null, reasonCode: [...new Set(attempts.map((r) => `${r.status}:${r.code ?? "-"}`))].join(" "), latencyMs: null,
+    evidence: `api | A=${raceAllowedA}/5 B=${raceAllowedB}/5`, notes: "expected: only ONE account obtains the cycle on this machine identity",
+  });
+
+  // 8. Identity stockpiling: mint identities from many accounts while a lease is active, then check
+  //    whether a later account can mine on one of those pre-created identities.
+  const stockpileTarget = variants[9]!;
+  const stockpileStart = await apiCall("/api/v1/mining/start", { method: "POST", token: forgeAccount.token, csrf: forgeAccount.csrf, body: { device: forgedEvidence(stockpileTarget) } });
+  const stockpileB = await directAccount("stockpile-b");
+  const stockpileUse = await apiCall("/api/v1/mining/start", { method: "POST", token: stockpileB.token, csrf: stockpileB.csrf, body: { device: forgedEvidence(stockpileTarget) } });
+  record({
+    id: "API-IDENTITY-STOCKPILE", name: "pre-minted identity reused by a second account", browser: "direct-api", context: "identity stockpiling",
+    account: stockpileB.email, identityOutcome: stockpileStart.status === 200 ? "minted" : "refused", clusterOutcome: "-", leaseOutcome: stockpileUse.status === 409 ? "conflict" : "-",
+    finalResult: classifyStart(stockpileUse.status, stockpileUse.code), httpStatus: stockpileUse.status, reasonCode: stockpileUse.code, latencyMs: null, evidence: "api",
+    notes: "expected: a second account cannot open a second cycle on a pre-minted identity",
   });
 }
 
@@ -733,12 +1311,32 @@ async function simulatedScenarios(): Promise<void> {
   });
   const digestsOf = (ev: Record<string, unknown>) => buildFeatureMap(normalizeSignals(sanitizeEvidence(ev)));
 
+  // Isolation: this phase measures drift tolerance, and the suites above have already spent the
+  // per-network identity budget and taken live leases on this machine. Release both, so a refusal
+  // here means "drift was caught" and a 403 from a spent test budget can never masquerade as one.
+  // `SIM-BASELINE` then enrolls and takes its own lease, which is the lease the drift cases below are
+  // supposed to collide with.
+  const releasedForDrift = await releaseAllLeases();
+  const resetForDrift = await resetEnrollmentBudget();
+  driftIsolation.leasesReleased = releasedForDrift;
+  driftIsolation.quotaRowsCleared = resetForDrift;
+  console.log(`[isolation] drift phase: released_leases=${releasedForDrift} quota_budget_cleared=${resetForDrift}`);
+  // A refusal is a refusal; a refusal caused by the test's own spent budget is not a result.
+  const driftVerdict = (status: number, code: string | null): Verdict => {
+    if (isBudgetRefusal(code)) return BLOCKED_BY_TEST_SETUP;
+    if (status === 200) return "ALLOWED";
+    if (status >= 400 && status < 500) return "BLOCKED";
+    return "ERROR";
+  };
+
   const acctA = await directAccount("sim-a");
   const start1 = await apiCall("/api/v1/mining/start", { method: "POST", token: acctA.token, csrf: acctA.csrf, body: { device: evidence() } });
   record({
     id: "SIM-BASELINE", name: "SIMULATED: first enrollment of synthetic machine", browser: "simulated-http", context: "http-boundary",
-    account: acctA.email, identityOutcome: "enrolled", clusterOutcome: "created", leaseOutcome: "active",
-    finalResult: start1.status === 200 ? "ALLOWED" : "ERROR", httpStatus: start1.status, reasonCode: start1.code, latencyMs: null, evidence: "simulated",
+    account: acctA.email, identityOutcome: "enrolled", clusterOutcome: "created", leaseOutcome: start1.status === 200 ? "active" : "-",
+    finalResult: start1.status === 200 ? "ALLOWED" : isBudgetRefusal(start1.code) ? BLOCKED_BY_TEST_SETUP : "ERROR",
+    httpStatus: start1.status, reasonCode: start1.code, latencyMs: null, evidence: "simulated",
+    notes: "setup for the drift cases: it must be admitted for their conflicts to be meaningful",
   });
 
   // Rendering drift: GPU strings + digests move (driver update), machine traits stable.
@@ -750,7 +1348,7 @@ async function simulatedScenarios(): Promise<void> {
   record({
     id: "SIM-DRIFT-GPU", name: "SIMULATED: rendering/GPU drift on same machine", browser: "simulated-http", context: "driver-update drift",
     account: acctB.email, identityOutcome: digestsOf(machine)["gpu"] !== digestsOf({ ...machine, webglVendor: `vendor2-${RUN}`, webglRenderer: `renderer2-${RUN}` })["gpu"] ? "gpu-digested" : "?", clusterOutcome: "machine-key-stable", leaseOutcome: "conflict-expected",
-    finalResult: drift.status === 409 ? "BLOCKED" : drift.status === 200 ? "ALLOWED" : "ERROR", httpStatus: drift.status, reasonCode: drift.code, latencyMs: null, evidence: "simulated",
+    finalResult: driftVerdict(drift.status, drift.code), httpStatus: drift.status, reasonCode: drift.code, latencyMs: null, evidence: "simulated",
   });
 
   // Fingerprint randomization: every rendering digest + visitorId randomized (privacy-browser style).
@@ -768,7 +1366,7 @@ async function simulatedScenarios(): Promise<void> {
   record({
     id: "SIM-FP-RANDOM", name: "SIMULATED: fingerprint randomization (privacy browser style)", browser: "simulated-http", context: "randomized rendering+geometry",
     account: acctC.email, identityOutcome: "randomized-browser-traits", clusterOutcome: "machine-key-stable", leaseOutcome: "conflict-expected",
-    finalResult: randomized.status === 409 ? "BLOCKED" : randomized.status === 200 ? "ALLOWED" : "ERROR", httpStatus: randomized.status, reasonCode: randomized.code, latencyMs: null, evidence: "simulated",
+    finalResult: driftVerdict(randomized.status, randomized.code), httpStatus: randomized.status, reasonCode: randomized.code, latencyMs: null, evidence: "simulated",
   });
 
   // VPN: IP change only (no key, no visitorId), same machine traits — SIMULATED network metadata.
@@ -780,7 +1378,7 @@ async function simulatedScenarios(): Promise<void> {
   record({
     id: "SIM-VPN-IP-CHANGE", name: "SIMULATED: VPN/IP change, no browser identity left", browser: "simulated-http", context: "network-only change",
     account: acctD.email, identityOutcome: "network-only", clusterOutcome: "machine-key-stable", leaseOutcome: "conflict-expected",
-    finalResult: vpn.status === 409 ? "BLOCKED" : vpn.status === 200 ? "ALLOWED" : "ERROR", httpStatus: vpn.status, reasonCode: vpn.code, latencyMs: null, evidence: "simulated",
+    finalResult: driftVerdict(vpn.status, vpn.code), httpStatus: vpn.status, reasonCode: vpn.code, latencyMs: null, evidence: "simulated",
   });
 
   // Impossible UA/platform pair (announced integrity + server-side detection).
@@ -792,7 +1390,7 @@ async function simulatedScenarios(): Promise<void> {
   record({
     id: "SIM-IMPOSSIBLE-UA", name: "SIMULATED: impossible UA/platform pair", browser: "simulated-http", context: "integrity evidence",
     account: acctE.email, identityOutcome: "integrity-flagged", clusterOutcome: "new-cluster", leaseOutcome: "-",
-    finalResult: impossible.status === 200 ? "ALLOWED" : classifyStart(impossible.status, impossible.code), httpStatus: impossible.status, reasonCode: impossible.code, latencyMs: null,
+    finalResult: driftVerdict(impossible.status, impossible.code), httpStatus: impossible.status, reasonCode: impossible.code, latencyMs: null,
     evidence: "simulated", notes: "expected: ALLOWED (evidence, not verdict) or BLOCKED/CHALLENGE under aggressive policy",
   });
 
@@ -805,7 +1403,7 @@ async function simulatedScenarios(): Promise<void> {
   record({
     id: "SIM-AUTOMATION", name: "SIMULATED: webdriver+headless automation indicators", browser: "simulated-http", context: "integrity evidence",
     account: acctF2.email, identityOutcome: "integrity-flagged", clusterOutcome: "new-cluster", leaseOutcome: "-",
-    finalResult: classifyStart(automated.status, automated.code), httpStatus: automated.status, reasonCode: automated.code, latencyMs: null,
+    finalResult: driftVerdict(automated.status, automated.code), httpStatus: automated.status, reasonCode: automated.code, latencyMs: null,
     evidence: "simulated", notes: "expected: CHALLENGE (risk>=55) rather than silent allow",
   });
 }

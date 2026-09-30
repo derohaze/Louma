@@ -1,5 +1,6 @@
 import { MongoServerError, type Db, type Document } from "mongodb";
 import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
+import { MAX_CLUSTER_ALIASES } from "../../modules/mining-device/policy.js";
 
 /**
  * How long each append-only log is kept.
@@ -166,10 +167,36 @@ const schemas: Record<string, Document> = {
         fingerprintVisitorIdHash: { bsonType: ["string", "null"] },
         normalizedSignalHash: { bsonType: ["string", "null"] },
         status: { enum: ["active", "quarantined", "blocked"] },
+        // Server-owned enrollment state; see MiningDeviceTrustState. Optional for rows written
+        // before the enrollment model existed.
+        trustState: { enum: ["provisional", "established", "suspicious", "blocked"] },
+        anchorHash: { bsonType: ["string", "null"] },
+        aliasHashes: { bsonType: "array", items: { bsonType: "string" }, maxItems: MAX_CLUSTER_ALIASES },
+        enrollmentUserId: { bsonType: ["string", "null"] },
+        admissionCount: { bsonType: "int", minimum: 0 },
+        proofCount: { bsonType: "int", minimum: 0 },
+        establishedAt: { bsonType: ["date", "null"] },
+        findingCount: { bsonType: "int", minimum: 0 },
         firstSeenAt: { bsonType: "date" },
         lastSeenAt: { bsonType: "date" },
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+  mining_device_quotas: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["scope", "windowMs", "bucketStart", "count", "expiresAt"],
+      properties: {
+        // `_id` is the bucket key `${scope}:${windowMs}:${bucketStartMs}`; the atomic $inc upsert on
+        // it IS the rate limiter, so no read-then-write check exists to race.
+        _id: { bsonType: "string" },
+        scope: { enum: ["account", "network"] },
+        windowMs: { bsonType: ["int", "long", "double"] },
+        bucketStart: { bsonType: "date" },
+        count: { bsonType: ["int", "long", "double"], minimum: 0 },
+        expiresAt: { bsonType: "date" },
       },
     },
   },
@@ -180,6 +207,7 @@ const schemas: Record<string, Document> = {
       properties: {
         publicId: { bsonType: "string" },
         deviceClusterId: { bsonType: "string" },
+        deviceId: { bsonType: ["string", "null"] },
         ownerUserId: { bsonType: "string" },
         miningSessionId: { bsonType: "string" },
         leasedAt: { bsonType: "date" },
@@ -431,9 +459,22 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     // resolution path looks it up directly rather than through the recent-activity sweep, so the
     // lookup needs its own index and never depends on `lastSeenAt` ordering.
     db.collection("mining_devices").createIndex({ machineKeyHash: 1 }, { name: "mining_devices_machine_key" }),
+    // The immutable enrollment anchor: one server-owned identity per machine core. Partial-unique
+    // (rows written before the enrollment model have no anchor) so a racing enrollment cannot create
+    // a second cluster for one machine.
+    db.collection("mining_devices").createIndex(
+      { anchorHash: 1 },
+      { unique: true, partialFilterExpression: { anchorHash: { $type: "string" } }, name: "mining_devices_anchor_unique" },
+    ),
+    // Append-only aliases the server accepted for a cluster (a moved core trait, a tolerant match);
+    // a multikey index so those observations resolve to the established cluster by direct lookup.
+    db.collection("mining_devices").createIndex({ aliasHashes: 1 }, { name: "mining_devices_alias_hashes" }),
     db.collection("mining_devices").createIndex({ normalizedSignalHash: 1 }, { name: "mining_devices_signal_hash" }),
     db.collection("mining_devices").createIndex({ lastSeenAt: -1 }, { name: "mining_devices_last_seen" }),
     db.collection("mining_devices").createIndex({ status: 1, lastSeenAt: -1 }, { name: "mining_devices_status_seen" }),
+    // Network-scoped admission checks (another lease on this network, network churn) look devices up
+    // by the last observed IP hash; without this they would scan the device population.
+    db.collection("mining_devices").createIndex({ lastIpHash: 1, lastSeenAt: -1 }, { name: "mining_devices_network_seen" }),
     // One active lease per device cluster: the database guarantee behind "one device, one cycle".
     db.collection("mining_device_leases").createIndex({ deviceClusterId: 1 }, { unique: true, partialFilterExpression: { status: "active" }, name: "mining_device_leases_one_active_per_device" }),
     db.collection("mining_device_leases").createIndex({ ownerUserId: 1, status: 1 }, { name: "mining_device_leases_owner_active" }),
@@ -447,6 +488,8 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("mining_device_nonces").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_device_nonces_ttl" }),
     db.collection("mining_device_observations").createIndex({ deviceId: 1, observedAt: -1 }, { name: "mining_device_observations_device_time" }),
     db.collection("mining_device_observations").createIndex({ ownerUserId: 1, observedAt: -1 }, { name: "mining_device_observations_owner_time" }),
+    // Enrollment-rate buckets are short-lived counters: the TTL index is what keeps them bounded.
+    db.collection("mining_device_quotas").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_device_quotas_ttl" }),
   ]);
 
   if (options.retentionTtlEnabled) {
@@ -468,13 +511,15 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
   // Device observations are sampled evidence, not customer history: without a TTL they accumulate
   // for the life of the deployment while the configured `LMDG_DEVICE_OBSERVATION_TTL_SECONDS`
   // claims a retention window. Migrating options (rather than a fixed definition) so a changed
-  // window replaces the index instead of wedging startup on boot.
+  // window replaces the index instead of wedging startup on boot. Clamped to the 30-day history
+  // window the risk engine reasons over: a shorter TTL would expire rows the device and account
+  // checks still expect, silently understating risk.
   if (options.observationTtlSeconds !== undefined) {
     await createIndexMigratingOptions(
       db,
       "mining_device_observations",
       { observedAt: 1 },
-      { expireAfterSeconds: options.observationTtlSeconds, name: "mining_device_observations_ttl" },
+      { expireAfterSeconds: Math.max(options.observationTtlSeconds, 30 * 24 * 60 * 60), name: "mining_device_observations_ttl" },
     );
   }
 
