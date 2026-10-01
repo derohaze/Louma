@@ -219,3 +219,31 @@ test("mining configuration is validated: the 24-hour window and the one-cycle ru
   assert.equal(tuned.mining.rate.maxUnits, 2, "0.0002 at four decimals");
   assert.equal(tuned.mining.rate.scale, 10_000);
 });
+
+test("pool rooms come from the environment: hashrate, reward band, and member cap", () => {
+  const base = {
+    MONGODB_URI: "mongodb://127.0.0.1:27017/louma",
+    MONGODB_DATABASE: "louma",
+    ACCESS_TOKEN_SECRET: Buffer.alloc(32, 1).toString("base64"),
+    APP_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString("base64"),
+  };
+
+  const defaults = loadConfig({ ...base }).miningPools;
+  assert.deepEqual(defaults.low, { baseHashrate: 100, rewardMinBps: 8500, rewardMaxBps: 11500, maxMembers: 1000 });
+  assert.deepEqual(defaults.medium, { baseHashrate: 100, rewardMinBps: 7000, rewardMaxBps: 13000, maxMembers: 1000 });
+
+  const tuned = loadConfig({
+    ...base,
+    MINING_POOL_LOW_BASE_HASHRATE: "200",
+    MINING_POOL_LOW_REWARD_MIN_BPS: "9000",
+    MINING_POOL_LOW_REWARD_MAX_BPS: "11000",
+    MINING_POOL_LOW_MAX_MEMBERS: "50",
+  }).miningPools;
+  assert.deepEqual(tuned.low, { baseHashrate: 200, rewardMinBps: 9000, rewardMaxBps: 11000, maxMembers: 50 });
+  assert.equal(tuned.medium.maxMembers, 1000, "an unset pool keeps its defaults");
+
+  assert.throws(() => loadConfig({ ...base, MINING_POOL_LOW_REWARD_MIN_BPS: "12000", MINING_POOL_LOW_REWARD_MAX_BPS: "11000" }), /MINING_POOL_LOW_REWARD_MIN_BPS/);
+  assert.throws(() => loadConfig({ ...base, MINING_POOL_MEDIUM_REWARD_MAX_BPS: "60000" }), /MINING_POOL_MEDIUM_REWARD_MAX_BPS/);
+  assert.throws(() => loadConfig({ ...base, MINING_POOL_LOW_MAX_MEMBERS: "0" }), /MINING_POOL_LOW_MAX_MEMBERS/);
+  assert.throws(() => loadConfig({ ...base, MINING_POOL_MEDIUM_BASE_HASHRATE: "-5" }), /MINING_POOL_MEDIUM_BASE_HASHRATE/);
+});

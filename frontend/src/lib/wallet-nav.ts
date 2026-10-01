@@ -2,11 +2,15 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
   BitcoinCpuIcon,
+  BookBookmark01Icon,
+  ChartIncreaseIcon,
+  FavouriteIcon,
   Home04Icon,
   QrCodeIcon,
   Settings01Icon,
   TransactionHistoryIcon,
   UserCircleIcon,
+  UserGroupIcon,
   Wallet01Icon,
 } from "@hugeicons/core-free-icons";
 import { settingsPages, type SettingsHref } from "@/lib/settings-pages";
@@ -17,9 +21,13 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 export type NavHref =
   | "/"
   | "/transfer"
+  | "/transfer/recipients"
   | "/mining"
+  | "/mining/pools"
+  | "/mining/history"
   | "/wallet"
-  | "/history"
+  | "/wallet/address-book"
+  | "/transactions"
   | "/custom-address"
   | "/profile"
   | SecurityHref
@@ -79,6 +87,12 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         searchTerms: "balance receiving address",
       },
       {
+        title: "Address Book",
+        href: "/wallet/address-book",
+        icon: BookBookmark01Icon,
+        searchTerms: "saved addresses recipients favorites send",
+      },
+      {
         title: "Custom Address",
         href: "/custom-address",
         icon: QrCodeIcon,
@@ -87,14 +101,20 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     ],
   },
   {
-    title: "Transfers",
+    title: "Transfer",
     icon: ArrowUpRight01Icon,
     items: [
       {
         title: "Transfer",
         href: "/transfer",
         icon: ArrowUpRight01Icon,
-        searchTerms: "send receive funds",
+        searchTerms: "send transfer receive funds",
+      },
+      {
+        title: "Recipients",
+        href: "/transfer/recipients",
+        icon: FavouriteIcon,
+        searchTerms: "saved recent recipients favorites addresses",
       },
     ],
   },
@@ -103,20 +123,32 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     icon: BitcoinCpuIcon,
     items: [
       {
+        title: "Mining Pools",
+        href: "/mining/pools",
+        icon: UserGroupIcon,
+        searchTerms: "mining pools join room community low medium",
+      },
+      {
         title: "Mining",
         href: "/mining",
         icon: BitcoinCpuIcon,
         searchTerms: "mining rewards rate cycle earn lma earn",
       },
+      {
+        title: "History",
+        href: "/mining/history",
+        icon: ChartIncreaseIcon,
+        searchTerms: "mining cycles history earnings collected past",
+      },
     ],
   },
   {
-    title: "History",
+    title: "Transactions",
     icon: TransactionHistoryIcon,
     items: [
       {
         title: "Transactions",
-        href: "/history",
+        href: "/transactions",
         icon: TransactionHistoryIcon,
         searchTerms: "transactions history transfers search filter",
       },

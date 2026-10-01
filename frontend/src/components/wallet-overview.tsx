@@ -76,7 +76,7 @@ type OverviewMetric = {
   money?: string;
   count?: number;
   hint: string;
-  href: "/wallet" | "/history";
+  href: "/wallet" | "/transactions";
 };
 
 export function OverviewContent() {
@@ -133,21 +133,21 @@ export function OverviewContent() {
       label: "Total Received",
       money: mask(currency(totalIn)),
       hint: "Net of the network tax, in the loaded history",
-      href: "/history",
+      href: "/transactions",
     },
     {
       icon: ArrowUpRight01Icon,
       label: "Total Sent",
       money: mask(currency(totalOut)),
       hint: "Outgoing transfers in the loaded history",
-      href: "/history",
+      href: "/transactions",
     },
     {
       icon: TransactionHistoryIcon,
       label: "Transactions",
       count: transactions.length,
       hint: "Search and filter transactions",
-      href: "/history",
+      href: "/transactions",
     },
   ];
   const frozen = wallet?.status === "frozen";
@@ -341,7 +341,7 @@ export function OverviewContent() {
       <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
         <div className="flex items-center justify-between border-b px-5 py-4">
           <h2 className="font-display text-base font-semibold">Recent transactions</h2>
-          <Link to="/history" className="text-sm font-semibold text-primary-soft">
+          <Link to="/transactions" className="text-sm font-semibold text-primary-soft">
             View all
           </Link>
         </div>
@@ -349,7 +349,7 @@ export function OverviewContent() {
           transactions.slice(0, 4).map((t) => (
             <Link
               key={t.id}
-              to="/history/$transferId"
+              to="/transactions/$transferId"
               params={{ transferId: t.transferId }}
               className="flex items-center gap-3 border-b px-5 py-4 transition-colors last:border-0 hover:bg-secondary/40"
             >

@@ -106,6 +106,12 @@ async function register(label: string): Promise<Account> {
   const account = await collections.ledgerAccounts.findOne({ walletId: wallet.id, accountType: "wallet" });
   assert.ok(account);
   createdWalletAccountIds.push(account.publicId);
+  // Mining requires pool membership: every fixture account joins the Low pool on creation.
+  const joined = await call("POST", "/api/v1/mining/pools/join", {
+    token: response.body["accessToken"] as string,
+    body: { poolId: "low" },
+  });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
   return { userId: user.id, email, accessToken: response.body["accessToken"] as string, walletId: wallet.id, ledgerAccountId: account.publicId };
 }
 
@@ -461,6 +467,7 @@ after(async () => {
   for (const userId of createdUserIds) {
     await collections.miningSessions.deleteMany({ ownerUserId: userId });
     await collections.miningSettlements.deleteMany({ ownerUserId: userId });
+    await collections.miningPoolMembers.deleteMany({ ownerUserId: userId });
     await collections.miningDeviceLeases.deleteMany({ ownerUserId: userId });
     await collections.miningDeviceObservations.deleteMany({ ownerUserId: userId });
     await collections.miningDeviceNonces.deleteMany({ ownerUserId: userId });

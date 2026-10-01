@@ -1,5 +1,6 @@
 import type { Collection, Db } from "mongodb";
 import type {
+  FinancialControlsRecord,
   LedgerAccountRecord,
   LedgerEntryRecord,
   MiningDeviceLeaseRecord,
@@ -13,8 +14,10 @@ import type {
   SecurityEventRecord,
   SessionRecord,
   TransactionRecord,
+  TransferAuthorizationRecord,
   TransferPasswordCredentialRecord,
   TwoFactorCredentialRecord,
+  TwoFactorUseRecord,
   UserRecord,
   WalletRecord,
 } from "../../shared/types.js";
@@ -29,9 +32,17 @@ export interface Collections {
   securityEvents: Collection<SecurityEventRecord>;
   twoFactorCredentials: Collection<TwoFactorCredentialRecord>;
   transferPasswordCredentials: Collection<TransferPasswordCredentialRecord>;
+  /** Server-issued transfer approvals: the challenge a transfer consumes. */
+  transferAuthorizations: Collection<TransferAuthorizationRecord>;
+  /** Consumed authenticator steps, one document per accepted step. */
+  twoFactorUses: Collection<TwoFactorUseRecord>;
+  /** The single operator-control row for the financial surfaces. */
+  financialControls: Collection<FinancialControlsRecord>;
   notifications: Collection<NotificationRecord>;
   miningSessions: Collection<MiningSessionRecord>;
   miningSettlements: Collection<MiningSettlementRecord>;
+  miningSettings: Collection<import("../../modules/mining/settings.js").MiningSettingRecord>;
+  miningPoolMembers: Collection<import("../../modules/mining/pools.js").MiningPoolMembershipRecord>;
   miningDevices: Collection<MiningDeviceRecord>;
   miningDeviceLeases: Collection<MiningDeviceLeaseRecord>;
   miningDeviceNonces: Collection<MiningDeviceNonceRecord>;
@@ -50,9 +61,14 @@ export function getCollections(db: Db): Collections {
     securityEvents: db.collection<SecurityEventRecord>("security_events"),
     twoFactorCredentials: db.collection<TwoFactorCredentialRecord>("two_factor_credentials"),
     transferPasswordCredentials: db.collection<TransferPasswordCredentialRecord>("transfer_password_credentials"),
+    transferAuthorizations: db.collection<TransferAuthorizationRecord>("transfer_authorizations"),
+    twoFactorUses: db.collection<TwoFactorUseRecord>("two_factor_uses"),
+    financialControls: db.collection<FinancialControlsRecord>("financial_controls"),
     notifications: db.collection<NotificationRecord>("notifications"),
     miningSessions: db.collection<MiningSessionRecord>("mining_sessions"),
     miningSettlements: db.collection<MiningSettlementRecord>("mining_settlements"),
+    miningSettings: db.collection<import("../../modules/mining/settings.js").MiningSettingRecord>("mining_settings"),
+    miningPoolMembers: db.collection<import("../../modules/mining/pools.js").MiningPoolMembershipRecord>("mining_pool_members"),
     miningDevices: db.collection<MiningDeviceRecord>("mining_devices"),
     miningDeviceLeases: db.collection<MiningDeviceLeaseRecord>("mining_device_leases"),
     miningDeviceNonces: db.collection<MiningDeviceNonceRecord>("mining_device_nonces"),

@@ -5,7 +5,9 @@ import type { AppConfig } from "../../config/env.js";
 import { assertBalanced, formatMoney } from "../ledger/money.js";
 import { ensureTreasuryAccount } from "../wallets/service.js";
 import { recordSecurityEvent } from "../security/audit.js";
+import { readFinancialControls } from "../financial-controls/service.js";
 import { accruedMinorFor, pickRateUnits, rateToString, totalAccrualMinor } from "./rate.js";
+import { loadMiningSettings } from "./settings.js";
 import { badRequest, conflict, forbidden, notFound, serviceUnavailable } from "../../shared/errors.js";
 import {
   DEVICE_EVIDENCE_MISSING_CODE,
@@ -73,7 +75,7 @@ function isDuplicateKeyError(error: unknown): boolean {
 export interface MiningSettlementInput {
   collections: Collections;
   mongoClient: MongoClient;
-  config: Pick<AppConfig, "mining">;
+  config: Pick<AppConfig, "mining" | "miningPools">;
   session: MiningSessionRecord;
   wallet: WalletRecord;
   walletAccount: LedgerAccountRecord;
@@ -108,6 +110,7 @@ export function toPublicSession(record: MiningSessionRecord, nowMs: number): Pub
 
   return {
     id: record.publicId,
+    poolId: record.poolId ?? null,
     status: effectiveStatus(record, nowMs),
     cycleNumber: record.cycleNumber,
     startedAt: record.startedAt.toISOString(),
@@ -153,7 +156,7 @@ async function loadWalletAndAccount(collections: Collections, ownerUserId: strin
 }
 
 /** Projects a stored cycle (or its absence) into the customer-facing state. Exported for testing. */
-export function stateFromRecord(record: MiningSessionRecord | null, nowMs: number, enabled: boolean, settlementEnabled: boolean, cycleDurationSeconds: number): PublicMiningState {
+export function stateFromRecord(record: MiningSessionRecord | null, nowMs: number, enabled: boolean, settlementEnabled: boolean, cycleDurationSeconds: number, poolId: string | null = null, poolRequired = false): PublicMiningState {
   const session = record ? toPublicSession(record, nowMs) : null;
   // Capability flags mirror what the write paths will actually accept: settlement refuses while
   // paused, and a start past an expired-but-unsettled cycle needs a settlement first.
@@ -164,28 +167,35 @@ export function stateFromRecord(record: MiningSessionRecord | null, nowMs: numbe
     status,
     serverNow: new Date(nowMs).toISOString(),
     enabled,
-    // A new cycle may start whenever the account has no running one. An expired-but-unsettled cycle
-    // is `completed`, and `start` settles it before opening the next, so nothing is stranded —
-    // which is why a `completed` state additionally requires settlement to be enabled.
-    canStart: enabled && status !== "active" && (settlementEnabled || !needsClose),
+    // A new cycle may start whenever the account has no running one — and only from inside a
+    // pool. An expired-but-unsettled cycle is `completed`, and `start` settles it before opening
+    // the next, so nothing is stranded — which is why a `completed` state additionally requires
+    // settlement to be enabled.
+    canStart: enabled && !poolRequired && status !== "active" && (settlementEnabled || !needsClose),
     cycleDurationSeconds,
     session,
+    poolId,
+    poolRequired,
   };
 }
 
 /** Reads the authoritative mining state for one account. Two indexed reads on the common path. */
 export async function getMiningState(input: {
   collections: Collections;
-  config: Pick<AppConfig, "mining">;
+  config: Pick<AppConfig, "mining" | "miningPools">;
   ownerUserId: string;
 }): Promise<PublicMiningState> {
   const nowMs = Date.now();
   // Reads stay available while mining is disabled: an account with an accrued-but-unsettled reward
   // must still see its cycle. Disabling stops writes (start/settle refuse), never visibility.
   // One read in the running case. Only an idle account pays for the second, to show its last cycle.
+  // Live values: stored `mining_settings` keys win, the env-derived config stays the default.
+  const live = await loadMiningSettings(input.collections, input.config);
   const active = await loadActiveSession(input.collections, input.ownerUserId);
   const record = active ?? (await loadLatestSession(input.collections, input.ownerUserId));
-  return stateFromRecord(record, nowMs, input.config.mining.enabled, input.config.mining.settlementEnabled, input.config.mining.cycleDurationSeconds);
+  const membership = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
+  const poolId = (membership?.poolId as string | undefined) ?? null;
+  return stateFromRecord(record, nowMs, live.mining.enabled, live.mining.settlementEnabled, live.mining.cycleDurationSeconds, poolId, poolId === null);
 }
 
 /**
@@ -207,17 +217,35 @@ export interface MiningStartDeviceContext {
 export async function startMining(input: {
   collections: Collections;
   mongoClient: MongoClient;
-  config: Pick<AppConfig, "mining" | "lmdg" | "ipinfoToken" | "ipinfoTimeoutMs" | "proxycheckKey" | "proxycheckTimeoutMs" | "encryptionKey">;
+  config: Pick<AppConfig, "mining" | "miningPools" | "lmdg" | "ipinfoToken" | "ipinfoTimeoutMs" | "proxycheckKey" | "proxycheckTimeoutMs" | "encryptionKey">;
   ownerUserId: string;
   correlationId: string;
   device?: MiningStartDeviceContext;
 }): Promise<PublicMiningState> {
   const { collections, config } = input;
-  if (!config.mining.enabled) {
+  const live = await loadMiningSettings(collections, config);
+  const mining = live.mining;
+  const poolsLive = { mining: live.mining, miningPools: live.miningPools };
+  if (!mining.enabled) {
     throw serviceUnavailable("mining_disabled", "Mining is temporarily unavailable.");
   }
 
   const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
+
+  // Pool gate: mining is only possible from inside one of the two system pools.
+  const membership = await collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
+  if (!membership) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: input.ownerUserId,
+      sessionId: null,
+      eventType: "mining_rejected",
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { reason: "pool_required" },
+    }).catch(() => undefined);
+    throw conflict("mining_pool_required", "Join a mining pool before starting a cycle.");
+  }
 
   const active = await loadActiveSession(collections, input.ownerUserId);
   if (active) {
@@ -236,10 +264,10 @@ export async function startMining(input: {
     // The window closed: close the cycle out before opening the next one. Closing it means paying it,
     // so a paused settlement is refused outright rather than left as an open cycle that would strand
     // its reward and then collide with the one-cycle index.
-    if (!config.mining.settlementEnabled) {
+    if (!mining.settlementEnabled) {
       throw serviceUnavailable("mining_settlement_disabled", "Mining settlement is temporarily paused; the finished cycle must be closed before a new one can start.");
     }
-    const closed = await settleSession({ collections, mongoClient: input.mongoClient, config, session: active, wallet, walletAccount, correlationId: input.correlationId });
+    const closed = await settleSession({ collections, mongoClient: input.mongoClient, config: { ...config, ...poolsLive }, session: active, wallet, walletAccount, correlationId: input.correlationId });
     // An unconfirmed close is a failure, not a success: opening a new cycle now would collide
     // with the still-active one on the unique index and converge on the old cycle, reporting
     // "success" for a start that never happened.
@@ -264,14 +292,18 @@ export async function startMining(input: {
 
   const now = new Date();
   const startedAtMs = now.getTime();
-  const rateUnits = pickRateUnits(config.mining.rate);
+  // Base rate from the configured band, then one bounded pool draw (avg ≈ 1.0x for both
+  // pools): pool choice adds variance, never issuance.
+  const { applyPoolFactor, drawPoolFactorBps, getPoolById } = await import("./pools.js");
+  const poolDef = getPoolById(poolsLive, membership.poolId);
+  const rateUnits = applyPoolFactor(pickRateUnits(mining.rate), drawPoolFactorBps(poolsLive, poolDef.id));
   // Defense in depth behind the boot-time config validation: never open a cycle whose 24-hour
   // total cannot be represented exactly or posted through the ledger. A bad rate fails the start
   // instead of stranding an unsettleable, irreplaceable active cycle on the account.
-  const endsAtMs = startedAtMs + config.mining.cycleDurationSeconds * 1000;
+  const endsAtMs = startedAtMs + mining.cycleDurationSeconds * 1000;
   const cycleTotalMinor = totalAccrualMinor(
-    { rateUnits, rateScale: config.mining.rate.scale },
-    { startedAtMs, endsAtMs, durationSeconds: config.mining.cycleDurationSeconds },
+    { rateUnits, rateScale: mining.rate.scale },
+    { startedAtMs, endsAtMs, durationSeconds: mining.cycleDurationSeconds },
   );
   if (cycleTotalMinor < 1 || cycleTotalMinor > LEDGER_AMOUNT_MAX_MINOR) {
     await recordSecurityEvent({
@@ -288,17 +320,18 @@ export async function startMining(input: {
   const session: Omit<MiningSessionRecord, "_id"> = {
     publicId: randomUUID(),
     ownerUserId: input.ownerUserId,
+    poolId: poolDef.id,
     walletId: wallet.publicId,
     ledgerAccountId: walletAccount.publicId,
     status: "active",
     cycleNumber: (previous?.cycleNumber ?? 0) + 1,
     startedAt: now,
     endsAt: new Date(endsAtMs),
-    durationSeconds: config.mining.cycleDurationSeconds,
+    durationSeconds: mining.cycleDurationSeconds,
     rateUnits,
-    rateScale: config.mining.rate.scale,
-    rateDecimals: config.mining.rate.decimals,
-    rate: rateToString(rateUnits, config.mining.rate.scale, config.mining.rate.decimals),
+    rateScale: mining.rate.scale,
+    rateDecimals: mining.rate.decimals,
+    rate: rateToString(rateUnits, mining.rate.scale, mining.rate.decimals),
     rateUnit: "LMA/hour",
     settledMinor: 0,
     settlementSequence: 0,
@@ -578,7 +611,7 @@ export async function startMining(input: {
     eventType: "mining_started",
     outcome: "success",
     correlationId: input.correlationId,
-    metadata: { sessionId: session.publicId, cycleNumber: session.cycleNumber, rate: session.rate, endsAt: session.endsAt.toISOString() },
+    metadata: { sessionId: session.publicId, cycleNumber: session.cycleNumber, rate: session.rate, endsAt: session.endsAt.toISOString(), poolId: poolDef.id },
   });
 
   return getMiningState({ collections, config, ownerUserId: input.ownerUserId });
@@ -597,6 +630,14 @@ export async function startMining(input: {
 async function settleSession(input: MiningSettlementInput): Promise<{ postedMinor: number; session: MiningSessionRecord; confirmed: boolean }> {
   const { collections, config } = input;
   if (!config.mining.settlementEnabled) return { postedMinor: 0, session: input.session, confirmed: true };
+  /**
+   * Issuance stops when an operator pauses payouts (see financial-controls). Settlement is the only
+   * path that creates LMA, so it is the payout surface: while the control is on, nothing is posted
+   * and the result is reported as *unconfirmed* — never as a successful settlement of zero, which a
+   * caller could mistake for "the reward was smaller than expected". The cycle is left open exactly
+   * as it was, so no reward is stranded: the moment the pause is lifted, the next settle posts it.
+   */
+  if ((await readFinancialControls(collections)).payoutsPaused) return { postedMinor: 0, session: input.session, confirmed: false };
 
   let current = input.session;
   for (let attempt = 1; attempt <= MAX_SETTLE_ATTEMPTS; attempt += 1) {
@@ -795,21 +836,23 @@ async function settleSession(input: MiningSettlementInput): Promise<{ postedMino
 export async function settleMining(input: {
   collections: Collections;
   mongoClient: MongoClient;
-  config: Pick<AppConfig, "mining">;
+  config: Pick<AppConfig, "mining" | "miningPools">;
   ownerUserId: string;
   correlationId: string;
 }): Promise<PublicMiningState> {
   const { collections, config } = input;
-  if (!config.mining.enabled) {
+  const live = await loadMiningSettings(collections, config);
+  const liveConfig = { ...config, mining: live.mining };
+  if (!live.mining.enabled) {
     throw serviceUnavailable("mining_disabled", "Mining is temporarily unavailable.");
   }
-  if (!config.mining.settlementEnabled) {
+  if (!live.mining.settlementEnabled) {
     throw serviceUnavailable("mining_settlement_disabled", "Mining settlement is temporarily paused.");
   }
   const active = await loadActiveSession(collections, input.ownerUserId);
   if (active) {
     const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
-    const result = await settleSession({ collections, mongoClient: input.mongoClient, config, session: active, wallet, walletAccount, correlationId: input.correlationId });
+    const result = await settleSession({ collections, mongoClient: input.mongoClient, config: liveConfig, session: active, wallet, walletAccount, correlationId: input.correlationId });
     if (!result.confirmed) {
       throw serviceUnavailable("mining_settlement_failed", "The reward could not be confirmed. Try again.");
     }
@@ -828,14 +871,15 @@ export async function settleMining(input: {
 export async function settleMiningForOwner(input: {
   collections: Collections;
   mongoClient: MongoClient;
-  config: Pick<AppConfig, "mining">;
+  config: Pick<AppConfig, "mining" | "miningPools">;
   ownerUserId: string;
   wallet: WalletRecord;
   walletAccount: LedgerAccountRecord;
   correlationId: string;
 }): Promise<{ postedMinor: number; confirmed: boolean }> {
   const { collections, config } = input;
-  if (!config.mining.enabled || !config.mining.settlementEnabled) return { postedMinor: 0, confirmed: true };
+  const live = await loadMiningSettings(collections, config);
+  if (!live.mining.enabled || !live.mining.settlementEnabled) return { postedMinor: 0, confirmed: true };
 
   const active = await loadActiveSession(collections, input.ownerUserId);
   if (!active) return { postedMinor: 0, confirmed: true };
@@ -855,7 +899,7 @@ export async function settleMiningForOwner(input: {
   const result = await settleSession({
     collections,
     mongoClient: input.mongoClient,
-    config,
+    config: { ...config, mining: live.mining },
     session: active,
     wallet: input.wallet,
     walletAccount: input.walletAccount,
@@ -871,7 +915,7 @@ const MAX_PAGE_SIZE = 50;
 /** One page of the account's cycles, newest first, cursor-paged on (createdAt, publicId). */
 export async function listMiningHistory(input: {
   collections: Collections;
-  config: Pick<AppConfig, "mining">;
+  config: Pick<AppConfig, "mining" | "miningPools">;
   ownerUserId: string;
   cursor: string | undefined;
   limit: number | undefined;

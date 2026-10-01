@@ -31,6 +31,27 @@ export interface MiningConfig {
   rate: MiningRateSpec;
 }
 
+/**
+ * One system mining pool, fully described by the environment.
+ *
+ * `baseHashrate` is the pool's power in H, split across its members for display
+ * (`baseHashrate / activeMiners`). The reward factor is drawn per cycle in
+ * `[rewardMinBps, rewardMaxBps]` basis points (10000 = 1.0x) and multiplies the
+ * server-drawn base rate — bounded variance around the same average, never issuance.
+ * `maxMembers` caps the room: a full pool refuses joins until someone leaves.
+ */
+export interface MiningPoolSpec {
+  baseHashrate: number;
+  rewardMinBps: number;
+  rewardMaxBps: number;
+  maxMembers: number;
+}
+
+export interface MiningPoolsConfig {
+  low: MiningPoolSpec;
+  medium: MiningPoolSpec;
+}
+
 export type LmdgRiskMode = "monitor" | "challenge" | "enforce";
 
 export interface LmdgConfig {
@@ -74,9 +95,10 @@ export interface LmdgConfig {
    * How long credited activity on one network keeps a cluster's exemption from the network lock.
    *
    * Trust is bound to the network it was earned on *and* to time: a cluster is a resident of a
-   * network only while it has mined there recently. The window must cover one mining cycle — the
-   * floor is 24 hours — or an available device would lose its own exemption between cycles and be
-   * refused beside another account's lease until the network went vacant again.
+    * network only while it has mined there recently. The window must cover one mining cycle plus
+    * settlement and restart grace — the floor is 48 hours — or an available device would lose its
+    * own exemption between cycles and be refused beside another account's lease until the network
+    * went vacant again.
    */
   networkTrustFreshnessSeconds: number;
 }
@@ -135,6 +157,7 @@ export interface AppConfig {
    */
   trustProxy: boolean | string[];
   mining: MiningConfig;
+  miningPools: MiningPoolsConfig;
   lmdg: LmdgConfig;
 }
 
@@ -301,6 +324,31 @@ function loadMiningConfig(values: NodeJS.ProcessEnv): MiningConfig {
   };
 }
 
+/** Parses one pool's room settings (`PREFIX_BASE_HASHRATE`, `PREFIX_REWARD_MIN/MAX_BPS`, `PREFIX_MAX_MEMBERS`). */
+function loadMiningPoolSpec(values: NodeJS.ProcessEnv, prefix: string, defaultMinBps: number, defaultMaxBps: number): MiningPoolSpec {
+  const baseHashrate = positiveInteger(`${prefix}_BASE_HASHRATE`, values[`${prefix}_BASE_HASHRATE`] ?? "100");
+  const rewardMinBps = positiveInteger(`${prefix}_REWARD_MIN_BPS`, values[`${prefix}_REWARD_MIN_BPS`] ?? String(defaultMinBps));
+  const rewardMaxBps = positiveInteger(`${prefix}_REWARD_MAX_BPS`, values[`${prefix}_REWARD_MAX_BPS`] ?? String(defaultMaxBps));
+  // Basis points are a multiplier on the base rate: 10000 = 1.0x. The ceiling (5x) only has to
+  // keep the scaled rate inside the ledger's exact-integer range — the start path re-checks the
+  // 24-hour total before opening a cycle, so an oversized factor fails the start, never the ledger.
+  for (const [name, bps] of [[`${prefix}_REWARD_MIN_BPS`, rewardMinBps], [`${prefix}_REWARD_MAX_BPS`, rewardMaxBps]] as const) {
+    if (bps > 50_000) throw new Error(`${name} must be at most 50000 (5.0x)`);
+  }
+  if (rewardMinBps > rewardMaxBps) {
+    throw new Error(`${prefix}_REWARD_MIN_BPS must not exceed ${prefix}_REWARD_MAX_BPS`);
+  }
+  const maxMembers = positiveInteger(`${prefix}_MAX_MEMBERS`, values[`${prefix}_MAX_MEMBERS`] ?? "1000");
+  return { baseHashrate, rewardMinBps, rewardMaxBps, maxMembers };
+}
+
+function loadMiningPoolsConfig(values: NodeJS.ProcessEnv): MiningPoolsConfig {
+  return {
+    low: loadMiningPoolSpec(values, "MINING_POOL_LOW", 8500, 11500),
+    medium: loadMiningPoolSpec(values, "MINING_POOL_MEDIUM", 7000, 13000),
+  };
+}
+
 function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   const enabled = booleanFlag("LMDG_ENABLED", values["LMDG_ENABLED"], true);
   const leaseEnabled = booleanFlag("LMDG_DEVICE_LEASE_ENABLED", values["LMDG_DEVICE_LEASE_ENABLED"], true);
@@ -340,16 +388,17 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   }
   const networkLeaseLock = booleanFlag("LMDG_NETWORK_LEASE_LOCK", values["LMDG_NETWORK_LEASE_LOCK"], true);
   const establishMinAdmissions = positiveInteger("LMDG_ESTABLISH_MIN_ADMISSIONS", values["LMDG_ESTABLISH_MIN_ADMISSIONS"] ?? "3", 2);
-  // The floor is one full mining cycle: a shorter window would expire a resident device's exemption
-  // mid-cycle, so its next start beside another account's lease would refuse a device that had mined
-  // there moments ago. An installation that configured a shorter window (valid under the previous
-  // range) is raised to the floor with a warning instead of failing to boot — the same migration path
-  // the observation TTL uses.
+  // The floor covers one full mining cycle plus settlement and restart grace: a cycle runs exactly
+  // 24 hours, and the next start always lands after that (settlement, then a later start), so a
+  // 24-hour window would expire a resident device's exemption just before its next start beside
+  // another account's lease. An installation that configured a shorter window (valid under the
+  // previous range) is raised to the floor with a warning instead of failing to boot — the same
+  // migration path the observation TTL uses.
   const configuredNetworkTrustFreshnessSeconds = positiveInteger(
     "LMDG_NETWORK_TRUST_FRESHNESS_SECONDS",
     values["LMDG_NETWORK_TRUST_FRESHNESS_SECONDS"] ?? String(3 * 24 * 60 * 60),
   );
-  const networkTrustFreshnessFloorSeconds = 24 * 60 * 60;
+  const networkTrustFreshnessFloorSeconds = 48 * 60 * 60;
   const networkTrustFreshnessSeconds = Math.max(configuredNetworkTrustFreshnessSeconds, networkTrustFreshnessFloorSeconds);
   if (networkTrustFreshnessSeconds !== configuredNetworkTrustFreshnessSeconds) {
     console.warn(
@@ -436,6 +485,7 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     proxycheckHmacKey: optionalString("PROXYCHECK_HMAC_KEY", values),
     trustProxy: parseTrustedProxies("TRUST_PROXY", values),
     mining: loadMiningConfig(values),
+    miningPools: loadMiningPoolsConfig(values),
     lmdg: loadLmdgConfig(values),
   };
 }

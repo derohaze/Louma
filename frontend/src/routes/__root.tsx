@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createServerFn } from "@tanstack/react-start";
 import {
   Outlet,
   Link,
@@ -9,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
+import { parseTheme, readThemeCookie, useTheme, THEME_COOKIE, type Theme } from "@/hooks/use-theme";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -83,7 +85,38 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
+/**
+ * The theme cookie exactly as the request carried it.
+ *
+ * A server function, because the reader it needs is a server-only module the build refuses to place
+ * in the browser bundle — and its handler is the one part of this file that build moves out of that
+ * bundle. The browser side is a name it never calls: the theme of a document was already decided by
+ * the server that served it, and only a later navigation in the same tab needs to read it again.
+ */
+const readThemeFromRequest = createServerFn({ method: "GET" }).handler(async () => {
+  const { getCookie } = await import("@tanstack/react-start/server");
+  return parseTheme(getCookie(THEME_COOKIE) ?? null);
+});
+
+/**
+ * The colour scheme the document is rendered with, read from the same cookie on both sides: from the
+ * request on the server, and from `document.cookie` in the browser. It is the one input that cannot
+ * be reconciled after the fact — `<html>`'s `class` and `color-scheme` — so the two sides have to
+ * start from the same value rather than from a guess the other one is later asked to forgive.
+ */
+async function readDocumentTheme(): Promise<Theme> {
+  if (typeof document !== "undefined") return readThemeCookie();
+  return readThemeFromRequest();
+}
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  /**
+   * Read before anything renders, because it decides `<html>`'s attributes. Doing it in a route load
+   * (rather than inside the shell) is what makes the value part of the dehydrated router state: the
+   * first client render then uses the very value the server rendered with, instead of reading storage
+   * again and disagreeing with it by one attribute.
+   */
+  beforeLoad: async () => ({ theme: await readDocumentTheme() }),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -143,21 +176,40 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
+  const { theme: documentTheme } = Route.useRouteContext();
+  /**
+   * The source of truth for these two attributes, on both sides of the wire. `documentTheme` is the
+   * value the server rendered with while this is the first client render (so the markup matches),
+   * and the store takes over from there — a switch flipped anywhere re-renders this element with the
+   * new choice, and the cookie it also writes means the next document is rendered with it as well.
+   *
+   * There is deliberately no bootstrap script writing these attributes before hydration: the server
+   * already rendered them, so the dark-mode visitor gets their theme from the first byte and there is
+   * nothing left for React to disagree with.
+   */
+  const { theme } = useTheme(documentTheme);
   return (
-    <html lang="en">
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={theme === "dark" ? "dark" : undefined}
+      style={{ colorScheme: theme }}
+    >
       <head>
+        <HeadContent />
         {/*
-         * Blocking theme bootstrap: runs before first paint so a returning dark-mode visitor
-         * never sees a white flash. It mirrors `use-theme.ts` (same key, same `.dark` class)
-         * and must stay in sync with it. `colorScheme` keeps UA widgets (scrollbars, inputs)
-         * on the right theme from the very first frame.
+         * Extensions (Avast/AVG "bis_skin_checked" and similar) add attributes to
+         * arbitrary <div>s after the server HTML is parsed but before React
+         * hydrates. React then reports a hydration mismatch it will not patch.
+         * Strip those attributes as early as possible and keep stripping until
+         * hydration settles, so the DOM React hydrates matches the server HTML.
          */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `!function(){try{var t=localStorage.getItem("louma-theme");var d=t==="dark";document.documentElement.classList.toggle("dark",d);document.documentElement.style.colorScheme=d?"dark":"light";}catch(e){}}();`,
+            __html:
+              "(function(){var A='bis_skin_checked';function c(r){try{if(!r)return;if(r.hasAttribute&&r.hasAttribute(A))r.removeAttribute(A);var e=r.querySelectorAll?r.querySelectorAll('['+A+']'):[];for(var i=0;i<e.length;i++)e[i].removeAttribute(A);}catch(_){}}c(document);try{var o=new MutationObserver(function(m){for(var i=0;i<m.length;i++){var x=m[i];if(x.type==='attributes'&&x.attributeName===A){if(x.target.removeAttribute)x.target.removeAttribute(A);}else if(x.addedNodes){for(var j=0;j<x.addedNodes.length;j++)c(x.addedNodes[j]);}}});o.observe(document.documentElement,{attributes:true,childList:true,subtree:true,attributeFilter:[A]});window.addEventListener('load',function(){setTimeout(function(){try{o.disconnect();}catch(_){}c(document);},3000);});}catch(_){}})();",
           }}
         />
-        <HeadContent />
         {/*
          * The font stylesheet loads with `media="print"` so it never blocks rendering, then flips
          * to `all` once fetched (standard non-blocking-CSS pattern). Without this, the browser

@@ -190,7 +190,7 @@ const searchPageRank: NavHref[] = [
   "/transfer",
   "/mining",
   "/wallet",
-  "/history",
+  "/transactions",
   "/security",
   "/custom-address",
   "/profile",
@@ -310,7 +310,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
           title: tx.counterpartyAddress,
           subtitle: `${tx.direction === "sent" ? "Sent" : "Received"} · ${currency(tx.amount)} · ${dateText(tx.createdAt)}`,
           icon: tx.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon,
-          href: "/history" as const,
+          href: "/transactions" as const,
         }));
   const results: SearchEntry[] = [...pageResults, ...transactionResults];
   const resultsHeading = browsing ? "Most used" : "Results";
@@ -363,7 +363,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
   // The chrome — header, rail, navigation — renders from data the app already has, so it is painted
   // at once and only the page body waits (see PageSkeleton).
   return (
-    <div className="min-h-dvh bg-shell text-foreground">
+    <div suppressHydrationWarning className="min-h-dvh bg-shell text-foreground">
       <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground dark:text-white">
         <div className="flex w-[330px] items-center gap-3">
           <img

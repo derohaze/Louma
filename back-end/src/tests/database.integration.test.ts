@@ -14,7 +14,7 @@ import { getCollections, type Collections } from "../infrastructure/mongodb/coll
 import { formatMoney, parseMoneyToMinorUnits } from "../modules/ledger/money.js";
 import { reconcileLedger } from "../modules/ledger/reconciliation.js";
 import { PENDING_2FA_TTL_MS } from "../shared/types.js";
-import { createTransfer } from "../modules/transfers/service.js";
+import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
 
 /**
  * Integration test against the configured MongoDB cluster.
@@ -157,12 +157,14 @@ async function assertLedgerConsistency(): Promise<void> {
 }
 
 /**
- * A real authenticator code for `secret`. TOTP is time-based, so a code generated just before a
- * 30-second step ends would be rejected by the server as expired; wait for the next step instead.
+ * A real authenticator code for `secret`. The server accepts a code only inside its own 30-second
+ * step, and the requests that follow one are round trips to a remote replica set: a code minted in
+ * the last seconds of a step would be judged in the next one and read as a wrong code rather than as
+ * the behaviour under test. Waiting for a step with at least fifteen seconds left removes that race.
  */
 async function totpCode(secret: string): Promise<string> {
   const remainingSeconds = 30 - (Math.floor(Date.now() / 1000) % 30);
-  if (remainingSeconds <= 3) await new Promise((resolve) => setTimeout(resolve, (remainingSeconds + 1) * 1000));
+  if (remainingSeconds < 15) await new Promise((resolve) => setTimeout(resolve, (remainingSeconds + 1) * 1000));
   return generate({ secret });
 }
 
@@ -203,11 +205,36 @@ async function fund(account: Account, amountMinor: number): Promise<void> {
   );
 }
 
+/**
+ * Issues a transfer approval the way the send wizard's amount stage does, and returns its id.
+ *
+ * The transfer endpoint no longer accepts a description of a payment: it executes an approval the
+ * server computed. This helper is the test's copy of "the sender confirmed the amount", so every
+ * test below goes through the same two stages a browser does.
+ */
+async function approve(address: string, amount: string, token: string, note = "smoke test") {
+  const response = await call("POST", "/api/v1/transfers/preview", {
+    token,
+    body: { recipientAddress: address, amount, note },
+  });
+  const preview = response.body["preview"] as { authorization: { id: string } | null } | undefined;
+  return { response, authorizationId: preview?.authorization?.id ?? null };
+}
+
+/**
+ * The whole send flow: approve the intent, then send it.
+ *
+ * When the approval stage refuses (an unknown address, the sender's own wallet, an unparseable
+ * amount) that refusal *is* the answer: the request never reaches the money-moving endpoint, and the
+ * test sees the status and error the customer's wizard would.
+ */
 async function transfer(address: string, amount: string, token: string, key = randomUUID()) {
+  const approval = await approve(address, amount, token);
+  if (!approval.authorizationId) return approval.response;
   const response = await call("POST", "/api/v1/transfers", {
     token,
     idempotencyKey: key,
-    body: { recipientAddress: address, amount, note: "smoke test" },
+    body: { authorizationId: approval.authorizationId, recipientAddress: address, amount, note: "smoke test" },
   });
   // Every transfer this test creates is recorded, whatever the response status, so cleanup can
   // remove the ledger lines on both sides of the transaction (including the fee account's).
@@ -256,13 +283,29 @@ before(async () => {
 
 after(async () => {
   if (collections) {
+    // The transactions, not only the ones whose ids a test recorded, decide what has to be removed.
+    // A transfer that committed while its client saw a timeout, an abort, or an ambiguous outcome has
+    // no remembered id: deleting its journal header by owner while leaving its ledger lines behind
+    // would hand the next run's reconciliation three orphan entries that read as a financial defect.
+    // Both halves are therefore derived from the same query, before anything is deleted.
+    const runTransactions = await collections.transactions
+      .find({ $or: [{ senderUserId: { $in: createdUserIds } }, { receiverUserId: { $in: createdUserIds } }] })
+      .toArray();
+    const runTransactionIds = [
+      ...new Set([
+        ...createdTransactionIds,
+        ...runTransactions.map((transaction) => transaction.publicId),
+        ...runTransactions.map((transaction) => transaction.transferId),
+      ]),
+    ];
     for (const userId of createdUserIds) {
       await collections.sessions.deleteMany({ ownerUserId: userId });
       await collections.securityEvents.deleteMany({ ownerUserId: userId });
       await collections.twoFactorCredentials.deleteMany({ ownerUserId: userId });
       await collections.transferPasswordCredentials.deleteMany({ ownerUserId: userId });
+      await collections.transferAuthorizations.deleteMany({ ownerUserId: userId });
+      await collections.twoFactorUses.deleteMany({ ownerUserId: userId });
       await collections.notifications.deleteMany({ ownerUserId: userId });
-      await collections.transactions.deleteMany({ $or: [{ senderUserId: userId }, { receiverUserId: userId }] });
       await collections.wallets.deleteMany({ ownerUserId: userId });
       await collections.users.deleteMany({ publicId: userId });
     }
@@ -272,7 +315,7 @@ after(async () => {
     // own contribution atomically cannot.
     const feeAccount = await collections.ledgerAccounts.findOne({ accountType: "fee_revenue", currency: "LMA" });
     const feeDelta = feeAccount
-      ? (await collections.ledgerEntries.find({ ledgerAccountId: feeAccount.publicId, transactionId: { $in: createdTransactionIds } }).toArray())
+      ? (await collections.ledgerEntries.find({ ledgerAccountId: feeAccount.publicId, transactionId: { $in: runTransactionIds } }).toArray())
           .reduce((total, entry) => total + (entry.side === "credit" ? entry.amountMinor : -entry.amountMinor), 0)
       : 0;
 
@@ -280,8 +323,8 @@ after(async () => {
       await collections.ledgerEntries.deleteMany({ ledgerAccountId });
       await collections.ledgerAccounts.deleteMany({ publicId: ledgerAccountId });
     }
-    await collections.ledgerEntries.deleteMany({ transactionId: { $in: createdTransactionIds } });
-    await collections.transactions.deleteMany({ $or: [{ publicId: { $in: createdTransactionIds } }, { transferId: { $in: createdTransactionIds } }] });
+    await collections.ledgerEntries.deleteMany({ transactionId: { $in: runTransactionIds } });
+    await collections.transactions.deleteMany({ $or: [{ publicId: { $in: runTransactionIds } }, { transferId: { $in: runTransactionIds } }] });
 
     if (feeAccount && feeDelta !== 0) {
       await collections.ledgerAccounts.updateOne({ _id: feeAccount._id }, { $inc: { balanceMinor: -feeDelta } });
@@ -497,6 +540,104 @@ test("a transfer moves LMA through the ledger, applies the 1% fee, and stays bal
   assert.equal(detail.status, 200, "the recipient can read the transfer by its transfer id");
 });
 
+test("the staged transfer form resolves the recipient, then quotes the tax and the balance", async () => {
+  const sender = await register("preview");
+  const receiver = await register("preview-target");
+  await fund(sender, FUNDING_MINOR);
+
+  // Stage one asks for the address alone, and the answer is the address the transfer would credit.
+  const resolved = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: receiver.address.toLowerCase() } });
+  assert.equal(resolved.status, 200, JSON.stringify(resolved.body));
+  const resolvedPreview = resolved.body["preview"] as { recipient: { address: string; displayName: string | null }; quote: unknown };
+  assert.equal(resolvedPreview.recipient.address, receiver.address, "a lower-cased paste resolves to the canonical address");
+  assert.equal(resolvedPreview.recipient.displayName, "S•••t", "the owner is recognisable without publishing the name");
+  assert.equal(resolvedPreview.quote, null, "nothing is quoted before an amount is offered");
+
+  const unknown = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: "LMA-AAAA-BBBB-CCCC" } });
+  assert.equal(unknown.status, 404, "an address nobody holds never reaches the amount");
+  const self = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: sender.address } });
+  assert.equal(self.status, 409, JSON.stringify(self.body));
+  assert.equal((self.body["error"] as { code: string }).code, "self_transfer");
+
+  // A handle resolves to the same canonical address the transfer will credit.
+  const handle = `pv${randomUUID().replace(/[^0-9a-f]/g, "").slice(0, 6)}`;
+  const named = await call("PATCH", "/api/v1/wallet/custom-address", { token: receiver.accessToken, body: { address: handle } });
+  assert.equal(named.status, 200, JSON.stringify(named.body));
+  const byHandle = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: `@${handle}` } });
+  assert.equal(byHandle.status, 200, JSON.stringify(byHandle.body));
+  assert.equal((byHandle.body["preview"] as { recipient: { address: string } }).recipient.address, `@${handle}`);
+
+  // Stage two asks for the amount, and the ledger that would charge it answers.
+  const quoted = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: receiver.address, amount: TRANSFER } });
+  assert.equal(quoted.status, 200, JSON.stringify(quoted.body));
+  const quote = (quoted.body["preview"] as { quote: Record<string, unknown> }).quote;
+  assert.deepEqual(quote, { amount: "10.0000", fee: "0.1000", netAmount: "9.9000", balance: "25.0000", balanceAfter: "15.0000", sufficient: true });
+
+  const tooMuch = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: receiver.address, amount: "50.0000" } });
+  assert.equal(tooMuch.status, 200, JSON.stringify(tooMuch.body));
+  assert.equal((tooMuch.body["preview"] as { quote: { sufficient: boolean } }).quote.sufficient, false, "an unaffordable amount is quoted as unaffordable");
+
+  // A preview decides nothing: the balance it reports is untouched and no transfer exists.
+  assert.equal(await balanceOf(sender), "25.0000");
+  assert.equal((await collections.transactions.find({ senderUserId: sender.userId }).toArray()).length, 0, "a preview writes no transaction");
+  await assertLedgerConsistency();
+});
+
+test("a transfer proves one of the account's credentials, and an authenticator code is one of them", async () => {
+  const guard = await register("guard");
+  const target = await register("guard-target");
+  await fund(guard, FUNDING_MINOR);
+
+  // No credential set: the transfer goes through with nothing else to prove.
+  const open = await transfer(target.address, "1.0000", guard.accessToken);
+  assert.equal(open.status, 201, JSON.stringify(open.body));
+
+  // Setting a transfer password makes it mandatory — a missing one is refused, not ignored.
+  const set = await call("POST", "/api/v1/security/transfer-password", { token: guard.accessToken, body: { newPassword: "GuardPassword1" } });
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  const unproven = await transfer(target.address, "1.0000", guard.accessToken);
+  assert.equal(unproven.status, 403, JSON.stringify(unproven.body));
+  assert.equal((unproven.body["error"] as { code: string }).code, "invalid_transfer_authorization");
+  const wrongPassword = await call("POST", "/api/v1/transfers", { token: guard.accessToken, idempotencyKey: randomUUID(), body: { authorizationId: (await approve(target.address, "1.0000", guard.accessToken, "")).authorizationId, recipientAddress: target.address, amount: "1.0000", transferPassword: "NotThePassword1" } });
+  assert.equal(wrongPassword.status, 403, JSON.stringify(wrongPassword.body));
+  const proven = await call("POST", "/api/v1/transfers", { token: guard.accessToken, idempotencyKey: randomUUID(), body: { authorizationId: (await approve(target.address, "1.0000", guard.accessToken, "")).authorizationId, recipientAddress: target.address, amount: "1.0000", transferPassword: "GuardPassword1" } });
+  assert.equal(proven.status, 201, JSON.stringify(proven.body));
+  createdTransactionIds.push((proven.body["transaction"] as { id: string }).id);
+
+  // An account with an authenticator and no transfer password proves the code instead.
+  const codes = await register("guard-codes");
+  const codesTarget = await register("guard-codes-target");
+  await fund(codes, FUNDING_MINOR);
+  const started = await call("POST", "/api/v1/security/2fa/enable", { token: codes.accessToken, body: { password: PASSWORD } });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const secret = started.body["secret"] as string;
+  const confirmed = await call("POST", "/api/v1/security/2fa/confirm", { token: codes.accessToken, body: { code: await totpCode(secret) } });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  const recoveryCode = (confirmed.body["recoveryCodes"] as string[])[0]!;
+
+  const noCode = await transfer(codesTarget.address, "1.0000", codes.accessToken);
+  assert.equal(noCode.status, 403, "an authenticator-only account cannot send without its code");
+  const wrongCode = await call("POST", "/api/v1/transfers", { token: codes.accessToken, idempotencyKey: randomUUID(), body: { authorizationId: (await approve(codesTarget.address, "1.0000", codes.accessToken, "")).authorizationId, recipientAddress: codesTarget.address, amount: "1.0000", twoFactorCode: await wrongTotpCode() } });
+  assert.equal(wrongCode.status, 403, JSON.stringify(wrongCode.body));
+  assert.equal((wrongCode.body["error"] as { code: string }).code, "invalid_two_factor_code");
+  assert.equal(await balanceOf(codes), "25.0000", "a refused authorization moves nothing");
+  // The same approval is retried with the next accepted code: a failed proof consumes neither.
+  const approval = (await approve(codesTarget.address, "1.0000", codes.accessToken, "")).authorizationId;
+  const withCode = await call("POST", "/api/v1/transfers", { token: codes.accessToken, idempotencyKey: randomUUID(), body: { authorizationId: approval, recipientAddress: codesTarget.address, amount: "1.0000", twoFactorCode: await totpCode(secret) } });
+  assert.equal(withCode.status, 201, JSON.stringify(withCode.body));
+  createdTransactionIds.push((withCode.body["transaction"] as { id: string }).id);
+
+  // A recovery code authorises one transfer, and is spent by it.
+  const withRecovery = await call("POST", "/api/v1/transfers", { token: codes.accessToken, idempotencyKey: randomUUID(), body: { authorizationId: (await approve(codesTarget.address, "1.0000", codes.accessToken, "")).authorizationId, recipientAddress: codesTarget.address, amount: "1.0000", twoFactorCode: recoveryCode } });
+  assert.equal(withRecovery.status, 201, JSON.stringify(withRecovery.body));
+  createdTransactionIds.push((withRecovery.body["transaction"] as { id: string }).id);
+  const reusedRecovery = await call("POST", "/api/v1/transfers", { token: codes.accessToken, idempotencyKey: randomUUID(), body: { authorizationId: (await approve(codesTarget.address, "1.0000", codes.accessToken, "")).authorizationId, recipientAddress: codesTarget.address, amount: "1.0000", twoFactorCode: recoveryCode } });
+  assert.equal(reusedRecovery.status, 403, "a spent recovery code cannot authorise a second transfer");
+  const overview = await call("GET", "/api/v1/security", { token: codes.accessToken });
+  assert.equal((overview.body["twoFactor"] as { recoveryCodesRemaining: number }).recoveryCodesRemaining, 7, "the used code is gone");
+  await assertLedgerConsistency();
+});
+
 test("a replayed transfer is not charged twice", async () => {
   const sender = await register("replay");
   const receiver = await register("replay-target");
@@ -546,7 +687,7 @@ test("transfers are refused for insufficient funds, self-transfers, unknown addr
   assert.equal((await transfer(sender.address, "1.0000", sender.accessToken)).status, 409, "self transfer");
   assert.equal((await transfer("LMA-1111-2222-3333", "1.0000", sender.accessToken)).status, 404, "unknown recipient");
   assert.equal((await transfer("not-an-address", "1.0000", sender.accessToken)).status, 400, "invalid recipient");
-  const unauthenticated = await call("POST", "/api/v1/transfers", { body: { recipientAddress: "LMA-1111-2222-3333", amount: "1.0000" }, idempotencyKey: randomUUID() });
+  const unauthenticated = await call("POST", "/api/v1/transfers", { body: { authorizationId: randomUUID(), recipientAddress: "LMA-1111-2222-3333", amount: "1.0000" }, idempotencyKey: randomUUID() });
   assert.equal(unauthenticated.status, 401, "a transfer requires a session");
   assert.equal((await call("GET", "/api/v1/wallet")).status, 401, "the wallet requires a session");
 });
@@ -1129,9 +1270,16 @@ test("the security overview reports this account's own protections, sessions, an
  */
 
 async function assertFullReconciliation(): Promise<void> {
-  // The funding correlation prefix is the one test-infrastructure exclusion: production runs pass
-  // no options and check every entry strictly.
-  const result = await reconcileLedger({ collections, mongoClient: client, options: { excludeCorrelationIdPrefixes: ["smoke-funding-"] } });
+  // The funding correlation prefixes are the one test-infrastructure exclusion: production runs pass
+  // no options and check every entry strictly. Every suite's prefix is listed, not only this file's,
+  // because a suite killed before its teardown leaves its own funding lines (which have no journal
+  // header by construction) in the database, and reporting them here would read as a financial
+  // defect when it is abandoned test data. `npm run cleanup:test-accounts:dev -- --apply` removes it.
+  const result = await reconcileLedger({
+    collections,
+    mongoClient: client,
+    options: { excludeCorrelationIdPrefixes: ["smoke-funding-", "adversarial-funding-", "benchmark-"] },
+  });
   assert.ok(result.ok, `ledger reconciliation must pass: ${JSON.stringify(result.issues)}`);
 }
 
@@ -1142,16 +1290,31 @@ async function directTransfer(input: {
   amount: string;
   idempotencyKey?: string;
   abortSignal?: { throwAt: string };
+  /** A code to prove, for the cases that exercise a second factor's rollback. */
+  twoFactorCode?: string;
 }) {
+  // The approval is minted through the same service the endpoint uses, so a direct caller takes the
+  // same two steps a browser does: approve the intent, then send it.
+  const preview = await previewTransfer({
+    collections,
+    ownerUserId: input.sender.userId,
+    recipientAddress: input.recipientAddress,
+    amount: input.amount,
+    note: "invariant test",
+    requestId: randomUUID(),
+  });
+  if (!preview.authorization) throw new Error("The preview did not issue an authorization");
   return createTransfer({
     collections,
     mongoClient: client,
     ownerUserId: input.sender.userId,
+    authorizationId: preview.authorization.id,
     recipientAddress: input.recipientAddress,
     amount: input.amount,
     note: "invariant test",
     idempotencyKey: input.idempotencyKey ?? randomUUID(),
     requestId: randomUUID(),
+    ...(input.twoFactorCode === undefined ? {} : { twoFactorCode: input.twoFactorCode }),
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   });
 }

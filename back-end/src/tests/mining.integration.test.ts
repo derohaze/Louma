@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { MongoServerError, type MongoClient } from "mongodb";
+import { MongoServerError, ObjectId, type MongoClient } from "mongodb";
 import { buildApp } from "../app.js";
 import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
@@ -223,6 +223,12 @@ async function register(label: string): Promise<Account> {
   const account = await collections.ledgerAccounts.findOne({ walletId: wallet.id, accountType: "wallet" });
   assert.ok(account, "the wallet has a ledger account");
   createdWalletAccountIds.push(account.publicId);
+  // Mining requires pool membership: every fixture account joins the Low pool on creation.
+  const joined = await call("POST", "/api/v1/mining/pools/join", {
+    token: response.body["accessToken"] as string,
+    body: { poolId: "low" },
+  });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
   return {
     userId: user.id,
     email,
@@ -354,6 +360,7 @@ after(async () => {
   for (const userId of createdUserIds) {
     await collections.miningSessions.deleteMany({ ownerUserId: userId });
     await collections.miningSettlements.deleteMany({ ownerUserId: userId });
+    await collections.miningPoolMembers.deleteMany({ ownerUserId: userId });
     await collections.securityEvents.deleteMany({ ownerUserId: userId });
     await collections.sessions.deleteMany({ ownerUserId: userId });
     await collections.wallets.deleteMany({ ownerUserId: userId });
@@ -409,6 +416,82 @@ test("mining requires a session", async () => {
   assert.equal((await call("POST", "/api/v1/mining/start", { body: {} })).status, 401);
 });
 
+test("mining is impossible without a pool: start is refused until the account joins one", async () => {
+  // A fresh account that never joined: state reports the gate, start is refused.
+  const email = `mining.nopool.${randomUUID()}@example.test`;
+  const response = await call("POST", "/api/v1/auth/register", {
+    body: { email, password: PASSWORD, displayName: "Mining nopool" },
+  });
+  assert.equal(response.status, 201, JSON.stringify(response.body));
+  const token = response.body["accessToken"] as string;
+  createdUserIds.push((response.body["user"] as { id: string }).id);
+
+  const pools = await call("GET", "/api/v1/mining/pools", { token });
+  assert.equal(pools.status, 200, JSON.stringify(pools.body));
+  assert.equal((pools.body as { poolId: string | null }).poolId, null);
+  assert.equal(((pools.body as { pools: { id: string }[] }).pools ?? []).length, 2, "exactly two system pools");
+
+  const state = await call("GET", "/api/v1/mining/state", { token });
+  assert.equal(state.status, 200);
+  assert.equal((state.body as { poolRequired: boolean }).poolRequired, true);
+  assert.equal((state.body as { canStart: boolean }).canStart, false);
+
+  const refused = await call("POST", "/api/v1/mining/start", { token, body: {} });
+  assert.equal(refused.status, 409);
+  assert.equal((refused.body["error"] as { code: string }).code, "mining_pool_required");
+
+  // Joining opens the gate: the same account can now start.
+  const joined = await call("POST", "/api/v1/mining/pools/join", { token, body: { poolId: "medium" } });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  assert.equal((joined.body as { poolId: string }).poolId, "medium");
+  const after = await call("GET", "/api/v1/mining/state", { token });
+  assert.equal((after.body as { poolRequired: boolean }).poolRequired, false);
+  assert.equal((after.body as { canStart: boolean }).canStart, true);
+
+  // Unknown pools are refused, not created.
+  const bogus = await call("POST", "/api/v1/mining/pools/join", { token, body: { poolId: "mega" } });
+  assert.equal(bogus.status, 400);
+});
+
+test("a pool cap stored in mining_settings is enforced without a restart", async () => {
+  // Idempotent start: a leaked row from an interrupted run must not fail this one.
+  await collections.miningSettings.deleteOne({ key: "mining.pools.medium" });
+  // The cap is sized from the room's live occupancy: leftover memberships from earlier
+  // runs share this database, so an absolute cap of 1 could already be full. One seat
+  // past the current headcount leaves exactly room for `first` and nobody else.
+  const scout = await register("capscout");
+  const before = await call("GET", "/api/v1/mining/pools", { token: scout.accessToken });
+  assert.equal(before.status, 200, JSON.stringify(before.body));
+  const mediumBefore = ((before.body as { pools: { id: string; activeMiners: number }[] }).pools ?? []).find((pool) => pool.id === "medium");
+  assert.ok(mediumBefore, "the medium room is listed");
+  const cap = mediumBefore.activeMiners + 1;
+  await collections.miningSettings.insertOne({
+    _id: new ObjectId(),
+    key: "mining.pools.medium",
+    value: { baseHashrate: 100, rewardMinBps: 7000, rewardMaxBps: 13000, maxMembers: cap },
+    updatedAt: new Date(),
+    updatedBy: "test",
+  });
+  try {
+    const first = await register("capfirst");
+    const moved = await call("POST", "/api/v1/mining/pools/join", { token: first.accessToken, body: { poolId: "medium" } });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+
+    const pools = await call("GET", "/api/v1/mining/pools", { token: first.accessToken });
+    assert.equal(pools.status, 200, JSON.stringify(pools.body));
+    const medium = ((pools.body as { pools: { id: string; maxMembers: number; full: boolean }[] }).pools ?? []).find((pool) => pool.id === "medium");
+    assert.equal(medium?.maxMembers, cap, "the live cap comes from the collection, not the env");
+    assert.equal(medium?.full, true);
+
+    const second = await register("capsecond");
+    const refused = await call("POST", "/api/v1/mining/pools/join", { token: second.accessToken, body: { poolId: "medium" } });
+    assert.equal(refused.status, 409);
+    assert.equal((refused.body["error"] as { code: string }).code, "mining_pool_full");
+  } finally {
+    await collections.miningSettings.deleteOne({ key: "mining.pools.medium" });
+  }
+});
+
 test("start opens exactly a 24-hour cycle with a server-chosen rate inside the configured band", async () => {
   const account = await register("start");
   assert.equal((await miningState(account)).status, "idle", "a fresh account has no cycle");
@@ -421,7 +504,11 @@ test("start opens exactly a 24-hour cycle with a server-chosen rate inside the c
   assert.ok(session.remainingSeconds > DAY_SECONDS - 5 && session.remainingSeconds <= DAY_SECONDS, "the cycle opens at the start of its 24-hour window");
   assert.match(session.rate, /^\d+\.\d{6}$/);
   const rateUnits = Number(session.rate.replace(".", ""));
-  assert.ok(rateUnits >= config.mining.rate.minUnits && rateUnits <= config.mining.rate.maxUnits, "the drawn rate is inside the configured band");
+  // Fixtures join the Low pool (factor 0.85–1.15x) on top of the configured band.
+  assert.ok(
+    rateUnits >= Math.floor(config.mining.rate.minUnits * 0.85) && rateUnits <= Math.ceil(config.mining.rate.maxUnits * 1.15),
+    "the drawn rate is the base band scaled by the pool factor",
+  );
   assert.equal(session.accrued, "0.0000", "nothing has accrued yet");
   assert.ok(session.totalAccruedMinor > 0, "the cycle still has a positive 24-hour ceiling");
   assert.ok(session.accruedMinor < session.totalAccruedMinor);

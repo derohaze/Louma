@@ -473,3 +473,26 @@
     }
   }
 }
+
+/*
+ * Printed transfer receipt: only the receipt card survives. The shell chrome
+ * (header, rail, sidebar), actions, and decorative canvases are hidden, and
+ * the scroll container is released so the receipt flows onto the page.
+ */
+@media print {
+  header,
+  aside,
+  nav,
+  .dotted-canvas,
+  .no-print {
+    display: none !important;
+  }
+  .app-surface {
+    display: block !important;
+    height: auto !important;
+  }
+  main {
+    overflow: visible !important;
+    border-radius: 0 !important;
+  }
+}
