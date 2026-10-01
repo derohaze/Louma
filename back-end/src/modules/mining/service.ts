@@ -5,6 +5,7 @@ import type { AppConfig } from "../../config/env.js";
 import { assertBalanced, formatMoney } from "../ledger/money.js";
 import { ensureTreasuryAccount } from "../wallets/service.js";
 import { recordSecurityEvent } from "../security/audit.js";
+import { readFinancialControls } from "../financial-controls/service.js";
 import { accruedMinorFor, pickRateUnits, rateToString, totalAccrualMinor } from "./rate.js";
 import { badRequest, conflict, forbidden, notFound, serviceUnavailable } from "../../shared/errors.js";
 import {
@@ -597,6 +598,14 @@ export async function startMining(input: {
 async function settleSession(input: MiningSettlementInput): Promise<{ postedMinor: number; session: MiningSessionRecord; confirmed: boolean }> {
   const { collections, config } = input;
   if (!config.mining.settlementEnabled) return { postedMinor: 0, session: input.session, confirmed: true };
+  /**
+   * Issuance stops when an operator pauses payouts (see financial-controls). Settlement is the only
+   * path that creates LMA, so it is the payout surface: while the control is on, nothing is posted
+   * and the result is reported as *unconfirmed* — never as a successful settlement of zero, which a
+   * caller could mistake for "the reward was smaller than expected". The cycle is left open exactly
+   * as it was, so no reward is stranded: the moment the pause is lifted, the next settle posts it.
+   */
+  if ((await readFinancialControls(collections)).payoutsPaused) return { postedMinor: 0, session: input.session, confirmed: false };
 
   let current = input.session;
   for (let attempt = 1; attempt <= MAX_SETTLE_ATTEMPTS; attempt += 1) {

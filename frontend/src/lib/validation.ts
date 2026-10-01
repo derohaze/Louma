@@ -13,6 +13,9 @@ export const LIMITS = {
   minPasswordLength: 8,
   maxPasswordLength: 128,
   maxNoteLength: 240,
+  /** Mirrors the API's own caps on the transfer form, so nothing unbounded can be typed into it. */
+  maxRecipientLength: 128,
+  maxAmountLength: 32,
   maxSearchLength: 60,
   maxDisplayNameLength: 32,
   maxHandleLength: 24,
@@ -49,6 +52,16 @@ export const isHandle = (value: string): boolean => HANDLE_PATTERN.test(value.tr
 /** A transfer target is either a wallet address or a public handle. */
 export const isTransferTarget = (value: string): boolean =>
   isWalletAddress(value) || isHandle(value);
+
+/**
+ * Tidies a typed or pasted transfer target as it is typed: a wallet address is upper case by
+ * convention and a handle is lower case, so both are normalised rather than shown rejected, and an
+ * address pasted with spaces around its groups still resolves.
+ */
+export const normalizeTransferTarget = (value: string): string => {
+  const collapsed = value.replace(/\s+/g, "").slice(0, LIMITS.maxRecipientLength);
+  return collapsed.startsWith("@") ? collapsed.toLowerCase() : collapsed.toUpperCase();
+};
 
 /** Six digits from the authenticator app. */
 export const isOneTimeCode = (value: string): boolean =>

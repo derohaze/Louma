@@ -1,5 +1,5 @@
 import argon2 from "argon2";
-import { ObjectId, type MongoClient } from "mongodb";
+import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import { generateSecret, generateURI } from "otplib";
 import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
@@ -8,6 +8,7 @@ import { decryptSecret, encryptSecret, generateRecoveryCodes, hashRecoveryCode }
 import { verifyTotpToken } from "./totp.js";
 import { getWallet } from "../wallets/service.js";
 import { badRequest, forbidden, conflict, notFound } from "../../shared/errors.js";
+import { TOTP_PERIOD_SECONDS, TWO_FACTOR_USE_RETENTION_MS } from "../../shared/types.js";
 
 const PENDING_2FA_TTL_MS = 5 * 60 * 1000;
 /** A notification cursor is the previous page's `_id`, which is an ObjectId rendered as hex. */
@@ -22,7 +23,7 @@ async function verifyAccountPassword(collections: Collections, ownerUserId: stri
   if (!user || !(await argon2.verify(user.passwordHash, password).catch(() => false))) throw forbidden("invalid_credentials", "The current password is incorrect.");
 }
 
-async function verifyTotpOrRecovery(input: { config: AppConfig; collections: Collections; ownerUserId: string; code: unknown }) {
+async function verifyTotpOrRecovery(input: { config: Pick<AppConfig, "encryptionKey">; collections: Collections; ownerUserId: string; code: unknown }) {
   if (typeof input.code !== "string" || input.code.length > 64) return false;
   const credential = await input.collections.twoFactorCredentials.findOne({ ownerUserId: input.ownerUserId, enabledAt: { $ne: null } });
   if (!credential) return false;
@@ -34,6 +35,172 @@ async function verifyTotpOrRecovery(input: { config: AppConfig; collections: Col
   const index = credential.recoveryCodeHashes.indexOf(hash);
   if (index < 0) return false;
   return { credential, remainingHashes: credential.recoveryCodeHashes.filter((_, item) => item !== index), recoveryCodeUsed: true };
+}
+
+/**
+ * Consumes the recovery code a verification used, so the same code cannot authorise a second action.
+ * `false` (an authenticator code) has nothing to consume.
+ */
+async function consumeRecoveryCode(input: {
+  collections: Collections;
+  verification: { credential: { _id: ObjectId; recoveryCodeHashes: string[] }; remainingHashes: string[] };
+}): Promise<void> {
+  const updated = await input.collections.twoFactorCredentials.updateOne(
+    { _id: input.verification.credential._id, recoveryCodeHashes: input.verification.credential.recoveryCodeHashes },
+    { $set: { recoveryCodeHashes: input.verification.remainingHashes, updatedAt: new Date() } },
+  );
+  if (updated.modifiedCount !== 1) throw conflict("recovery_code_already_used", "That recovery code was already used.");
+}
+
+/**
+ * The RFC 6238 step an accepted code belongs to. Derived from the server clock only: a client never
+ * supplies or influences it, and it is what a consumed step is recorded against.
+ */
+export function totpTimeStep(nowMs: number): number {
+  return Math.floor(nowMs / 1000 / TOTP_PERIOD_SECONDS);
+}
+
+/**
+ * What one transfer request proved about its account's credentials, before any money moves.
+ *
+ * The proof is data, not a permission: it names the step (or recovery code) that still has to be
+ * consumed inside the financial transaction. Nothing is written here, so a request that fails
+ * afterwards — insufficient funds, a conflict, a lost connection before commit — leaves the
+ * credential exactly as usable as it was.
+ */
+export type TransferCredentialProof =
+  | { kind: "none"; passwordChangedAt: Date | null; twoFactorEnabledAt: null }
+  | { kind: "password"; passwordChangedAt: Date | null; twoFactorEnabledAt: Date | null }
+  | { kind: "totp"; timeStep: number; passwordChangedAt: Date | null; twoFactorEnabledAt: Date }
+  | {
+      kind: "recovery_code";
+      credentialId: ObjectId;
+      /** The exact set that was verified; the consume is conditional on it still being current. */
+      verifiedHashes: string[];
+      remainingHashes: string[];
+      passwordChangedAt: Date | null;
+      twoFactorEnabledAt: Date;
+    };
+
+/**
+ * Proves whichever credential the account holds, without consuming anything.
+ *
+ * The two factors are alternatives, not a pair: an account that set a transfer password proves it;
+ * an account with an authenticator proves a code from it; an account with both only has to prove one
+ * — a stolen session still cannot move funds, and an owner who lost access to one credential is not
+ * locked out of their own money. An account with neither has nothing to prove, which the caller
+ * records as `none` rather than pretending a factor was checked.
+ */
+export async function proveTransferCredential(input: {
+  collections: Collections;
+  /** Absent only for direct (non-HTTP) callers; a second factor needs the key to read its secret. */
+  config: Pick<AppConfig, "encryptionKey"> | undefined;
+  ownerUserId: string;
+  password: unknown;
+  twoFactorCode: unknown;
+}): Promise<TransferCredentialProof> {
+  const [passwordCredential, twoFactorCredential] = await Promise.all([
+    input.collections.transferPasswordCredentials.findOne({ ownerUserId: input.ownerUserId }),
+    input.collections.twoFactorCredentials.findOne({ ownerUserId: input.ownerUserId, enabledAt: { $ne: null } }),
+  ]);
+  const passwordChangedAt = passwordCredential?.changedAt ?? null;
+  const twoFactorEnabledAt = twoFactorCredential?.enabledAt ?? null;
+  if (!passwordCredential && !twoFactorCredential) return { kind: "none", passwordChangedAt, twoFactorEnabledAt: null };
+  if (
+    passwordCredential &&
+    typeof input.password === "string" &&
+    input.password.length <= PASSWORD_MAX_LENGTH &&
+    (await argon2.verify(passwordCredential.passwordHash, input.password).catch(() => false))
+  ) {
+    return { kind: "password", passwordChangedAt, twoFactorEnabledAt };
+  }
+  if (twoFactorCredential && twoFactorEnabledAt) {
+    if (!input.config) throw new Error("Two-factor verification requires the encryption key");
+    const secret = decryptSecret(
+      { encryptedSecret: twoFactorCredential.encryptedSecret, iv: twoFactorCredential.secretIv, authTag: twoFactorCredential.secretAuthTag },
+      input.config.encryptionKey,
+    );
+    if (typeof input.twoFactorCode === "string" && await verifyTotpToken(secret, input.twoFactorCode.trim())) {
+      // The accepted step is recorded, not merely checked: consuming it inside the transfer's own
+      // transaction is what stops the same code from authorising a second financial operation.
+      return { kind: "totp", timeStep: totpTimeStep(Date.now()), passwordChangedAt, twoFactorEnabledAt };
+    }
+    if (typeof input.twoFactorCode === "string" && input.twoFactorCode.length <= 64) {
+      const hash = hashRecoveryCode(input.twoFactorCode, input.config.encryptionKey);
+      const index = twoFactorCredential.recoveryCodeHashes.indexOf(hash);
+      if (index >= 0) {
+        return {
+          kind: "recovery_code",
+          credentialId: twoFactorCredential._id,
+          verifiedHashes: twoFactorCredential.recoveryCodeHashes,
+          remainingHashes: twoFactorCredential.recoveryCodeHashes.filter((_, item) => item !== index),
+          passwordChangedAt,
+          twoFactorEnabledAt,
+        };
+      }
+    }
+    throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
+  }
+  throw forbidden("invalid_transfer_authorization", "Enter your transfer password or your authenticator code.");
+}
+
+/**
+ * Consumes the proof inside the financial transaction that the proof authorises.
+ *
+ * Call this from inside `withTransaction`, next to the money writes. Two properties follow from
+ * that placement, and both are required:
+ *
+ * - the consume rolls back with everything else, so a transfer that fails does not burn the code or
+ *   the recovery code the owner just used, and the owner can retry with it;
+ * - the consume is atomic with the money, so an accepted code can never authorise money that did not
+ *   commit, and money can never move on a code that was not consumed.
+ *
+ * A duplicate on the step index is the database refusing a second financial operation for one
+ * accepted code. It is surfaced as a product rejection, never retried: a retry would be exactly the
+ * reuse this defends against.
+ */
+export async function consumeTransferCredentialProof(input: {
+  collections: Collections;
+  proof: TransferCredentialProof;
+  ownerUserId: string;
+  intentHash: string;
+  correlationId: string;
+  session: ClientSession | undefined;
+}): Promise<void> {
+  if (input.proof.kind === "none" || input.proof.kind === "password") return;
+  const now = new Date();
+  if (input.proof.kind === "totp") {
+    try {
+      await input.collections.twoFactorUses.insertOne(
+        {
+          _id: new ObjectId(),
+          ownerUserId: input.ownerUserId,
+          purpose: "transfer",
+          timeStep: input.proof.timeStep,
+          intentHash: input.intentHash,
+          correlationId: input.correlationId,
+          createdAt: now,
+          retainUntil: new Date(now.getTime() + TWO_FACTOR_USE_RETENTION_MS),
+        },
+        input.session ? { session: input.session } : {},
+      );
+    } catch (error) {
+      if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === 11000) {
+        throw conflict("two_factor_code_already_used", "That authenticator code was already used. Wait for the next code.");
+      }
+      throw error;
+    }
+    return;
+  }
+  // A recovery code is single-use for the same reason, and the consume is conditional on the exact
+  // set that was verified: a code invalidated by a regeneration in the meantime cannot still approve
+  // a transfer.
+  const updated = await input.collections.twoFactorCredentials.updateOne(
+    { _id: input.proof.credentialId, enabledAt: { $ne: null }, recoveryCodeHashes: input.proof.verifiedHashes },
+    { $set: { recoveryCodeHashes: input.proof.remainingHashes, updatedAt: now } },
+    input.session ? { session: input.session } : {},
+  );
+  if (updated.modifiedCount !== 1) throw conflict("recovery_code_already_used", "That recovery code was already used.");
 }
 
 /**
@@ -134,13 +301,7 @@ export async function verifySensitiveAction(input: { collections: Collections; c
     const verification = await verifyTotpOrRecovery({ collections: input.collections, config: input.config, ownerUserId: input.ownerUserId, code: input.code });
     if (!verification) throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
     recoveryCodeUsed = verification.recoveryCodeUsed;
-    if (recoveryCodeUsed) {
-      const updated = await input.collections.twoFactorCredentials.updateOne(
-        { _id: verification.credential._id, recoveryCodeHashes: verification.credential.recoveryCodeHashes },
-        { $set: { recoveryCodeHashes: verification.remainingHashes, updatedAt: new Date() } },
-      );
-      if (updated.modifiedCount !== 1) throw conflict("recovery_code_already_used", "That recovery code was already used.");
-    }
+    if (recoveryCodeUsed) await consumeRecoveryCode({ collections: input.collections, verification });
   }
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.action, outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed } });
 }

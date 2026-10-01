@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/components/wallet-shell";
 import { WalletContent } from "@/components/wallet-pages";
-export const Route = createFileRoute("/wallet")({
+export const Route = createFileRoute("/wallet/")({
   head: () => ({
     meta: [
       { title: "My Wallet" },
