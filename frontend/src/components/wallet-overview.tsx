@@ -235,7 +235,9 @@ export function OverviewContent() {
               Send
             </Button>
           </Link>
-          <Link to="/transfer">
+          {/* `hash` selects the Receive tab on arrival: the transfer page opens on Send, so a link
+              to its bare path would show the send form after the user asked for their address. */}
+          <Link to="/transfer" hash="receive">
             <Button
               variant="outline"
               className="rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
@@ -300,7 +302,9 @@ export function OverviewContent() {
                 <CartesianGrid vertical={false} stroke="var(--border)" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
                 <YAxis tickLine={false} axisLine={false} fontSize={12} width={38} />
-                <Tooltip formatter={(value) => currency(Number(value).toFixed(4))} />
+                {/* The hidden-balance preference masks every amount on the overview, tooltips
+                    included: hovering the chart must not reveal what the toggle hid. */}
+                <Tooltip formatter={(value) => mask(currency(Number(value).toFixed(4)))} />
                 <Area
                   type="monotone"
                   dataKey="received"

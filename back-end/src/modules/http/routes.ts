@@ -335,6 +335,9 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       signature: body.signature,
       publicKeyJwk: body.publicKeyJwk,
       binding,
+      // The proof credits the network context it was actually answered from, so a verified handshake
+      // counts as activity on the network it happened on (never on one it was only claimed for).
+      ip: request.ip ?? null,
       origin: origin ?? null,
       correlationId: request.id,
     });

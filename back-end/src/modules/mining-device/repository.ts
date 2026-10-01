@@ -55,19 +55,20 @@ export async function findDeviceByAnchor(
 }
 
 /**
- * Device clusters last observed on one server-observed network identity (a keyed IP hash).
- * Bounded and served by `mining_devices_network_seen`; used for the network-scoped admission checks,
- * not for identity.
+ * Every live lease taken from one server-observed network identity (a keyed IP hash).
+ *
+ * The network lock asks this question — "is another account mining from this network?" — directly
+ * against the leases, where the answer lives: a lease carries the network its cycle was actually
+ * started from, so no device-record recency window and no device cap can hide a live lease. The
+ * result is bounded by the number of cycles that are running, not by the size of the population.
  */
-export async function findDevicesOnNetwork(
-  collections: Pick<Collections, "miningDevices">,
+export async function findLiveLeasesOnNetwork(
+  collections: Pick<Collections, "miningDeviceLeases">,
   ipHashValue: string,
-  limit: number,
-): Promise<MiningDeviceRecord[]> {
-  return collections.miningDevices
-    .find({ lastIpHash: ipHashValue, status: { $ne: "blocked" } })
-    .sort({ lastSeenAt: -1 })
-    .limit(limit)
+  nowMs: number,
+): Promise<MiningDeviceLeaseRecord[]> {
+  return collections.miningDeviceLeases
+    .find({ ipHash: ipHashValue, status: "active", leaseEndsAt: { $gt: new Date(nowMs) } })
     .toArray();
 }
 

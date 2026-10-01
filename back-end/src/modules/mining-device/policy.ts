@@ -56,15 +56,21 @@ export const LMDG_PROOF_VERSION = 1;
 /** The action a device proof is valid for — proof is bound to intent, not to possession alone. */
 export const LMDG_PROOF_ACTION = "lmdg.mining_start";
 
-/** Cluster search fan-out: how many recent devices the fuzzy match compares against. */
+/**
+ * Cluster search fan-out: how many recent devices the fuzzy match compares against.
+ */
 export const CLUSTER_CANDIDATE_LIMIT = 50;
 
 /**
- * How many device clusters behind one network identity the network-scoped checks consider.
- * A bounded probe, served by `mining_devices_network_seen`: it asks "is another account mining on
- * this network, and is this one of many new identities", not "enumerate every device behind a NAT".
+ * How many live-lease records the fuzzy backstop pulls into one start's comparison set.
+ *
+ * The exact checks are unbounded by design and indexed (the observation's own lease keys, and the
+ * live leases on this network); this cap only bounds the *similarity* heuristic that correlates an
+ * observation with a lease-holder whose traits changed (a driver update, a rewritten fingerprint),
+ * which would otherwise load every device record of the whole active mining population on every
+ * start. Newest leases first, so the bounded set is the one most likely to still be running.
  */
-export const NETWORK_DEVICE_PROBE_LIMIT = 50;
+export const LIVE_LEASE_BACKSTOP_LIMIT = 200;
 
 /** Observation write sampling: persist at most one observation per device per this window. */
 export const OBSERVATION_MIN_INTERVAL_MS = 60_000;
@@ -85,6 +91,15 @@ export const ENROLLMENT_DAY_MS = 24 * 60 * 60 * 1000;
  * by rejected requests, and the ceiling keeps the document size finite.
  */
 export const MAX_CLUSTER_ALIASES = 8;
+
+/**
+ * How many network contexts one cluster keeps credited activity for.
+ *
+ * A device moves between home, office and a phone hotspot; the most recent few networks are kept so
+ * a returning home device does not have to re-earn its exemption, and the oldest entry is dropped
+ * once the ceiling is reached (the network lock only ever reads the entry for the current network).
+ */
+export const MAX_NETWORK_TRUSTS = 3;
 
 /** Findings a cluster may accumulate before the risk engine treats it as suspicious. */
 export const MAX_CONSISTENCY_FINDINGS = 6;

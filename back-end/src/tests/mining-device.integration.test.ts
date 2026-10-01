@@ -8,6 +8,7 @@ import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
+import { ipHash } from "../modules/mining-device/identity.js";
 
 /**
  * Louma Mining Device Guard — concurrency and anti-abuse suite.
@@ -905,25 +906,105 @@ test("ENROLL-C: a proof of possession cannot clear the network lock, and only tr
   assert.equal(forged.trustState, "provisional", "a proof does not promote an identity to established");
   assert.equal(await collections.miningDeviceLeases.countDocuments({ deviceId: forged.publicId, status: "active" }), 0, "the forged identity holds no active lease");
 
-  // 4. The one exemption is server-owned trust. Scaffold the state the guard would otherwise earn
-  // over several admitted cycles and confirm the rule reads it — the honest second device is not
-  // locked out forever, it just has to have mined here before.
+  // 4. The exemption is server-owned trust *on this network, recently* — not a global flag. Each
+  // half is scaffolded on its own and asserted to matter: the honest second device is not locked out
+  // forever, it just has to have mined *here* (and not too long ago).
+  const networkHash = ipHash(config.encryptionKey, ip) ?? "";
+  const networkTrust = (lastAtMs: number) => ({
+    ipHash: networkHash,
+    admissions: config.lmdg.establishMinAdmissions,
+    proofs: 0,
+    firstAt: new Date(lastAtMs - 60_000),
+    lastAt: new Date(lastAtMs),
+  });
+  // 4a. Globally established, but no credit on this network: still refused. This is the second
+  // measured bypass — trust earned (or inherited) anywhere must not surface next to a live cycle
+  // here.
   await collections.miningDevices.updateOne(
     { _id: forged._id },
     { $set: { trustState: "established", establishedAt: new Date(), admissionCount: config.lmdg.establishMinAdmissions } },
   );
+  const globalOnly = await call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidence }, ip });
+  assert.equal(globalOnly.status, 409, `global trust does not exempt a network the cluster never mined on: ${JSON.stringify(globalOnly.body)}`);
+  assert.equal((globalOnly.body["error"] as { code: string }).code, "mining_device_network_in_use");
+
+  // 4b. Credited on this network, but older than the freshness window: a visitor again.
+  await collections.miningDevices.updateOne(
+    { _id: forged._id },
+    { $set: { networkTrusts: [networkTrust(Date.now() - (config.lmdg.networkTrustFreshnessSeconds + 3600) * 1000)] } },
+  );
+  const stale = await call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidence }, ip });
+  assert.equal(stale.status, 409, `an expired network residency is not an exemption: ${JSON.stringify(stale.body)}`);
+
+  // 4c. Credited here, fresh: exempt — the honest second device that has mined here is not locked out.
+  await collections.miningDevices.updateOne({ _id: forged._id }, { $set: { networkTrusts: [networkTrust(Date.now())] } });
   const established = await call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidence }, ip });
-  assert.equal(established.status, 200, `an established cluster is exempt on its own network: ${JSON.stringify(established.body)}`);
+  assert.equal(established.status, 200, `a fresh network residency is exempt on its own network: ${JSON.stringify(established.body)}`);
 });
 
 /**
- * ENROLL-D: the budget is consumed atomically under concurrency.
+ * ENROLL-F: an admission is a *committed* cycle on a network, not a request.
  *
- * Five simultaneous first-time enrollments from one account: the counter is a single `$inc` upsert,
- * so exactly the budget may pass and the rest are refused — no read-then-write window for a burst to
- * slip through.
+ * The bypass measured before this rule was "assess three concurrent starts, credit three admissions,
+ * then use the identity next to another account's live cycle". An allowed start credits nothing on
+ * its own: the credit is written after the session and lease transaction commits, which only one
+ * racing request can win — so a burst credits one admission, and the credit is recorded against the
+ * network the cycle actually ran on.
  */
-test("ENROLL-D: concurrent enrollments cannot outrun the identity budget", async () => {
+test("ENROLL-F: only a committed cycle credits an admission, on the network it ran on", async () => {
+  const account = await register("credit");
+  const ip = "10.11.11.11";
+  const evidence = deviceEvidence("laptop-x", "credit-1");
+  const first = await call("POST", "/api/v1/mining/start", { token: account.accessToken, body: { device: evidence }, ip });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const device = await collections.miningDevices.findOne({ webglFingerprintHash: `webgl-laptop-x-credit-1-${RUN}` });
+  assert.ok(device, "the admitted machine is enrolled");
+  assert.equal(device.admissionCount, 1, "one committed cycle is one admission");
+  const networkHash = ipHash(config.encryptionKey, ip) ?? "";
+  assert.deepEqual(
+    (device.networkTrusts ?? []).map((entry) => [entry.ipHash, entry.admissions]),
+    [[networkHash, 1]],
+    "the credit is recorded against the network the cycle ran on",
+  );
+  assert.equal(device.trustState, "provisional", "one cycle does not establish trust");
+
+  // Isolate the race: the first cycle is over (its lease released, its session closed the way the
+  // server closes an expired one), so every request below reaches admission control and the lease
+  // insert is the only thing that can commit.
+  await collections.miningDeviceLeases.updateMany(
+    { deviceId: device.publicId, status: "active" },
+    { $set: { status: "released", updatedAt: new Date() } },
+  );
+  await collections.miningSessions.updateMany(
+    { ownerUserId: account.userId, status: "active" },
+    { $set: { status: "settled", updatedAt: new Date() } },
+  );
+  const burst = await Promise.all(
+    Array.from({ length: 5 }, () => call("POST", "/api/v1/mining/start", { token: account.accessToken, body: { device: evidence }, ip })),
+  );
+  assert.ok(
+    burst.every((response) => response.status === 200 || response.status === 409),
+    `every burst request converges or is refused: ${JSON.stringify(burst.map((response) => [response.status, (response.body["error"] as { code?: string } | undefined)?.code]))}`,
+  );
+  const after = await collections.miningDevices.findOne({ _id: device._id });
+  assert.equal(after?.admissionCount, 2, `one extra committed cycle, never one per request: got ${after?.admissionCount}`);
+  // One cycle leases every identity the machine is known by, so the assertion is on the *session*:
+  // all live rows for this device belong to one cycle.
+  const activeCycles = await collections.miningDeviceLeases.distinct("miningSessionId", { deviceId: device.publicId, status: "active" });
+  assert.equal(activeCycles.length, 1, `one device, one active cycle: got ${activeCycles.length}`);
+});
+
+/**
+ * ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget, and refusals are
+ * refunded.
+ *
+ * Five simultaneous first-time enrollments from one account against a rolling budget of three. The
+ * guarantee under concurrency is *at most* the limit: each request inserts its own slot, counts the
+ * window including it, and removes its slot again when the count is over — so a burst can admit
+ * fewer (the race resolves conservatively) but never more, and each refusal gives the account its
+ * slot back instead of spending it on an enrollment that did not happen.
+ */
+test("ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget, and refusals are refunded", async () => {
   const account = await register("enroll-d");
   const guard = await import("../modules/mining-device/service.js");
   const intel = { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null };
@@ -950,10 +1031,35 @@ test("ENROLL-D: concurrent enrollments cannot outrun the identity budget", async
         .catch((error: unknown) => (error as { code?: string }).code ?? "error"),
     ),
   );
-  assert.equal(results.filter((r) => r === "created").length, 3, `the account budget is consumed atomically: ${JSON.stringify(results)}`);
-  assert.equal(results.filter((r) => r === "mining_device_enrollment_limited").length, 2, `over-budget enrollments are refused: ${JSON.stringify(results)}`);
+  const admitted = results.filter((r) => r === "created").length;
+  const refused = results.filter((r) => r === "mining_device_enrollment_limited").length;
+  assert.ok(admitted <= 3, `the budget is never exceeded under a burst: ${JSON.stringify(results)}`);
+  assert.equal(admitted + refused, 5, `every other burst request is refused by the budget: ${JSON.stringify(results)}`);
   const created = await collections.miningDevices.countDocuments({ enrollmentUserId: account.userId });
-  assert.equal(created, 3, `exactly the budget becomes a record: got ${created}`);
+  assert.equal(created, admitted, `only admitted enrollments became records: got ${created}`);
+  // Every refusal was refunded, so the slots the burst did not use are still spendable — this is the
+  // assertion issue 4 broke: a refused request must not cost the account one of its three.
+  let refunded = 0;
+  for (let index = 0; index < 3 - admitted; index += 1) {
+    const spent = await guard
+      .resolveOrCreateDevice({
+        collections,
+        config,
+        evidenceRaw: {
+          browserKeyPublicKey: `browser-key-refund-${index}-${RUN}`,
+          visitorId: `visitor-refund-${index}-${RUN}`,
+          integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
+        },
+        ip: `10.8.9.${index + 1}`,
+        intel,
+        ownerUserId: account.userId,
+        correlationId: `enroll-d-refund-${index}`,
+      })
+      .then(() => true)
+      .catch(() => false);
+    if (spent) refunded += 1;
+  }
+  assert.equal(refunded, 3 - admitted, `the slots refused under the race are still spendable afterwards: got ${refunded}`);
 });
 
 /**
