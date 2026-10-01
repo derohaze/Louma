@@ -422,7 +422,7 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   });
   app.post("/api/v1/security/2fa/disable", authenticated, async (request) => {
     const body = parseBody(z.object({ password: loginPasswordSchema, code: z.string().min(6).max(64) }).strict(), request.body);
-    return security.disableTwoFactor({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
+    return security.disableTwoFactor({ collections: app.collections, config: app.config, mongoClient: app.mongoClient, ownerUserId: getAuth(request).userId, ...body, requestId: request.id });
   });
   app.post("/api/v1/security/2fa/recovery-codes", authenticated, async (request) => {
     const body = parseBody(z.object({ password: loginPasswordSchema, code: z.string().min(6).max(64) }).strict(), request.body);

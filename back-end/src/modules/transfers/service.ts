@@ -146,12 +146,11 @@ function publicAuthorization(record: TransferAuthorizationRecord): PublicTransfe
 }
 
 /**
- * Loads the approval a transfer is about to consume and refuses every way it can be unusable.
- *
- * This is the cheap, pre-transaction half of the check; the authoritative half is the conditional
- * consume inside the transfer's own transaction, because only there is it atomic with the money. An
- * approval that belongs to another account is answered exactly like one that does not exist, so the
- * endpoint cannot be used to probe for another account's approvals.
+ * Fetches the approval a transfer is about to consume without enforcing consumed/expired.
+ * Usability is enforced after the idempotency replay check in `createTransfer`, so a retry
+ * after a committed transfer replays it instead of answering `transfer_authorization_used`.
+ * An approval that belongs to another account is answered exactly like one that does not
+ * exist, so the endpoint cannot be used to probe for another account's approvals.
  */
 async function loadTransferAuthorization(input: {
   collections: Collections;
@@ -163,12 +162,6 @@ async function loadTransferAuthorization(input: {
   }
   const record = await input.collections.transferAuthorizations.findOne({ publicId: input.authorizationId });
   if (!record || record.ownerUserId !== input.ownerUserId) throw notFound();
-  if (record.consumedAt) {
-    throw conflict("transfer_authorization_used", "This transfer was already approved and sent. Confirm the transfer again to send another one.");
-  }
-  if (record.expiresAt.getTime() <= Date.now()) {
-    throw conflict("transfer_authorization_expired", "That approval has expired. Confirm the recipient and the amount again.");
-  }
   return record;
 }
 
@@ -394,6 +387,9 @@ export async function createTransfer(input: {
   if (!idempotencyKey || idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH || !/^[\x21-\x7e]+$/.test(idempotencyKey)) {
     throw conflict("idempotency_key_required", "A valid Idempotency-Key header is required.");
   }
+  // The approval is fetched without enforcing consumed/expired yet: after a commit the
+  // approval is consumed, and a client retrying the same request after losing the success
+  // response must reach the idempotency replay below — not `transfer_authorization_used`.
   const approval = await loadTransferAuthorization({
     collections: input.collections,
     ownerUserId: input.ownerUserId,
@@ -426,6 +422,15 @@ export async function createTransfer(input: {
     if (prior.requestFingerprint !== requestFingerprint) throw conflict("idempotency_key_reused", "This idempotency key was already used for a different transfer.");
     return { ...publicTransaction(prior, input.ownerUserId, prior.balanceAfterMinor) as PublicTransaction & { balanceAfter: string }, balanceAfter: formatMoney(prior.balanceAfterMinor), replayed: true };
   }
+  // Only now that a replay has been ruled out is the approval's usability enforced. Checking
+  // consumed/expired before the lookup above turned every post-commit retry into
+  // `transfer_authorization_used` instead of the committed transfer.
+  if (approval.consumedAt) {
+    throw conflict("transfer_authorization_used", "This transfer was already approved and sent. Confirm the transfer again to send another one.");
+  }
+  if (approval.expiresAt.getTime() <= Date.now()) {
+    throw conflict("transfer_authorization_expired", "That approval has expired. Confirm the recipient and the amount again.");
+  }
   // The recipient is the wallet the approval named, not whatever the address resolves to now: a
   // custom address that moved between the quote and the send cannot redirect the money. When the
   // client echoes the typed spelling instead of the canonical address, it must resolve to the same
@@ -448,13 +453,32 @@ export async function createTransfer(input: {
    * a proof that is followed by a rejection, a conflict, or a failed commit leaves the account's
    * password and authenticator exactly as usable as they were.
    */
-  const proof: TransferCredentialProof = await proveTransferCredential({
-    collections: input.collections,
-    config: input.config,
-    ownerUserId: input.ownerUserId,
-    password: input.transferPassword,
-    twoFactorCode: input.twoFactorCode,
-  });
+  // Credential guesses must feed the per-account failure limit: the in-transaction
+  // `transfer_rejected` writer below never runs for a proof that throws here, so a wrong
+  // password/code would otherwise never count toward its ten-failure lockout.
+  let proof: TransferCredentialProof;
+  try {
+    proof = await proveTransferCredential({
+      collections: input.collections,
+      config: input.config,
+      ownerUserId: input.ownerUserId,
+      password: input.transferPassword,
+      twoFactorCode: input.twoFactorCode,
+    });
+  } catch (error) {
+    if (error instanceof AppError && (error.code === "invalid_transfer_password" || error.code === "invalid_two_factor_code" || error.code === "invalid_transfer_authorization")) {
+      await recordSecurityEvent({
+        collections: input.collections,
+        ownerUserId: input.ownerUserId,
+        sessionId: null,
+        eventType: "transfer_rejected",
+        outcome: "failure",
+        correlationId: input.requestId,
+        metadata: { reason: error.code, recipientAddress: intent.recipientAddress, amountMinor: intent.amountMinor, idempotencyKey },
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
 
   const senderWallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId, status: "active" });
   if (!senderWallet) {

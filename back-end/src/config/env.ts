@@ -338,6 +338,12 @@ function loadMiningPoolSpec(values: NodeJS.ProcessEnv, prefix: string, defaultMi
   if (rewardMinBps > rewardMaxBps) {
     throw new Error(`${prefix}_REWARD_MIN_BPS must not exceed ${prefix}_REWARD_MAX_BPS`);
   }
+  if (rewardMinBps > 10_000 || rewardMaxBps < 10_000) {
+    throw new Error(`${prefix}_REWARD band must include 10000 (1.0x) so pool choice changes variance, not average issuance`);
+  }
+  if (rewardMinBps + rewardMaxBps !== 20_000) {
+    throw new Error(`${prefix}_REWARD band must average 10000 (1.0x) so pool choice changes variance, not average issuance`);
+  }
   const maxMembers = positiveInteger(`${prefix}_MAX_MEMBERS`, values[`${prefix}_MAX_MEMBERS`] ?? "1000");
   return { baseHashrate, rewardMinBps, rewardMaxBps, maxMembers };
 }

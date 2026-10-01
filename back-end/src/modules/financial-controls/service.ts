@@ -44,7 +44,10 @@ function toControls(record: FinancialControlsRecord | null): FinancialControls {
   return { transfersPaused: record.transfersPaused, payoutsPaused: record.payoutsPaused, reason: record.reason };
 }
 
-/** Reads the current controls, with a one-second cache. Never throws: an unreadable control row cannot pause money. */
+/** Fail-closed controls reader: a missing row means not paused; an unreadable row means paused. */
+export const FINANCIAL_CONTROLS_FAIL_CLOSED: FinancialControls = { transfersPaused: true, payoutsPaused: true, reason: "controls_unavailable" };
+
+/** Reads the current controls, with a one-second cache. Never throws: an unreadable row pauses money. */
 export async function readFinancialControls(collections: { financialControls: Collection<FinancialControlsRecord> }): Promise<FinancialControls> {
   const now = Date.now();
   if (cached && now - cached.at < CACHE_TTL_MS) return toControls(cached.value);
@@ -52,10 +55,10 @@ export async function readFinancialControls(collections: { financialControls: Co
   try {
     record = await collections.financialControls.findOne({ _id: "global" });
   } catch {
-    // A control read that fails must not stop the product, and must not pause money either: it falls
-    // back to "not paused" for this one window and the next attempt re-reads. Financial correctness
-    // does not depend on this document (see the module comment).
-    return FINANCIAL_CONTROLS_DEFAULT;
+    // If the operator paused transfers/payouts and this read fails while writes still succeed,
+    // returning "not paused" would let money move during the incident the pause was meant to
+    // contain. Fail closed for this window (without caching) and re-read on the next attempt.
+    return FINANCIAL_CONTROLS_FAIL_CLOSED;
   }
   cached = { at: now, value: record };
   return toControls(record);

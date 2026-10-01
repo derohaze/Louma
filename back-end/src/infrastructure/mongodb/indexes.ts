@@ -527,9 +527,13 @@ async function backfillLeaseNetworks(db: Db): Promise<void> {
       const leasedAt = lease["leasedAt"] instanceof Date ? (lease["leasedAt"] as Date).getTime() : null;
       let network: string | null = null;
       if (deviceId && leasedAt !== null) {
+        // The lease's network is the observation for the winning start (at or before
+        // `leasedAt`). A competing start on the same device can record a later observation
+        // within the +60s fetch window; attributing that later network would protect the
+        // wrong network and leave the actual one unlocked.
         const candidates = observationsByDevice.get(deviceId) ?? [];
         for (const candidate of candidates) {
-          if (candidate.observedAt <= leasedAt + 60 * 1000) network = candidate.ipHash;
+          if (candidate.observedAt <= leasedAt) network = candidate.ipHash;
           else break;
         }
       }

@@ -261,28 +261,38 @@ async function main(): Promise<void> {
     const treasuryBefore = await collections.ledgerAccounts.findOne({ accountType: "system_treasury", currency: "LMA" });
     console.log(JSON.stringify({ benchmark: "transfer", tag: RUN_TAG, database: config.mongoDatabase, hosts: "configured cluster", senders: senders.length, receivers: receivers.length, amount: options.amount, perLevel: options.perLevel, note: "measurement includes every database write of one transfer; no HTTP in the path" }));
 
-    for (const shape of options.shapes) {
-      for (const concurrency of options.concurrency) {
-        const { transactions, ...row } = await runLevel({
-          shape,
-          concurrency,
-          total: options.perLevel,
-          senders,
-          receivers,
-          amount: options.amount,
-          collections,
-          mongoClient: client,
-          config,
-        });
-        createdTransactionIds.push(...transactions);
-        console.log(JSON.stringify(row));
+    let workloadError: unknown = null;
+    try {
+      for (const shape of options.shapes) {
+        for (const concurrency of options.concurrency) {
+          const { transactions, ...row } = await runLevel({
+            shape,
+            concurrency,
+            total: options.perLevel,
+            senders,
+            receivers,
+            amount: options.amount,
+            collections,
+            mongoClient: client,
+            config,
+          });
+          createdTransactionIds.push(...transactions);
+          console.log(JSON.stringify(row));
+        }
       }
+    } catch (error) {
+      workloadError = error;
     }
 
     // Cleanup: remove this run's writes, and take the shared accounts back by exactly this run's
     // contribution (recorded from the immutable entries, never by recomputing a balance).
-    const feeDelta = feeAccountBefore
-      ? (await collections.ledgerEntries.find({ ledgerAccountId: feeAccountBefore.publicId, transactionId: { $in: createdTransactionIds } }).toArray()).reduce(
+    // Runs even when the workload above failed, so a failed benchmark never leaves test users,
+    // funding entries, or balance changes behind.
+    // The fee account is re-resolved here (not only the pre-run read): the first fee-bearing
+    // transfer creates it after `feeAccountBefore` was taken, and its entries must still reverse.
+    const feeAccountNow = (await collections.ledgerAccounts.findOne({ accountType: "fee_revenue", currency: "LMA" })) ?? feeAccountBefore;
+    const feeDelta = feeAccountNow && createdTransactionIds.length > 0
+      ? (await collections.ledgerEntries.find({ ledgerAccountId: feeAccountNow.publicId, transactionId: { $in: createdTransactionIds } }).toArray()).reduce(
           (total, entry) => total + (entry.side === "credit" ? entry.amountMinor : -entry.amountMinor),
           0,
         )
@@ -303,9 +313,10 @@ async function main(): Promise<void> {
     }
     await collections.ledgerEntries.deleteMany({ correlationId: { $regex: `^${CORRELATION_PREFIX}` } });
     await collections.transactions.deleteMany({ correlationId: { $regex: `^${CORRELATION_PREFIX}` } });
-    if (feeAccountBefore && feeDelta !== 0) await collections.ledgerAccounts.updateOne({ _id: feeAccountBefore._id }, { $inc: { balanceMinor: -feeDelta } });
+    if (feeAccountNow && feeDelta !== 0) await collections.ledgerAccounts.updateOne({ _id: feeAccountNow._id }, { $inc: { balanceMinor: -feeDelta } });
     if (treasuryBefore && senderFunding !== 0) await collections.ledgerAccounts.updateOne({ _id: treasuryBefore._id }, { $inc: { balanceMinor: -senderFunding } });
     console.log(JSON.stringify({ benchmark: "transfer", tag: RUN_TAG, cleaned: true }));
+    if (workloadError) throw workloadError;
   } finally {
     await client.close();
   }
