@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   api,
+  type ApiMiningSession,
   type ApiMiningState,
   type ApiNotification,
   type ApiSecurityOverview,
@@ -50,6 +51,12 @@ export interface NotificationPage {
   nextCursor: string | null;
 }
 
+/** One page of mining cycles, newest first, exactly as the API answers it. */
+export interface MiningHistoryPage {
+  sessions: ApiMiningSession[];
+  nextCursor: string | null;
+}
+
 /** `/api/v1/me`: the account and the wallet the ledger currently reports for it. */
 export interface AccountProfile {
   user: ApiUser;
@@ -71,6 +78,7 @@ export const serverStateKeys = {
   transactions: ["account", "transactions", ACCOUNT_PAGE_SIZE] as const,
   security: ["account", "security"] as const,
   mining: ["account", "mining"] as const,
+  miningHistory: ["account", "mining", "history"] as const,
   sessions: ["account", "sessions"] as const,
   notifications: ["notifications", NOTIFICATION_PAGE_SIZE] as const,
 };
@@ -84,6 +92,8 @@ export const serverStateFreshness = {
    * answer, and this window is how long that answer may be reused before the server is asked again.
    */
   miningMs: 15_000,
+  /** Cycle history changes at most once a day; a longer window keeps paging cheap. */
+  miningHistoryMs: 60_000,
   /** The device list and the session count on the security overview are the same fact, read twice. */
   sessionsMs: 60_000,
   notificationsMs: 30_000,
@@ -93,6 +103,10 @@ export const accountFetchers = {
   profile: () => api.get<AccountProfile>("/api/v1/me"),
   security: () => api.get<ApiSecurityOverview>("/api/v1/security"),
   mining: () => api.get<ApiMiningState>("/api/v1/mining/state"),
+  miningHistory: (cursor: string | null) =>
+    api.get<MiningHistoryPage>(
+      `/api/v1/mining/history?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+    ),
   sessions: () => api.get<{ sessions: ApiSession[] }>("/api/v1/sessions"),
   transactions: (cursor: string | null) =>
     api.get<TransactionPage>(

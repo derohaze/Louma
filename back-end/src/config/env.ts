@@ -74,9 +74,10 @@ export interface LmdgConfig {
    * How long credited activity on one network keeps a cluster's exemption from the network lock.
    *
    * Trust is bound to the network it was earned on *and* to time: a cluster is a resident of a
-   * network only while it has mined there recently. The window must cover one mining cycle — the
-   * floor is 24 hours — or an available device would lose its own exemption between cycles and be
-   * refused beside another account's lease until the network went vacant again.
+    * network only while it has mined there recently. The window must cover one mining cycle plus
+    * settlement and restart grace — the floor is 48 hours — or an available device would lose its
+    * own exemption between cycles and be refused beside another account's lease until the network
+    * went vacant again.
    */
   networkTrustFreshnessSeconds: number;
 }
@@ -340,16 +341,17 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   }
   const networkLeaseLock = booleanFlag("LMDG_NETWORK_LEASE_LOCK", values["LMDG_NETWORK_LEASE_LOCK"], true);
   const establishMinAdmissions = positiveInteger("LMDG_ESTABLISH_MIN_ADMISSIONS", values["LMDG_ESTABLISH_MIN_ADMISSIONS"] ?? "3", 2);
-  // The floor is one full mining cycle: a shorter window would expire a resident device's exemption
-  // mid-cycle, so its next start beside another account's lease would refuse a device that had mined
-  // there moments ago. An installation that configured a shorter window (valid under the previous
-  // range) is raised to the floor with a warning instead of failing to boot — the same migration path
-  // the observation TTL uses.
+  // The floor covers one full mining cycle plus settlement and restart grace: a cycle runs exactly
+  // 24 hours, and the next start always lands after that (settlement, then a later start), so a
+  // 24-hour window would expire a resident device's exemption just before its next start beside
+  // another account's lease. An installation that configured a shorter window (valid under the
+  // previous range) is raised to the floor with a warning instead of failing to boot — the same
+  // migration path the observation TTL uses.
   const configuredNetworkTrustFreshnessSeconds = positiveInteger(
     "LMDG_NETWORK_TRUST_FRESHNESS_SECONDS",
     values["LMDG_NETWORK_TRUST_FRESHNESS_SECONDS"] ?? String(3 * 24 * 60 * 60),
   );
-  const networkTrustFreshnessFloorSeconds = 24 * 60 * 60;
+  const networkTrustFreshnessFloorSeconds = 48 * 60 * 60;
   const networkTrustFreshnessSeconds = Math.max(configuredNetworkTrustFreshnessSeconds, networkTrustFreshnessFloorSeconds);
   if (networkTrustFreshnessSeconds !== configuredNetworkTrustFreshnessSeconds) {
     console.warn(

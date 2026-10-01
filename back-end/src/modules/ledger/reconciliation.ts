@@ -189,7 +189,7 @@ export async function reconcileLedgerTransactions(input: {
     const entry = await brokenEntries.next();
     if (!entry) break;
     if (!entry.hasTransaction && !isExcludedEntry(entry, input.options?.excludeCorrelationIdPrefixes)) {
-      issues.push({ kind: "orphan_entry", severity: "critical", detail: `Ledger entry ${entry.publicId} references missing transaction ${entry.transactionId}` });
+      issues.push({ kind: "orphan_entry", severity: "critical", detail: `Ledger entry ${entry.publicId} references missing transaction ${entry.transactionId}`, entryPublicId: entry.publicId, transactionId: entry.transactionId });
     }
     if (entry.accountCurrency === undefined) {
       issues.push({ kind: "invalid_reference", severity: "critical", detail: `Ledger entry ${entry.publicId} references missing account ${entry.ledgerAccountId}` });

@@ -179,21 +179,31 @@ export function TransferSkeleton({ title }: { title: string }) {
     <Shell title={title}>
       <HeaderSkeleton action={false} />
       <Skeleton className="mb-5 h-11 w-48 rounded-full" />
+      {/* The send flow asks one question at a time, so the placeholder is the stepper plus one field. */}
+      <div className="mb-5 flex items-center gap-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="flex flex-1 items-center gap-2">
+            <Skeleton className="size-7 rounded-full" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        ))}
+      </div>
       <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
-        <div className="space-y-5 rounded-[22px] border bg-card p-5 shadow-sm">
-          {Array.from({ length: 3 }, (_, i) => (
-            <div key={i}>
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="mt-2 h-10 w-full rounded-xl" />
-            </div>
-          ))}
+        <div className="space-y-4 rounded-[22px] border bg-card p-5 shadow-sm">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-10 w-full rounded-xl" />
+          <Skeleton className="h-3 w-3/4" />
           <Skeleton className="h-10 w-32 rounded-full" />
         </div>
-        <div className="h-fit rounded-[22px] border bg-card p-5 shadow-sm">
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="mt-3 h-8 w-40" />
-          <Skeleton className="mt-5 h-3 w-full" />
-          <Skeleton className="mt-2 h-3 w-3/4" />
+        <div className="h-fit space-y-4">
+          {Array.from({ length: 2 }, (_, i) => (
+            <div key={i} className="rounded-[22px] border bg-card p-5 shadow-sm">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="mt-3 h-8 w-40" />
+              <Skeleton className="mt-5 h-3 w-full" />
+              <Skeleton className="mt-2 h-3 w-3/4" />
+            </div>
+          ))}
         </div>
       </div>
     </Shell>
@@ -254,6 +264,89 @@ export function HistorySkeleton({ title }: { title: string }) {
             <div className="min-w-0 flex-1">
               <Skeleton className="h-4 w-2/3" />
               <Skeleton className="mt-2 h-3 w-1/3" />
+            </div>
+            <Skeleton className="h-4 w-20" />
+          </div>
+        ))}
+      </div>
+    </Shell>
+  );
+}
+
+export function AddressBookSkeleton({ title }: { title: string }) {
+  return (
+    <Shell title={title}>
+      <HeaderSkeleton action={false} />
+      <div className="rounded-[22px] border bg-card p-5 shadow-sm">
+        <Skeleton className="h-5 w-36" />
+        <Skeleton className="mt-2 h-3 w-64" />
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+          <Skeleton className="h-10 rounded-xl" />
+          <Skeleton className="h-10 rounded-xl" />
+          <Skeleton className="h-10 w-24 rounded-full" />
+        </div>
+        <div className="mt-4">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="flex items-center gap-3 border-b px-1 py-3 last:border-0">
+              <Skeleton className="size-6 rounded-full" />
+              <div className="min-w-0 flex-1">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="mt-2 h-3 w-2/3" />
+              </div>
+              <Skeleton className="h-8 w-20 rounded-full" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+export function RecipientsSkeleton({ title }: { title: string }) {
+  return (
+    <Shell title={title}>
+      <HeaderSkeleton action={false} />
+      <div className="mb-4 flex gap-2 overflow-hidden">
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} className="h-8 w-32 shrink-0 rounded-full" />
+        ))}
+      </div>
+      <div className="rounded-[22px] border bg-card p-5 shadow-sm">
+        <Skeleton className="h-5 w-40" />
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 border-b px-1 py-3 last:border-0">
+            <Skeleton className="size-6 rounded-full" />
+            <div className="min-w-0 flex-1">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="mt-2 h-3 w-1/4" />
+            </div>
+            <Skeleton className="h-8 w-20 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </Shell>
+  );
+}
+
+export function MiningHistorySkeleton({ title }: { title: string }) {
+  return (
+    <Shell title={title}>
+      <HeaderSkeleton action={false} />
+      <div className="grid gap-4 sm:grid-cols-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="rounded-2xl border bg-card p-4 shadow-sm">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="mt-3 h-8 w-28" />
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 border-b px-5 py-4 last:border-0">
+            <Skeleton className="h-5 w-24 rounded-full" />
+            <div className="min-w-0 flex-1">
+              <Skeleton className="h-4 w-1/3" />
+              <Skeleton className="mt-2 h-3 w-1/2" />
             </div>
             <Skeleton className="h-4 w-20" />
           </div>
@@ -451,7 +544,7 @@ export function SecurityDetailSkeleton({ title }: { title: string }) {
  *    resolves by `location.pathname`, so renaming a page's `title` can never break its skeleton.
  * 2. `skeletonsByTitle` — fallback for callers that only know the title (kept for compatibility).
  *
- * Prefix rules below cover dynamic routes (`/history/<id>`) AND future sub-pages: a new page
+ * Prefix rules below cover dynamic routes (`/transactions/<id>`) AND future sub-pages: a new page
  * under `/security/*` or `/settings/*` automatically inherits its section's skeleton shape with
  * no change needed. A brand-new top-level path that matches nothing falls back to
  * `GenericPageSkeleton` + a dev-time `console.warn`, so it is loud, never silent — and
@@ -465,10 +558,13 @@ export function SecurityDetailSkeleton({ title }: { title: string }) {
 const skeletonsByPath: Record<string, (props: { title: string }) => React.ReactNode> = {
   "/": OverviewSkeleton,
   "/wallet": WalletSkeleton,
+  "/wallet/address-book": AddressBookSkeleton,
   "/custom-address": CustomAddressSkeleton,
   "/transfer": TransferSkeleton,
+  "/transfer/recipients": RecipientsSkeleton,
   "/mining": MiningSkeleton,
-  "/history": HistorySkeleton,
+  "/mining/history": MiningHistorySkeleton,
+  "/transactions": HistorySkeleton,
   "/profile": ProfileSkeleton,
   "/security": SecurityCenterSkeleton,
   "/security/two-factor": SecurityDetailSkeleton,
@@ -479,8 +575,11 @@ const skeletonsByPath: Record<string, (props: { title: string }) => React.ReactN
 };
 
 /** Section-level shapes inherited by dynamic routes and future sub-pages. */
-const skeletonPrefixes: Array<{ prefix: string; skeleton: (props: { title: string }) => React.ReactNode }> = [
-  { prefix: "/history/", skeleton: TransactionDetailSkeleton },
+const skeletonPrefixes: Array<{
+  prefix: string;
+  skeleton: (props: { title: string }) => React.ReactNode;
+}> = [
+  { prefix: "/transactions/", skeleton: TransactionDetailSkeleton },
   { prefix: "/security/", skeleton: SecurityDetailSkeleton },
   { prefix: "/settings/", skeleton: SettingsSkeleton },
   { prefix: "/profile/", skeleton: ProfileSkeleton },
@@ -489,8 +588,11 @@ const skeletonPrefixes: Array<{ prefix: string; skeleton: (props: { title: strin
 const skeletonsByTitle: Record<string, (props: { title: string }) => React.ReactNode> = {
   overview: OverviewSkeleton,
   mining: MiningSkeleton,
+  "mining history": MiningHistorySkeleton,
   transfer: TransferSkeleton,
+  recipients: RecipientsSkeleton,
   wallet: WalletSkeleton,
+  "address book": AddressBookSkeleton,
   transactions: HistorySkeleton,
   transaction: TransactionDetailSkeleton,
   "custom address": CustomAddressSkeleton,
@@ -504,9 +606,7 @@ const skeletonsByTitle: Record<string, (props: { title: string }) => React.React
   "transfer password": SecurityDetailSkeleton,
 };
 
-export function skeletonForTitle(
-  title: string,
-): (props: { title: string }) => React.ReactNode {
+export function skeletonForTitle(title: string): (props: { title: string }) => React.ReactNode {
   return skeletonsByTitle[title.trim().toLowerCase()] ?? GenericPageSkeleton;
 }
 
