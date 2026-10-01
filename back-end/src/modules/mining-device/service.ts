@@ -52,12 +52,13 @@ import {
   MAX_ACCOUNTS_PER_DEVICE_CLUSTER,
   MAX_CLUSTER_ALIASES,
   MAX_DEVICES_PER_ACCOUNT,
+  MAX_NETWORK_TRUSTS,
   OBSERVATION_MIN_INTERVAL_MS,
   PROVE_MAX_PER_HOUR,
 } from "./policy.js";
 import {
-  bumpNetworkTrust,
   consumeEnrollmentBudget,
+  networkTrustEntry,
   networkTrustEstablished,
   networkTrustFresh,
   networkTrustOf,
@@ -712,7 +713,10 @@ export async function creditGrantedStart(input: {
       { $inc: { admissionCount: 1 }, $set: { lastSeenAt: now, updatedAt: now } },
       { returnDocument: "after" },
     )
-    .catch(() => null);
+    .catch((error) => {
+      reportCreditFailure("admission increment", input.devicePublicId, error);
+      return null;
+    });
   if (!updated) return;
   await applyCommittedCredit({
     collections: input.collections,
@@ -740,9 +744,45 @@ async function applyCommittedCredit(input: {
   nowMs: number;
   minAdmissions: number;
 }): Promise<void> {
-  const networkTrusts = input.ipHashValue
-    ? bumpNetworkTrust(input.cluster.networkTrusts, input.ipHashValue, input.credit, input.nowMs)
-    : (input.cluster.networkTrusts ?? []);
+  const now = new Date(input.nowMs);
+  if (input.ipHashValue) {
+    // The entry is incremented where it lives, never rebuilt from this request's earlier read: two
+    // credits landing together (a start and a proof, or two starts) must both survive. Rebuilding
+    // the array from a snapshot silently dropped the other credit, and a device that had mined on a
+    // network was then refused beside another account's live cycle.
+    const existing = await input.collections.miningDevices
+      .updateOne(
+        { _id: input.cluster._id, networkTrusts: { $elemMatch: { ipHash: input.ipHashValue } } },
+        {
+          $inc: { [`networkTrusts.$.${input.credit === "admission" ? "admissions" : "proofs"}`]: 1 },
+          $set: { "networkTrusts.$.lastAt": now },
+        },
+      )
+      .catch((error) => {
+        reportCreditFailure("network trust increment", input.cluster.publicId, error);
+        return null;
+      });
+    if ((existing?.matchedCount ?? 0) === 0) {
+      // First credit on this network: prepend it and keep the array bounded in one atomic pipeline
+      // update, so a concurrent credit on another network cannot be sliced away by this write.
+      await input.collections.miningDevices
+        .updateOne(
+          { _id: input.cluster._id },
+          [
+            {
+              $set: {
+                networkTrusts: {
+                  $slice: [{ $concatArrays: [[networkTrustEntry(input.ipHashValue, input.credit, input.nowMs)], { $ifNull: ["$networkTrusts", []] }] }, MAX_NETWORK_TRUSTS],
+                },
+              },
+            },
+          ],
+        )
+        .catch((error) => {
+          reportCreditFailure("network trust entry", input.cluster.publicId, error);
+        });
+    }
+  }
   const transition = nextTrustState({
     device: input.cluster,
     admissionCount: input.cluster.admissionCount ?? 0,
@@ -756,12 +796,23 @@ async function applyCommittedCredit(input: {
       {
         $set: {
           trustState: transition.state,
-          networkTrusts,
-          ...(transition.becameEstablished ? { establishedAt: new Date(input.nowMs) } : {}),
+          ...(transition.becameEstablished ? { establishedAt: now } : {}),
         },
       },
     )
-    .catch(() => undefined);
+    .catch((error) => {
+      reportCreditFailure("trust state", input.cluster.publicId, error);
+    });
+}
+
+/**
+ * A credit that was not written is a real loss — the device never gets that admission back and can
+ * end up refused for standing it did earn — but it must never fail the request: the cycle is already
+ * committed when this runs. Ignoring the error entirely was the worse option: the loss left no trace
+ * at all, so nothing could tell an undercounted device from one that never mined. This is the trace.
+ */
+function reportCreditFailure(operation: string, devicePublicId: string, error: unknown): void {
+  console.error(`[lmdg] committed credit not written (${operation}) for device ${devicePublicId}:`, error);
 }
 
 // ---------------------------------------------------------------------------
@@ -1265,14 +1316,19 @@ export async function assessMiningStart(input: {
   // identity checks above (a lease on any identity this observation produces, or that its record is
   // known by) and the per-network lease query below, both of which are indexed and complete.
   const liveLeaseFilter = { status: "active", leaseEndsAt: { $gt: new Date(nowMs) } } as const;
+  // One row past the cap answers "was the comparison complete?" without a second query: the newest
+  // `LIVE_LEASE_BACKSTOP_LIMIT` leases are compared, and a row beyond them flags the residual gap
+  // (see `leaseBackstopTruncated` in the risk input).
   const liveLeases = await collections.miningDeviceLeases
     .find(liveLeaseFilter, { projection: { deviceClusterId: 1, deviceId: 1 } })
     .sort({ leasedAt: -1 })
-    .limit(LIVE_LEASE_BACKSTOP_LIMIT)
+    .limit(LIVE_LEASE_BACKSTOP_LIMIT + 1)
     .toArray()
     .catch(() => []);
-  const liveLeaseKeys = [...new Set(liveLeases.map((lease) => lease.deviceClusterId))].filter(Boolean);
-  const liveDeviceIds = [...new Set(liveLeases.map((lease) => lease.deviceId))].filter(
+  const leaseBackstopTruncated = liveLeases.length > LIVE_LEASE_BACKSTOP_LIMIT;
+  const comparedLeases = liveLeases.slice(0, LIVE_LEASE_BACKSTOP_LIMIT);
+  const liveLeaseKeys = [...new Set(comparedLeases.map((lease) => lease.deviceClusterId))].filter(Boolean);
+  const liveDeviceIds = [...new Set(comparedLeases.map((lease) => lease.deviceId))].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
   const knownIds = new Set(sweep.map((entry) => entry.publicId));
@@ -1506,6 +1562,7 @@ export async function assessMiningStart(input: {
     identityChurn,
     consistencyFindings: findings.length,
     networkLeaseConflict: foreignNetworkLease !== null,
+    leaseBackstopTruncated,
     unverifiedBrowserKey: browserKeyUnverified,
     anonymity: { vpn: input.intel.vpn, proxy: input.intel.proxy, tor: input.intel.tor, hosting: input.intel.hosting, anonymous: input.intel.anonymous },
     history: {

@@ -9,6 +9,7 @@ import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
 import { ipHash } from "../modules/mining-device/identity.js";
+import { ENROLLMENT_DAY_MS } from "../modules/mining-device/policy.js";
 
 /**
  * Louma Mining Device Guard — concurrency and anti-abuse suite.
@@ -995,14 +996,97 @@ test("ENROLL-F: only a committed cycle credits an admission, on the network it r
 });
 
 /**
+ * ENROLL-G: two credits landing together are both recorded.
+ *
+ * "Mined here, recently" is the only statement the network lock accepts, so a credit that another
+ * credit overwrites is a device losing its exemption on a network it actually mined on. The writes
+ * increment the entry where it lives (and prepend a new one atomically); rebuilding the whole
+ * `networkTrusts` array from one request's earlier read would let the later write erase the earlier
+ * credit.
+ */
+test("ENROLL-G: concurrent credits on different networks are both kept", async () => {
+  const account = await register("nettrust");
+  const evidence = deviceEvidence("laptop-x", "nettrust-1");
+  const started = await call("POST", "/api/v1/mining/start", { token: account.accessToken, body: { device: evidence }, ip: "10.12.12.12" });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const device = await collections.miningDevices.findOne({ webglFingerprintHash: `webgl-laptop-x-nettrust-1-${RUN}` });
+  assert.ok(device, "the admitted machine is enrolled");
+  const guard = await import("../modules/mining-device/service.js");
+  await Promise.all([
+    guard.creditGrantedStart({ collections, config, devicePublicId: device.publicId, ip: "10.12.12.13" }),
+    guard.creditGrantedStart({ collections, config, devicePublicId: device.publicId, ip: "10.12.12.14" }),
+  ]);
+  const after = await collections.miningDevices.findOne({ _id: device._id });
+  const admissionsByNetwork = new Map((after?.networkTrusts ?? []).map((entry) => [entry.ipHash, entry.admissions]));
+  for (const network of ["10.12.12.12", "10.12.12.13", "10.12.12.14"]) {
+    const hash = ipHash(config.encryptionKey, network) ?? "";
+    assert.equal(admissionsByNetwork.get(hash) ?? 0, 1, `the credit for ${network} survives the concurrent write`);
+  }
+  assert.equal(after?.admissionCount, 3, "three committed credits, none lost");
+});
+
+/**
+ * TRANSITION: rows written by the previous release are converted before the new rules read them.
+ *
+ * Two shapes changed with the network-bound rule, and neither is readable by the new queries: a live
+ * lease taken before leases carried their network (invisible to the network lock for the rest of its
+ * cycle, so a second identity could start on an occupied network) and a fixed-window quota counter
+ * (invisible to the rolling-window count, so an account at its limit would get the whole limit again
+ * inside the same window). Startup converts both, bounded and idempotently.
+ */
+test("TRANSITION: legacy leases and quota counters are converted by the startup migration", async () => {
+  const account = await register("transition");
+  const now = new Date();
+  const devicePublicId = `transition-device-${RUN}`;
+  const leasePublicId = `transition-lease-${RUN}`;
+  const network = "10.20.20.20";
+  const networkHash = ipHash(config.encryptionKey, network) ?? "";
+  const legacyQuotaId = `account:${ENROLLMENT_DAY_MS}:${Math.floor(now.getTime() / ENROLLMENT_DAY_MS)}:${account.userId}`;
+  await collections.miningDevices.insertOne({
+    publicId: devicePublicId, deviceKeyHash: `transition-key-${RUN}`,
+    firstSeenAt: now, lastSeenAt: now, status: "active",
+    lastIpHash: networkHash,
+    createdAt: now, updatedAt: now,
+  } as never);
+  // The lease is the previous release's shape: it has no `ipHash` field at all.
+  await collections.miningDeviceLeases.insertOne({
+    publicId: leasePublicId, deviceClusterId: `transition-key-${RUN}`, deviceId: devicePublicId,
+    ownerUserId: account.userId, miningSessionId: `transition-session-${RUN}`,
+    leasedAt: now, leaseEndsAt: new Date(now.getTime() + 60 * 60 * 1000), status: "active",
+    createdAt: now, updatedAt: now,
+  } as never);
+  // The counter is the previous release's shape too. Validation is bypassed because that is the only
+  // way a row lacking the new required fields can exist — the exact state the migration must handle.
+  await collections.miningDeviceQuotas.insertOne(
+    { _id: legacyQuotaId, scope: "account", windowMs: ENROLLMENT_DAY_MS, bucketStart: now, count: 2, expiresAt: new Date(now.getTime() + 2 * ENROLLMENT_DAY_MS) } as never,
+    { bypassDocumentValidation: true },
+  );
+
+  await ensureDatabaseIndexes(client.db(config.mongoDatabase));
+
+  const lease = await collections.miningDeviceLeases.findOne({ publicId: leasePublicId });
+  assert.equal(lease?.ipHash, networkHash, "the legacy lease now occupies the network it was taken from");
+  assert.equal(await collections.miningDeviceQuotas.findOne({ _id: legacyQuotaId }), null, "the converted counter is gone, so it cannot count twice");
+  const converted = await collections.miningDeviceQuotas.countDocuments({
+    scope: "account", subject: account.userId, windowMs: ENROLLMENT_DAY_MS, refs: { $gt: 0 }, at: { $gt: new Date(Date.now() - ENROLLMENT_DAY_MS) },
+  });
+  assert.equal(converted, 2, "the two enrollments the counter stood for still count");
+
+  await collections.miningDeviceLeases.deleteOne({ publicId: leasePublicId });
+  await collections.miningDevices.deleteOne({ publicId: devicePublicId });
+  await collections.miningDeviceQuotas.deleteMany({ subject: account.userId });
+});
+
+/**
  * ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget, and refusals are
  * refunded.
  *
  * Five simultaneous first-time enrollments from one account against a rolling budget of three. The
  * guarantee under concurrency is *at most* the limit: each request inserts its own slot, counts the
- * window including it, and removes its slot again when the count is over — so a burst can admit
+ * window including it, and releases its reference when the count is over — so a burst can admit
  * fewer (the race resolves conservatively) but never more, and each refusal gives the account its
- * slot back instead of spending it on an enrollment that did not happen.
+ * slot back instead of spending it on an enrollment that did not happen. Releasing a reference (not
+ * deleting the row) is what keeps a concurrent enrollment of the same machine counted.
  */
 test("ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget, and refusals are refunded", async () => {
   const account = await register("enroll-d");
