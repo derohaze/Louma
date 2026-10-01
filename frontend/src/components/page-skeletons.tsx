@@ -563,6 +563,7 @@ const skeletonsByPath: Record<string, (props: { title: string }) => React.ReactN
   "/transfer": TransferSkeleton,
   "/transfer/recipients": RecipientsSkeleton,
   "/mining": MiningSkeleton,
+  "/mining/pools": MiningHistorySkeleton,
   "/mining/history": MiningHistorySkeleton,
   "/transactions": HistorySkeleton,
   "/profile": ProfileSkeleton,
@@ -588,6 +589,7 @@ const skeletonPrefixes: Array<{
 const skeletonsByTitle: Record<string, (props: { title: string }) => React.ReactNode> = {
   overview: OverviewSkeleton,
   mining: MiningSkeleton,
+  "mining pools": MiningHistorySkeleton,
   "mining history": MiningHistorySkeleton,
   transfer: TransferSkeleton,
   recipients: RecipientsSkeleton,

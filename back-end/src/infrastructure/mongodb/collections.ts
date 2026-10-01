@@ -41,6 +41,8 @@ export interface Collections {
   notifications: Collection<NotificationRecord>;
   miningSessions: Collection<MiningSessionRecord>;
   miningSettlements: Collection<MiningSettlementRecord>;
+  miningSettings: Collection<import("../../modules/mining/settings.js").MiningSettingRecord>;
+  miningPoolMembers: Collection<import("../../modules/mining/pools.js").MiningPoolMembershipRecord>;
   miningDevices: Collection<MiningDeviceRecord>;
   miningDeviceLeases: Collection<MiningDeviceLeaseRecord>;
   miningDeviceNonces: Collection<MiningDeviceNonceRecord>;
@@ -65,6 +67,8 @@ export function getCollections(db: Db): Collections {
     notifications: db.collection<NotificationRecord>("notifications"),
     miningSessions: db.collection<MiningSessionRecord>("mining_sessions"),
     miningSettlements: db.collection<MiningSettlementRecord>("mining_settlements"),
+    miningSettings: db.collection<import("../../modules/mining/settings.js").MiningSettingRecord>("mining_settings"),
+    miningPoolMembers: db.collection<import("../../modules/mining/pools.js").MiningPoolMembershipRecord>("mining_pool_members"),
     miningDevices: db.collection<MiningDeviceRecord>("mining_devices"),
     miningDeviceLeases: db.collection<MiningDeviceLeaseRecord>("mining_device_leases"),
     miningDeviceNonces: db.collection<MiningDeviceNonceRecord>("mining_device_nonces"),

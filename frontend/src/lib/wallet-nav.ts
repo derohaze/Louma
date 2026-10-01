@@ -10,6 +10,7 @@ import {
   Settings01Icon,
   TransactionHistoryIcon,
   UserCircleIcon,
+  UserGroupIcon,
   Wallet01Icon,
 } from "@hugeicons/core-free-icons";
 import { settingsPages, type SettingsHref } from "@/lib/settings-pages";
@@ -22,6 +23,7 @@ export type NavHref =
   | "/transfer"
   | "/transfer/recipients"
   | "/mining"
+  | "/mining/pools"
   | "/mining/history"
   | "/wallet"
   | "/wallet/address-book"
@@ -120,6 +122,12 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     title: "Mining",
     icon: BitcoinCpuIcon,
     items: [
+      {
+        title: "Mining Pools",
+        href: "/mining/pools",
+        icon: UserGroupIcon,
+        searchTerms: "mining pools join room community low medium",
+      },
       {
         title: "Mining",
         href: "/mining",

@@ -275,6 +275,27 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
     mining.getMiningState({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId }),
   );
 
+  /**
+   * Community mining rooms (MVP): two system pools, membership required to start.
+   * Join is an idempotent upsert (switching pools just moves the membership; the running
+   * cycle keeps the pool it started in). Counts are live member counts.
+   */
+  app.get("/api/v1/mining/pools", authenticated, async (request) => {
+    const pools = await import("../mining/pools.js");
+    return pools.getMiningPoolsState({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId });
+  });
+
+  app.post("/api/v1/mining/pools/join", authenticated, async (request) => {
+    const body = parseBody(z.object({ poolId: z.enum(["low", "medium"]) }).strict(), request.body ?? {});
+    const pools = await import("../mining/pools.js");
+    return pools.joinMiningPool({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId, poolId: body.poolId });
+  });
+
+  app.post("/api/v1/mining/pools/leave", authenticated, async (request) => {
+    const pools = await import("../mining/pools.js");
+    return pools.leaveMiningPool({ collections: app.collections, config: app.config, ownerUserId: getAuth(request).userId });
+  });
+
   app.post("/api/v1/mining/start", { ...authenticated, config: { rateLimit: { max: 10, timeWindow: 60_000 } }, schema: authBody(z.object({ device: z.unknown().optional() }).loose()) }, async (request) => {
     // Device evidence is optional: old clients and existing tests keep working, and the
     // per-account unique index still applies. When present it is sanitized server-side and

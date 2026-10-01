@@ -357,6 +357,32 @@ const schemas: Record<string, Document> = {
       },
     },
   },
+  mining_settings: {
+    // One document per setting key. `value` is deliberately unconstrained: booleans and
+    // room/rate objects share this collection, and each key is validated by the settings
+    // module on write (operator gets the error) and on read (a bad row never bricks mining).
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["key", "value", "updatedAt", "updatedBy"],
+      properties: {
+        key: { bsonType: "string" },
+        updatedAt: { bsonType: "date" },
+        updatedBy: { bsonType: "string" },
+      },
+    },
+  },
+  mining_pool_members: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["ownerUserId", "poolId", "joinedAt", "updatedAt"],
+      properties: {
+        ownerUserId: { bsonType: "string" },
+        poolId: { enum: ["low", "medium"] },
+        joinedAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
 };
 
 async function applyValidator(db: Db, name: string, validator: Document): Promise<void> {
@@ -731,6 +757,11 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("mining_settlements").createIndex({ sessionPublicId: 1, sequenceNumber: 1 }, { unique: true, name: "mining_settlements_session_sequence_unique" }),
     db.collection("mining_settlements").createIndex({ idempotencyKey: 1 }, { unique: true, name: "mining_settlements_idempotency_unique" }),
     db.collection("mining_settlements").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "mining_settlements_owner_history" }),
+    // Setting keys are unique: one live value per key, and the upsert in setMiningSetting converges on it.
+    db.collection("mining_settings").createIndex({ key: 1 }, { unique: true, name: "mining_settings_key_unique" }),
+    // One pool membership per account: the database guarantee behind "join a pool to mine".
+    db.collection("mining_pool_members").createIndex({ ownerUserId: 1 }, { unique: true, name: "mining_pool_members_owner_unique" }),
+    db.collection("mining_pool_members").createIndex({ poolId: 1 }, { name: "mining_pool_members_pool" }),
     db.collection("mining_devices").createIndex({ publicId: 1 }, { unique: true, name: "mining_devices_public_id_unique" }),
     db.collection("mining_devices").createIndex({ deviceKeyHash: 1 }, { name: "mining_devices_key_hash" }),
     // The machine identity is the fan-in of every browser/profile observation of one computer; the

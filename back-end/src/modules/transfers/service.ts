@@ -363,7 +363,7 @@ export async function createTransfer(input: {
    * balance once it is settled, so the sender's running cycle is settled before the spend is
    * evaluated. Optional so a direct caller that runs no mining (tests, tooling) is unaffected.
    */
-  config?: Pick<AppConfig, "mining" | "encryptionKey">;
+  config?: Pick<AppConfig, "mining" | "miningPools" | "encryptionKey">;
   ownerUserId: string;
   /** The approval the preview endpoint issued. Required: the transfer executes it, never the body. */
   authorizationId: unknown;

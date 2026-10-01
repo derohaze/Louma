@@ -7,6 +7,7 @@ import {
   ChartIncreaseIcon,
   Coins01Icon,
   Timer01Icon,
+  UserGroupIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
@@ -450,6 +451,15 @@ export function MiningContent() {
   // above it: the message is the verdict, so it owns the card's content.
   const isDeviceBlocked = !session && error === DEVICE_IN_USE_MESSAGE;
   const isChecking = !session && busy === "start";
+  // Pool gate: without membership Start is refused server-side, so the page offers the
+  // pools page instead of a button that can only fail.
+  const poolRequired = !session && mining.data?.poolRequired === true;
+  const poolName =
+    mining.data?.poolId === "medium" || session?.poolId === "medium"
+      ? "Medium Pool"
+      : mining.data?.poolId === "low" || session?.poolId === "low"
+        ? "Low Pool"
+        : null;
   const rateText = session ? `${session.rate} LMA / hour` : "—";
   const remaining = live?.remainingSeconds ?? session?.remainingSeconds ?? 0;
   const accruedMinor = live?.accruedMinor ?? session?.accruedMinor ?? 0;
@@ -460,14 +470,23 @@ export function MiningContent() {
   // the next cycle once the old one is done and the server allows it, nothing while paused.
   const headerAction =
     !actionsEnabled || !mining.data ? null : !session ? (
-      <BusyButton
-        label="Start mining"
-        icon={BitcoinCpuIcon}
-        busy={busy === "start"}
-        onAction={start}
-        disabled={busy !== null || loading}
-        busyLabel="Start mining in progress"
-      />
+      poolRequired ? (
+        <Link to="/mining/pools">
+          <Button>
+            <Icon icon={UserGroupIcon} size={17} />
+            Join a mining pool
+          </Button>
+        </Link>
+      ) : (
+        <BusyButton
+          label="Start mining"
+          icon={BitcoinCpuIcon}
+          busy={busy === "start"}
+          onAction={start}
+          disabled={busy !== null || loading}
+          busyLabel="Start mining in progress"
+        />
+      )
     ) : session.status === "active" || needsCollection ? (
       <BusyButton
         label="Collect reward"
@@ -509,7 +528,26 @@ export function MiningContent() {
       ) : !session ? (
         <div className="grid gap-4 sm:grid-cols-3">
           <section className="overflow-hidden rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2">
-            {isChecking ? (
+            {poolRequired ? (
+              <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
+                <div>
+                  <h2 className="font-display font-semibold">Join a mining pool first</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Mining is only possible from inside a pool. Pick Low for steadier rewards or
+                    Medium for higher variance — both pay the same on average.
+                  </p>
+                  <div className="mt-4">
+                    <Link to="/mining/pools">
+                      <Button>
+                        <Icon icon={UserGroupIcon} size={17} />
+                        Open mining pools
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+                <MiningOrb state="working" size={180} label="Mining prospector idle" />
+              </div>
+            ) : isChecking ? (
               <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
                 <div>
                   <h2 className="font-display font-semibold">Running security check</h2>
@@ -656,6 +694,7 @@ export function MiningContent() {
               <FactList
                 items={[
                   ["Mining rate", rateText],
+                  ...((poolName ? [["Pool", poolName]] : []) as [string, string][]),
                   ["Cycle", `#${session.cycleNumber} · started ${dateText(session.startedAt)}`],
                   ["Window ends", dateText(session.endsAt)],
                   ["Maximum this cycle", currency(session.totalAccrued)],

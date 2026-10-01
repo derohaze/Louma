@@ -191,11 +191,25 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={theme === "dark" ? "dark" : undefined}
       style={{ colorScheme: theme }}
     >
       <head>
         <HeadContent />
+        {/*
+         * Extensions (Avast/AVG "bis_skin_checked" and similar) add attributes to
+         * arbitrary <div>s after the server HTML is parsed but before React
+         * hydrates. React then reports a hydration mismatch it will not patch.
+         * Strip those attributes as early as possible and keep stripping until
+         * hydration settles, so the DOM React hydrates matches the server HTML.
+         */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){var A='bis_skin_checked';function c(r){try{if(!r)return;if(r.hasAttribute&&r.hasAttribute(A))r.removeAttribute(A);var e=r.querySelectorAll?r.querySelectorAll('['+A+']'):[];for(var i=0;i<e.length;i++)e[i].removeAttribute(A);}catch(_){}}c(document);try{var o=new MutationObserver(function(m){for(var i=0;i<m.length;i++){var x=m[i];if(x.type==='attributes'&&x.attributeName===A){if(x.target.removeAttribute)x.target.removeAttribute(A);}else if(x.addedNodes){for(var j=0;j<x.addedNodes.length;j++)c(x.addedNodes[j]);}}});o.observe(document.documentElement,{attributes:true,childList:true,subtree:true,attributeFilter:[A]});window.addEventListener('load',function(){setTimeout(function(){try{o.disconnect();}catch(_){}c(document);},3000);});}catch(_){}})();",
+          }}
+        />
         {/*
          * The font stylesheet loads with `media="print"` so it never blocks rendering, then flips
          * to `all` once fetched (standard non-blocking-CSS pattern). Without this, the browser

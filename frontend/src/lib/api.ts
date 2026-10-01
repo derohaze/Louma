@@ -27,6 +27,7 @@ export interface ApiWallet {
  */
 export interface ApiMiningSession {
   id: string;
+  poolId: string | null;
   status: "active" | "completed" | "settled";
   cycleNumber: number;
   startedAt: string;
@@ -57,6 +58,30 @@ export interface ApiMiningState {
   canStart: boolean;
   cycleDurationSeconds: number;
   session: ApiMiningSession | null;
+  /** Pool the account mines in; null until it joins one (start is refused then). */
+  poolId: string | null;
+  /** True when the account must join a pool before Start is accepted. */
+  poolRequired: boolean;
+}
+
+export interface ApiMiningPool {
+  id: string;
+  name: string;
+  riskLevel: "low" | "medium";
+  baseHashrate: number;
+  activeMiners: number;
+  maxMembers: number;
+  full: boolean;
+  effectivePower: number;
+  mySharePercent: number;
+  rewardRangeText: string;
+  description: string;
+  joined: boolean;
+}
+
+export interface ApiMiningPoolsState {
+  pools: ApiMiningPool[];
+  poolId: string | null;
 }
 
 export interface ApiTransaction {

@@ -871,10 +871,15 @@ export async function startMiningWithGuard(): Promise<unknown> {
 export const DEVICE_EVIDENCE_MISSING_MESSAGE =
   "We could not verify this device, so mining cannot start. Reload the page — and if it keeps failing, turn off content blockers for this site — then try again.";
 
+export const POOL_REQUIRED_MESSAGE =
+  "Join a mining pool before starting a cycle. Open Mining Pools and pick Low or Medium.";
+
 export function messageForMiningError(
   error: unknown,
   fallback: (error: unknown) => string,
 ): string {
+  if (error instanceof ApiError && error.code === "mining_pool_required")
+    return POOL_REQUIRED_MESSAGE;
   if (error instanceof ApiError && error.code === "mining_device_already_in_use")
     return DEVICE_IN_USE_MESSAGE;
   if (error instanceof ApiError && error.code === "mining_device_evidence_required")

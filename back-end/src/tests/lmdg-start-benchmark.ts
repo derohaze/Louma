@@ -356,7 +356,10 @@ async function main(): Promise<void> {
       body: { email: `bench.${run}.${label}.${Math.random().toString(36).slice(2)}@example.test`, password: PASSWORD, displayName: `B ${label}` },
     });
     if (response.status !== 201) throw new Error(`benchmark register failed: ${response.status} ${JSON.stringify(response.body)}`);
-    return String(response.body.accessToken);
+    const token = String(response.body.accessToken);
+    const joined = await call("POST", "/api/v1/mining/pools/join", { token, body: { poolId: "low" } });
+    if (joined.status !== 200) throw new Error(`benchmark pool join failed: ${joined.status} ${JSON.stringify(joined.body)}`);
+    return token;
   };
 
   /** Times one request with the Mongo counters reset first, so the numbers belong to that request. */

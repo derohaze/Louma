@@ -290,6 +290,8 @@ export interface MiningSessionRecord {
   /** `rateUnits / rateScale` rendered once, for display; the integers above stay the source of truth. */
   rate: string;
   rateUnit: "LMA/hour";
+  /** Pool the cycle started in (null for cycles opened before pools existed). */
+  poolId?: string | null;
   /** Total already posted to the ledger, in minor units. Never exceeds the 24-hour accrual. */
   settledMinor: number;
   /** How many settlements this cycle has posted; the sequence number of the next one. */
@@ -341,6 +343,7 @@ export interface MiningJournalRecord {
 /** A mining cycle as the customer-facing API reports it, with the live accrual already computed. */
 export interface PublicMiningSession {
   id: string;
+  poolId: string | null;
   status: MiningEffectiveStatus;
   cycleNumber: number;
   startedAt: string;
@@ -373,6 +376,10 @@ export interface PublicMiningState {
   canStart: boolean;
   cycleDurationSeconds: number;
   session: PublicMiningSession | null;
+  /** Pool the account mines in; null until it joins one (start is refused then). */
+  poolId: string | null;
+  /** True when the account must join a pool before Start is accepted. */
+  poolRequired: boolean;
 }
 
 /**

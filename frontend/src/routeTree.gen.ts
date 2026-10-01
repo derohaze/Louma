@@ -12,14 +12,18 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MiningRouteRouteImport } from './routes/mining/route'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TransactionsRouteRouteImport } from './routes/transactions/route'
 import { Route as TransferRouteRouteImport } from './routes/transfer/route'
 import { Route as WalletRouteRouteImport } from './routes/wallet/route'
+import { Route as HistoryIndexRouteImport } from './routes/history/index'
+import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
 import { Route as MiningIndexRouteImport } from './routes/mining/index'
 import { Route as MiningHistoryRouteImport } from './routes/mining/history'
+import { Route as MiningPoolsRouteImport } from './routes/mining/pools'
 import { Route as ProfileIndexRouteImport } from './routes/profile/index'
 import { Route as SecurityIndexRouteImport } from './routes/security/index'
 import { Route as SecurityDevicesRouteImport } from './routes/security/devices'
@@ -47,6 +51,11 @@ const CustomAddressRoute = CustomAddressRouteImport.update({
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
   id: '/forgot-password',
   path: '/forgot-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HistoryRouteRoute = HistoryRouteRouteImport.update({
+  id: '/history',
+  path: '/history',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -79,6 +88,16 @@ const WalletRouteRoute = WalletRouteRouteImport.update({
   path: '/wallet',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HistoryIndexRoute = HistoryIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => HistoryRouteRoute,
+} as any)
+const HistoryTransferIdRoute = HistoryTransferIdRouteImport.update({
+  id: '/$transferId',
+  path: '/$transferId',
+  getParentRoute: () => HistoryRouteRoute,
+} as any)
 const MiningIndexRoute = MiningIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -87,6 +106,11 @@ const MiningIndexRoute = MiningIndexRouteImport.update({
 const MiningHistoryRoute = MiningHistoryRouteImport.update({
   id: '/history',
   path: '/history',
+  getParentRoute: () => MiningRouteRoute,
+} as any)
+const MiningPoolsRoute = MiningPoolsRouteImport.update({
+  id: '/pools',
+  path: '/pools',
   getParentRoute: () => MiningRouteRoute,
 } as any)
 const ProfileIndexRoute = ProfileIndexRouteImport.update({
@@ -158,6 +182,7 @@ const WalletAddressBookRoute = WalletAddressBookRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/history': typeof HistoryRouteRouteWithChildren
   '/mining': typeof MiningRouteRouteWithChildren
   '/transactions': typeof TransactionsRouteRouteWithChildren
   '/transfer': typeof TransferRouteRouteWithChildren
@@ -166,7 +191,9 @@ export interface FileRoutesByFullPath {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
+  '/mining/pools': typeof MiningPoolsRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
@@ -174,6 +201,7 @@ export interface FileRoutesByFullPath {
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
   '/wallet/address-book': typeof WalletAddressBookRoute
+  '/history/': typeof HistoryIndexRoute
   '/mining/': typeof MiningIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -188,7 +216,9 @@ export interface FileRoutesByTo {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
+  '/mining/pools': typeof MiningPoolsRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
@@ -196,6 +226,7 @@ export interface FileRoutesByTo {
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
   '/wallet/address-book': typeof WalletAddressBookRoute
+  '/history': typeof HistoryIndexRoute
   '/mining': typeof MiningIndexRoute
   '/profile': typeof ProfileIndexRoute
   '/security': typeof SecurityIndexRoute
@@ -207,6 +238,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/history': typeof HistoryRouteRouteWithChildren
   '/mining': typeof MiningRouteRouteWithChildren
   '/transactions': typeof TransactionsRouteRouteWithChildren
   '/transfer': typeof TransferRouteRouteWithChildren
@@ -215,7 +247,9 @@ export interface FileRoutesById {
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
+  '/mining/pools': typeof MiningPoolsRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
@@ -223,6 +257,7 @@ export interface FileRoutesById {
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
   '/wallet/address-book': typeof WalletAddressBookRoute
+  '/history/': typeof HistoryIndexRoute
   '/mining/': typeof MiningIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -235,6 +270,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/history'
     | '/mining'
     | '/transactions'
     | '/transfer'
@@ -243,7 +279,9 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/signup'
+    | '/history/$transferId'
     | '/mining/history'
+    | '/mining/pools'
     | '/security/devices'
     | '/security/freeze'
     | '/security/transfer-password'
@@ -251,6 +289,7 @@ export interface FileRouteTypes {
     | '/transactions/$transferId'
     | '/transfer/recipients'
     | '/wallet/address-book'
+    | '/history/'
     | '/mining/'
     | '/profile/'
     | '/security/'
@@ -265,7 +304,9 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/signup'
+    | '/history/$transferId'
     | '/mining/history'
+    | '/mining/pools'
     | '/security/devices'
     | '/security/freeze'
     | '/security/transfer-password'
@@ -273,6 +314,7 @@ export interface FileRouteTypes {
     | '/transactions/$transferId'
     | '/transfer/recipients'
     | '/wallet/address-book'
+    | '/history'
     | '/mining'
     | '/profile'
     | '/security'
@@ -283,6 +325,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/history'
     | '/mining'
     | '/transactions'
     | '/transfer'
@@ -291,7 +334,9 @@ export interface FileRouteTypes {
     | '/forgot-password'
     | '/login'
     | '/signup'
+    | '/history/$transferId'
     | '/mining/history'
+    | '/mining/pools'
     | '/security/devices'
     | '/security/freeze'
     | '/security/transfer-password'
@@ -299,6 +344,7 @@ export interface FileRouteTypes {
     | '/transactions/$transferId'
     | '/transfer/recipients'
     | '/wallet/address-book'
+    | '/history/'
     | '/mining/'
     | '/profile/'
     | '/security/'
@@ -310,6 +356,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  HistoryRouteRoute: typeof HistoryRouteRouteWithChildren
   MiningRouteRoute: typeof MiningRouteRouteWithChildren
   TransactionsRouteRoute: typeof TransactionsRouteRouteWithChildren
   TransferRouteRoute: typeof TransferRouteRouteWithChildren
@@ -348,6 +395,13 @@ declare module '@tanstack/react-router' {
       path: '/forgot-password'
       fullPath: '/forgot-password'
       preLoaderRoute: typeof ForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/history': {
+      id: '/history'
+      path: '/history'
+      fullPath: '/history'
+      preLoaderRoute: typeof HistoryRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -392,6 +446,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WalletRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/history/': {
+      id: '/history/'
+      path: '/'
+      fullPath: '/history/'
+      preLoaderRoute: typeof HistoryIndexRouteImport
+      parentRoute: typeof HistoryRouteRoute
+    }
+    '/history/$transferId': {
+      id: '/history/$transferId'
+      path: '/$transferId'
+      fullPath: '/history/$transferId'
+      preLoaderRoute: typeof HistoryTransferIdRouteImport
+      parentRoute: typeof HistoryRouteRoute
+    }
     '/mining/': {
       id: '/mining/'
       path: '/'
@@ -404,6 +472,13 @@ declare module '@tanstack/react-router' {
       path: '/history'
       fullPath: '/mining/history'
       preLoaderRoute: typeof MiningHistoryRouteImport
+      parentRoute: typeof MiningRouteRoute
+    }
+    '/mining/pools': {
+      id: '/mining/pools'
+      path: '/pools'
+      fullPath: '/mining/pools'
+      preLoaderRoute: typeof MiningPoolsRouteImport
       parentRoute: typeof MiningRouteRoute
     }
     '/profile/': {
@@ -500,13 +575,29 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface HistoryRouteRouteChildren {
+  HistoryTransferIdRoute: typeof HistoryTransferIdRoute
+  HistoryIndexRoute: typeof HistoryIndexRoute
+}
+
+const HistoryRouteRouteChildren: HistoryRouteRouteChildren = {
+  HistoryTransferIdRoute: HistoryTransferIdRoute,
+  HistoryIndexRoute: HistoryIndexRoute,
+}
+
+const HistoryRouteRouteWithChildren = HistoryRouteRoute._addFileChildren(
+  HistoryRouteRouteChildren,
+)
+
 interface MiningRouteRouteChildren {
   MiningHistoryRoute: typeof MiningHistoryRoute
+  MiningPoolsRoute: typeof MiningPoolsRoute
   MiningIndexRoute: typeof MiningIndexRoute
 }
 
 const MiningRouteRouteChildren: MiningRouteRouteChildren = {
   MiningHistoryRoute: MiningHistoryRoute,
+  MiningPoolsRoute: MiningPoolsRoute,
   MiningIndexRoute: MiningIndexRoute,
 }
 
@@ -557,6 +648,7 @@ const WalletRouteRouteWithChildren = WalletRouteRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  HistoryRouteRoute: HistoryRouteRouteWithChildren,
   MiningRouteRoute: MiningRouteRouteWithChildren,
   TransactionsRouteRoute: TransactionsRouteRouteWithChildren,
   TransferRouteRoute: TransferRouteRouteWithChildren,
