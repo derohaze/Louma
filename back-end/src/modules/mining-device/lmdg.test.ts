@@ -694,52 +694,21 @@ function fakeQuotas() {
   const matches = (doc: Record<string, unknown>, filter: Record<string, unknown>): boolean => {
     const at = filter["at"] as { $gt: Date } | undefined;
     const refs = filter["refs"] as { $gt: number } | undefined;
-    const orClauses = filter["$or"] as Array<Record<string, unknown>> | undefined;
-    const refsOk = (): boolean => {
-      if (refs !== undefined) return ((doc["refs"] as number) ?? 0) > refs.$gt;
-      if (orClauses !== undefined) {
-        return orClauses.some((clause) => {
-          const clauseRefs = clause["refs"] as { $gt?: number; $exists?: boolean } | undefined;
-          if (!clauseRefs) return true;
-          if (clauseRefs.$exists === false) return doc["refs"] === undefined;
-          if (typeof clauseRefs.$gt === "number") return ((doc["refs"] as number) ?? 0) > clauseRefs.$gt;
-          return false;
-        });
-      }
-      return true;
-    };
     return (
       doc["scope"] === filter["scope"] &&
       doc["subject"] === filter["subject"] &&
       doc["windowMs"] === filter["windowMs"] &&
       (at === undefined || (doc["at"] as Date).getTime() > at.$gt.getTime()) &&
-      refsOk()
+      (refs === undefined || ((doc["refs"] as number) ?? 0) > refs.$gt)
     );
   };
-  const applyUpdate = (doc: Record<string, unknown>, update: Record<string, unknown>): void => {
-    const inc = (update["$inc"] as Record<string, number> | undefined)?.["refs"];
-    if (typeof inc === "number") doc["refs"] = ((doc["refs"] as number) ?? 0) + inc;
-    const set = update["$set"] as Record<string, unknown> | undefined;
-    if (set) for (const [key, value] of Object.entries(set)) doc[key] = value;
-  };
-  const matchesIdFilter = (doc: Record<string, unknown>, id: string, filter: Record<string, unknown>): boolean => {
-    void id;
-    void doc;
-    const refsCond = (filter as Record<string, unknown>)["refs"];
-    if (refsCond !== undefined && typeof refsCond === "number") {
-      // Production joins idle slots with `{ _id, refs: 0 }` to refresh their timestamp.
-      return ((doc["refs"] as number) ?? 0) === refsCond;
-    }
-    return true;
-  };
-  const addRefs = (filter: { _id: string; refs?: number } | { _id: { $in: string[] } }, update: Record<string, unknown>): number => {
-    const ids = typeof filter._id === "string" ? [filter._id] : (filter._id as { $in: string[] }).$in;
+  const addRefs = (filter: { _id: string } | { _id: { $in: string[] } }, refs: number): number => {
+    const ids = typeof filter._id === "string" ? [filter._id] : filter._id.$in;
     let matched = 0;
     for (const id of ids) {
       const doc = docs.get(id);
       if (!doc) continue;
-      if (!matchesIdFilter(doc, id, filter as Record<string, unknown>)) continue;
-      applyUpdate(doc, update);
+      doc["refs"] = ((doc["refs"] as number) ?? 0) + refs;
       matched += 1;
     }
     return matched;
@@ -751,12 +720,12 @@ function fakeQuotas() {
       docs.set(id, { ...doc });
       return { acknowledged: true, insertedId: id };
     },
-    updateOne: async (filter: { _id: string }, update: Record<string, unknown>) => {
-      const matchedCount = addRefs(filter, update);
+    updateOne: async (filter: { _id: string }, update: { $inc: { refs: number } }) => {
+      const matchedCount = addRefs(filter, update.$inc.refs);
       return { matchedCount, modifiedCount: matchedCount };
     },
-    updateMany: async (filter: { _id: { $in: string[] } }, update: Record<string, unknown>) => {
-      const matchedCount = addRefs(filter, update);
+    updateMany: async (filter: { _id: { $in: string[] } }, update: { $inc: { refs: number } }) => {
+      const matchedCount = addRefs(filter, update.$inc.refs);
       return { matchedCount, modifiedCount: matchedCount };
     },
     countDocuments: async (filter: Record<string, unknown>) => {

@@ -746,84 +746,42 @@ async function applyCommittedCredit(input: {
 }): Promise<void> {
   const now = new Date(input.nowMs);
   if (input.ipHashValue) {
-    // One atomic pipeline: increment the matching entry or prepend a new one, and move the
-    // credited network to the front. Two operations (increment-then-insert) let two first credits
-    // on one network both miss and each prepend a duplicate — trust reads only the first match,
-    // so split credits never established the exemption and wasted the bounded slots. An in-place
-    // increment alone left the entry in its old position, so a freshly credited third network
-    // could be sliced away by the next new network. Serialized per document, this pipeline lets
-    // the second concurrent credit see the first one's entry and increment it instead.
-    const admissionsInc = input.credit === "admission" ? 1 : 0;
-    const proofsInc = input.credit === "proof" ? 1 : 0;
-    const freshEntry = networkTrustEntry(input.ipHashValue, input.credit, input.nowMs);
-    await input.collections.miningDevices
+    // The entry is incremented where it lives, never rebuilt from this request's earlier read: two
+    // credits landing together (a start and a proof, or two starts) must both survive. Rebuilding
+    // the array from a snapshot silently dropped the other credit, and a device that had mined on a
+    // network was then refused beside another account's live cycle.
+    const existing = await input.collections.miningDevices
       .updateOne(
-        { _id: input.cluster._id },
-        [
-          {
-            $set: {
-              networkTrusts: {
-                $let: {
-                  vars: {
-                    current: { $ifNull: ["$networkTrusts", []] },
-                    has: { $in: [input.ipHashValue, { $ifNull: ["$networkTrusts.ipHash", []] }] },
-                  },
-                  in: {
-                    $cond: [
-                      "$$has",
-                      {
-                        $let: {
-                          vars: {
-                            bumped: {
-                              $map: {
-                                input: "$$current",
-                                as: "entry",
-                                in: {
-                                  $cond: [
-                                    { $eq: ["$$entry.ipHash", input.ipHashValue] },
-                                    {
-                                      $mergeObjects: [
-                                        "$$entry",
-                                        {
-                                          admissions: { $add: ["$$entry.admissions", admissionsInc] },
-                                          proofs: { $add: ["$$entry.proofs", proofsInc] },
-                                          lastAt: now,
-                                        },
-                                      ],
-                                    },
-                                    "$$entry",
-                                  ],
-                                },
-                              },
-                            },
-                          },
-                          in: {
-                            $slice: [
-                              {
-                                $concatArrays: [
-                                  { $filter: { input: "$$bumped", as: "entry", cond: { $eq: ["$$entry.ipHash", input.ipHashValue] } } },
-                                  { $filter: { input: "$$bumped", as: "entry", cond: { $ne: ["$$entry.ipHash", input.ipHashValue] } } },
-                                ],
-                              },
-                              MAX_NETWORK_TRUSTS,
-                            ],
-                          },
-                        },
-                      },
-                      {
-                        $slice: [{ $concatArrays: [[freshEntry], "$$current"] }, MAX_NETWORK_TRUSTS],
-                      },
-                    ],
-                  },
+        { _id: input.cluster._id, networkTrusts: { $elemMatch: { ipHash: input.ipHashValue } } },
+        {
+          $inc: { [`networkTrusts.$.${input.credit === "admission" ? "admissions" : "proofs"}`]: 1 },
+          $set: { "networkTrusts.$.lastAt": now },
+        },
+      )
+      .catch((error) => {
+        reportCreditFailure("network trust increment", input.cluster.publicId, error);
+        return null;
+      });
+    if ((existing?.matchedCount ?? 0) === 0) {
+      // First credit on this network: prepend it and keep the array bounded in one atomic pipeline
+      // update, so a concurrent credit on another network cannot be sliced away by this write.
+      await input.collections.miningDevices
+        .updateOne(
+          { _id: input.cluster._id },
+          [
+            {
+              $set: {
+                networkTrusts: {
+                  $slice: [{ $concatArrays: [[networkTrustEntry(input.ipHashValue, input.credit, input.nowMs)], { $ifNull: ["$networkTrusts", []] }] }, MAX_NETWORK_TRUSTS],
                 },
               },
             },
-          },
-        ],
-      )
-      .catch((error) => {
-        reportCreditFailure("network trust credit", input.cluster.publicId, error);
-      });
+          ],
+        )
+        .catch((error) => {
+          reportCreditFailure("network trust entry", input.cluster.publicId, error);
+        });
+    }
   }
   const transition = nextTrustState({
     device: input.cluster,

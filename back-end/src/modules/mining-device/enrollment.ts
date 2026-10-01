@@ -67,31 +67,17 @@ async function consumeEnrollmentQuota(input: {
     if (!isDuplicateKeyError(error)) throw error;
     // Another request already spent this slot — a retry, or a concurrent attempt for the same
     // machine. Join it and add a reference, so a later release by either request still leaves the
-    // slot counted for the enrollment the other one performed. When the slot is idle (`refs: 0`,
-    // left behind by a refused attempt) the enrollment that counts is this one, so its timestamp
-    // and expiry move to now rather than staying anchored to the refused attempt.
-    const at = new Date(input.nowMs);
-    const expiresAt = new Date(input.nowMs + input.windowMs);
-    const refreshed = await input.collections.miningDeviceQuotas.updateOne(
-      { _id: id, refs: 0 } as never,
-      { $inc: { refs: 1 }, $set: { at, expiresAt } } as never,
-    );
-    if ((refreshed.matchedCount ?? 0) > 0) {
-      slotId = id;
-    } else {
-      const joined = await input.collections.miningDeviceQuotas.updateOne({ _id: id } as never, { $inc: { refs: 1 } } as never);
-      slotId = (joined.matchedCount ?? 0) > 0 ? id : null;
-    }
+    // slot counted for the enrollment the other one performed.
+    const joined = await input.collections.miningDeviceQuotas.updateOne({ _id: id }, { $inc: { refs: 1 } });
+    slotId = (joined.matchedCount ?? 0) > 0 ? id : null;
   }
   const count = await input.collections.miningDeviceQuotas.countDocuments({
     scope: input.scope,
     subject: input.subject,
     windowMs: input.windowMs,
-    // Rows written before reference tracking carry `at` but no `refs`; they still spent the
-    // budget until they age out, so a missing `refs` counts like a live reference.
-    $or: [{ refs: { $gt: 0 } }, { refs: { $exists: false } }],
+    refs: { $gt: 0 },
     at: { $gt: new Date(input.nowMs - input.windowMs) },
-  } as never);
+  });
   return { allowed: count <= input.limit, count, slotId };
 }
 
@@ -173,15 +159,14 @@ export async function recentClusterChurn(input: {
 }): Promise<number> {
   // The budget rows are the record the gate already keeps; counting the day window is one indexed
   // count rather than a scan of the device population. A row whose references all released (a
-  // refused attempt) is not churn: nothing was enrolled on it. Rows written before reference
-  // tracking carry `at` but no `refs`; they still spent the budget until they age out.
+  // refused attempt) is not churn: nothing was enrolled on it.
   return input.collections.miningDeviceQuotas.countDocuments({
     scope: "network",
     subject: input.ipHash,
     windowMs: ENROLLMENT_DAY_MS,
-    $or: [{ refs: { $gt: 0 } }, { refs: { $exists: false } }],
+    refs: { $gt: 0 },
     at: { $gt: new Date(input.nowMs - ENROLLMENT_DAY_MS) },
-  } as never).catch(() => 0);
+  }).catch(() => 0);
 }
 
 /**

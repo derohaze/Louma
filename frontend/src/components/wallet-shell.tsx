@@ -190,7 +190,7 @@ const searchPageRank: NavHref[] = [
   "/transfer",
   "/mining",
   "/wallet",
-  "/transactions",
+  "/history",
   "/security",
   "/custom-address",
   "/profile",
@@ -310,7 +310,7 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
           title: tx.counterpartyAddress,
           subtitle: `${tx.direction === "sent" ? "Sent" : "Received"} · ${currency(tx.amount)} · ${dateText(tx.createdAt)}`,
           icon: tx.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon,
-          href: "/transactions" as const,
+          href: "/history" as const,
         }));
   const results: SearchEntry[] = [...pageResults, ...transactionResults];
   const resultsHeading = browsing ? "Most used" : "Results";

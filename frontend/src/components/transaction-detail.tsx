@@ -1,13 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { NoteEditIcon, PrinterIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useWallet, type Transaction } from "@/hooks/wallet-context";
 import { api, messageForError } from "@/lib/api";
-import { displayNote, loadLocalNote, saveLocalNote } from "@/lib/address-book";
 import { currency, dateText, transferNet, transferTax } from "@/lib/wallet-format";
-import { CopyButton, EmptyState, Icon, PageHeader } from "./wallet-shell";
+import { CopyButton, EmptyState, PageHeader } from "./wallet-shell";
 import { TransactionDetailSkeleton } from "./page-skeletons";
 import { FactList, FormMessage, Panel } from "./security-ui";
 
@@ -17,14 +14,11 @@ import { FactList, FormMessage, Panel } from "./security-ui";
  * link, or a transfer older than the loaded page).
  */
 export function TransactionDetailContent({ transferId }: { transferId: string }) {
-  const { transactions, userId } = useWallet();
+  const { transactions } = useWallet();
   const known = transactions.find((item) => item.transferId === transferId);
   const [fetched, setFetched] = useState<Transaction | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(!known);
-  const [personalNote, setPersonalNote] = useState("");
-  const [noteDraft, setNoteDraft] = useState("");
-  const [editingNote, setEditingNote] = useState(false);
 
   useEffect(() => {
     if (known) {
@@ -48,13 +42,6 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
     };
   }, [known, transferId]);
 
-  useEffect(() => {
-    const saved = loadLocalNote(userId, transferId);
-    setPersonalNote(saved);
-    setNoteDraft(saved);
-    setEditingNote(false);
-  }, [userId, transferId]);
-
   const transaction = known ?? fetched;
   if (loading) {
     return <TransactionDetailSkeleton title="Transaction" />;
@@ -67,7 +54,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
           error || "This transfer is not part of this wallet's history, or the link is out of date."
         }
         action={
-          <Link to="/transactions">
+          <Link to="/history">
             <Button variant="outline">All transactions</Button>
           </Link>
         }
@@ -146,79 +133,16 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
               </div>
             )}
           </Panel>
-          <Panel
-            title="Notes"
-            description="The record's note was written at send time; yours lives on this device."
-          >
-            <FactList
-              items={[
-                ["On record", transaction.note || "—"],
-                ["Personal · this device", displayNote("", personalNote) || "—"],
-              ]}
-            />
-            {editingNote ? (
-              <form
-                className="mt-4 flex flex-col gap-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  saveLocalNote(userId, transferId, noteDraft);
-                  setPersonalNote(noteDraft.trim().slice(0, 240));
-                  setEditingNote(false);
-                }}
-              >
-                <Input
-                  autoFocus
-                  aria-label="Personal note"
-                  placeholder="e.g. March rent"
-                  autoComplete="off"
-                  maxLength={240}
-                  value={noteDraft}
-                  onChange={(event) => setNoteDraft(event.target.value)}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button type="submit" size="sm" className="rounded-full">
-                    Save note
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-full"
-                    onClick={() => {
-                      setNoteDraft(personalNote);
-                      setEditingNote(false);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-4 rounded-full"
-                onClick={() => setEditingNote(true)}
-              >
-                <Icon icon={NoteEditIcon} size={16} />
-                {personalNote ? "Edit personal note" : "Add personal note"}
-              </Button>
-            )}
-          </Panel>
         </div>
-        <div className="space-y-4 no-print">
+        <div className="space-y-4">
           <Panel title="What next" description="Where this transfer leads.">
             <div className="flex flex-wrap gap-2">
-              <Link to="/transactions">
+              <Link to="/history">
                 <Button variant="outline">All transactions</Button>
               </Link>
               <Link to="/transfer">
                 <Button variant="outline">New transfer</Button>
               </Link>
-              <Button variant="outline" onClick={() => window.print()}>
-                <Icon icon={PrinterIcon} size={17} />
-                Print receipt
-              </Button>
             </div>
           </Panel>
         </div>

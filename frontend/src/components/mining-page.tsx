@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import NumberFlow from "@number-flow/react";
 import {
@@ -139,7 +138,7 @@ function BusyButton({
 }
 
 export function MiningContent() {
-  const { refresh, refreshNotifications } = useWallet();
+  const { refresh } = useWallet();
   const queryClient = useQueryClient();
 
   /**
@@ -212,21 +211,6 @@ export function MiningContent() {
     () => (session ? liveSnapshot(session, serverNowMs) : null),
     [session, serverNowMs],
   );
-
-  // The counter reaching zero is announced once per cycle: the bell is told
-  // so the notice survives navigation, and the toast is the immediate hint.
-  // No polling involved — this fires off the countdown the page already runs.
-  // Placed before the early returns below: hooks must run on every render.
-  const completionAnnounced = useRef<string | null>(null);
-  useEffect(() => {
-    if (!session || !live?.completed) return;
-    const accrued = live.accruedMinor ?? session.accruedMinor;
-    if (session.settledMinor >= accrued) return;
-    if (completionAnnounced.current === session.id) return;
-    completionAnnounced.current = session.id;
-    toast.success("Mining cycle complete — collect your reward.", { position: "top-center" });
-    refreshNotifications();
-  }, [session, live, refreshNotifications]);
 
   /**
    * Settles the running cycle. Returns true only when the server confirmed the write — a refused
@@ -321,10 +305,9 @@ export function MiningContent() {
     // it was paused must not pin `canSettle` false forever — that would leave Collect disabled and
     // the reward uncollected until some unrelated event refreshed the page.
     if (!session.canSettle) {
-      // `canSettle` is gated on mining being enabled server-side, but the flag can flip back on
-      // while this page stays open: keep re-reading on the cooldown below so an open page observes
-      // the flip instead of pinning `enabled: false` (and an uncollectable reward) indefinitely.
-      // The cooldown keeps an open page to a handful of requests per hour.
+      // Mining switched off cannot settle: `canSettle` is gated on it server-side, so a re-read here
+      // is a request that can never change the answer.
+      if (mining.data?.enabled === false) return;
       const attempts = canSettleRefetchCount.current.get(session.id) ?? 0;
       // A server-side settlement pause can last arbitrarily long, so keep checking — but back off, so
       // an open page costs a handful of requests per hour instead of one every 30 seconds.
@@ -435,11 +418,6 @@ export function MiningContent() {
         <EmptyState
           title="Mining is unavailable"
           detail="Mining is temporarily switched off on this network. Your wallet is unaffected."
-          action={
-            <Link to="/mining/history">
-              <Button variant="outline">View cycle history</Button>
-            </Link>
-          }
         />
       </>
     );
@@ -726,147 +704,7 @@ export function MiningContent() {
           </div>
         </div>
       )}
-      <p className="mt-4 text-sm">
-        <Link to="/mining/history" className="font-semibold text-primary-soft">
-          View cycle history
-        </Link>{" "}
-        <span className="text-muted-foreground">— every past cycle with its earnings.</span>
-      </p>
     </>
-  );
-}
-
-/**
- * Past cycles plus the totals that make mining feel worth it: what was
- * collected, how many cycles ran, and the average rate. Reads the existing
- * cursor-paged history endpoint directly — the wallet cache has no reason to
- * hold a list only this section renders.
- */
-export function MiningHistory() {
-  const [sessions, setSessions] = useState<ApiMiningSession[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let active = true;
-    accountFetchers
-      .miningHistory(null)
-      .then((page) => {
-        if (!active) return;
-        setSessions(page.sessions);
-        setCursor(page.nextCursor);
-      })
-      .catch((cause: unknown) => {
-        if (active) setError(messageForError(cause));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const loadOlder = () => {
-    if (!cursor) return;
-    setLoadingMore(true);
-    setError("");
-    accountFetchers
-      .miningHistory(cursor)
-      .then((page) => {
-        setSessions((current) => [...current, ...page.sessions]);
-        setCursor(page.nextCursor);
-      })
-      .catch((cause: unknown) => setError(messageForError(cause)))
-      .finally(() => setLoadingMore(false));
-  };
-
-  const collectedMinor = sessions.reduce((sum, item) => sum + item.settledMinor, 0);
-  let collected = "0.0000 LMA";
-  try {
-    collected = currency(moneyFromMinorUnits(collectedMinor));
-  } catch {
-    // A total past the safe-integer range still renders as zero rather than blanking the section.
-  }
-  const avgRate = sessions.length
-    ? sessions.reduce((sum, item) => sum + (Number(item.rate) || 0), 0) / sessions.length
-    : 0;
-
-  return (
-    <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
-      <div className="border-b px-5 py-4">
-        <h2 className="font-display text-base font-semibold">Cycle history</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Every 24-hour cycle this account ran, newest first
-        </p>
-      </div>
-      {loading ? (
-        <p className="px-5 py-8 text-center text-sm text-muted-foreground">Loading cycles…</p>
-      ) : sessions.length === 0 ? (
-        <EmptyState
-          title="No cycles yet"
-          detail="Start your first 24-hour cycle above — it will be remembered here once it ends."
-        />
-      ) : (
-        <>
-          <div className="grid gap-px border-b bg-border sm:grid-cols-3">
-            {[
-              ["Collected", collected],
-              ["Cycles", cursor ? `${sessions.length}+` : String(sessions.length)],
-              ["Average rate", `${avgRate.toFixed(4)} LMA / hour`],
-            ].map(([label, value]) => (
-              <div key={label} className="bg-card px-5 py-4">
-                <p className="text-xs text-muted-foreground">{label}</p>
-                <strong className="mt-1 block font-display text-lg tabular-nums">{value}</strong>
-              </div>
-            ))}
-          </div>
-          {sessions.map((item) => (
-            <div
-              key={item.id}
-              className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
-            >
-              <span
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
-                  item.status === "settled" && "bg-success/10 text-success",
-                  item.status === "completed" && "bg-warning/15 text-amber-600 dark:text-amber-400",
-                  item.status === "active" && "bg-primary/10 text-primary-soft",
-                )}
-              >
-                {item.status === "active"
-                  ? "Running"
-                  : item.status === "completed"
-                    ? "Ready to collect"
-                    : "Collected"}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">Cycle #{item.cycleNumber}</p>
-                <p className="text-xs text-muted-foreground">
-                  {item.rate} LMA/h · ended {dateText(item.endsAt)}
-                </p>
-              </div>
-              <div className="text-end">
-                <strong className="block text-sm tabular-nums">+{currency(item.settled)}</strong>
-                <span className="text-xs text-muted-foreground">
-                  earned {currency(item.accrued)}
-                </span>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-      {error && <p className="px-5 py-3 text-xs text-destructive">{error}</p>}
-      {cursor && (
-        <div className="px-5 py-4">
-          <Button variant="outline" disabled={loadingMore} onClick={loadOlder}>
-            {loadingMore ? "Loading…" : "Load older cycles"}
-          </Button>
-        </div>
-      )}
-    </section>
   );
 }
 

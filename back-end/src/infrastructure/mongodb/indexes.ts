@@ -125,76 +125,6 @@ const schemas: Record<string, Document> = {
   transfer_password_credentials: {
     $jsonSchema: { bsonType: "object", required: ["ownerUserId", "passwordHash", "changedAt"], properties: { ownerUserId: { bsonType: "string" }, passwordHash: { bsonType: "string" }, changedAt: { bsonType: "date" } } },
   },
-  transfer_authorizations: {
-    // The challenge half of a transfer: the intent the server computed, the credential snapshot the
-    // proof was taken under, and whether it was spent. The money fields are bounded exactly like a
-    // ledger line, so an approval can never name an amount the ledger could not carry.
-    $jsonSchema: {
-      bsonType: "object",
-      required: ["publicId", "ownerUserId", "senderWalletId", "intent", "intentHash", "passwordChangedAt", "twoFactorEnabledAt", "consumedAt", "consumedByTransactionPublicId", "correlationId", "createdAt", "expiresAt", "retainUntil"],
-      properties: {
-        publicId: { bsonType: "string" },
-        ownerUserId: { bsonType: "string" },
-        senderWalletId: { bsonType: "string" },
-        intent: {
-          bsonType: "object",
-          required: ["recipientWalletId", "recipientUserId", "recipientAddress", "amountMinor", "feeMinor", "netAmountMinor", "currency", "note"],
-          properties: {
-            recipientWalletId: { bsonType: "string" },
-            recipientUserId: { bsonType: "string" },
-            recipientAddress: { bsonType: "string" },
-            amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR },
-            feeMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR },
-            netAmountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR },
-            currency: { enum: ["LMA"] },
-            note: { bsonType: "string" },
-          },
-        },
-        intentHash: { bsonType: "string" },
-        passwordChangedAt: { bsonType: ["date", "null"] },
-        twoFactorEnabledAt: { bsonType: ["date", "null"] },
-        consumedAt: { bsonType: ["date", "null"] },
-        consumedByTransactionPublicId: { bsonType: ["string", "null"] },
-        correlationId: { bsonType: "string" },
-        createdAt: { bsonType: "date" },
-        expiresAt: { bsonType: "date" },
-        retainUntil: { bsonType: "date" },
-      },
-    },
-  },
-  two_factor_uses: {
-    // One row per accepted authenticator step. The row is inserted inside the financial transaction
-    // it authorises, so it exists exactly when the money it approved exists.
-    $jsonSchema: {
-      bsonType: "object",
-      required: ["ownerUserId", "purpose", "timeStep", "intentHash", "correlationId", "createdAt", "retainUntil"],
-      properties: {
-        ownerUserId: { bsonType: "string" },
-        purpose: { enum: ["transfer"] },
-        timeStep: { bsonType: "int", minimum: 0 },
-        intentHash: { bsonType: "string" },
-        correlationId: { bsonType: "string" },
-        createdAt: { bsonType: "date" },
-        retainUntil: { bsonType: "date" },
-      },
-    },
-  },
-  financial_controls: {
-    // One operator-controlled row. It carries policy, never money: balances are explained by the
-    // ledger alone, so pausing writes cannot itself move a balance.
-    $jsonSchema: {
-      bsonType: "object",
-      required: ["transfersPaused", "payoutsPaused", "reason", "updatedAt", "updatedBy"],
-      properties: {
-        _id: { bsonType: "string" },
-        transfersPaused: { bsonType: "bool" },
-        payoutsPaused: { bsonType: "bool" },
-        reason: { bsonType: "string" },
-        updatedAt: { bsonType: "date" },
-        updatedBy: { bsonType: "string" },
-      },
-    },
-  },
   notifications: {
     $jsonSchema: { bsonType: "object", required: ["ownerUserId", "kind", "title", "body", "readAt", "createdAt"], properties: { ownerUserId: { bsonType: "string" }, kind: { bsonType: "string" }, title: { bsonType: "string" }, body: { bsonType: "string" }, readAt: { bsonType: ["date", "null"] }, createdAt: { bsonType: "date" } } },
   },
@@ -446,76 +376,47 @@ const LMDG_BACKFILL_BATCH_SIZE = 200;
  * Leases taken by the previous release carry no network, and the network lock reads live leases by
  * `ipHash` alone — so an un-backfilled lease stays invisible to it for the rest of its 24-hour
  * cycle, and a new identity could start on a network where another account is already mining. The
- * attribution comes from the device observation recorded for the start that took the lease (the
- * network observed at `leasedAt`), never from the device record's `lastIpHash`: that field is the
- * latest observation, and when two starts race it can already hold the loser's network while the
- * winner's lease commits — copying it would protect the wrong network and leave the real one open.
- * Bounded and idempotent: a lease with no attributable observation is marked `ipHash: null` so the
- * scan advances past it (it stays invisible to the lock and expires with its cycle), and every
- * other lease is written once.
+ * owning device's `lastIpHash` is the best available attribution for a cycle taken before the field
+ * existed, and it can only ever *widen* the lock (a lease attributed to a network denies a start the
+ * lock would have allowed), never punch a hole in it. Bounded and idempotent: a lease with no
+ * attributable network is left alone — it expires with its cycle — and every other is written once.
  */
 async function backfillLeaseNetworks(db: Db): Promise<void> {
   const leases = db.collection("mining_device_leases");
   for (;;) {
     const batch = await leases
-      .find({ status: "active", ipHash: { $exists: false } }, { projection: { _id: 1, deviceId: 1, leasedAt: 1 } })
+      .find({ status: "active", ipHash: { $exists: false } }, { projection: { _id: 1, deviceId: 1, deviceClusterId: 1 } })
       .limit(LMDG_BACKFILL_BATCH_SIZE)
       .toArray();
     if (batch.length === 0) return;
     const deviceIds = [...new Set(batch.map((lease) => lease["deviceId"]).filter((value): value is string => typeof value === "string" && value.length > 0))];
-    const leasedTimes = batch
-      .map((lease) => lease["leasedAt"])
-      .filter((value): value is Date => value instanceof Date)
-      .map((date) => date.getTime());
-    const maxLeasedAt = leasedTimes.length > 0 ? Math.max(...leasedTimes) : Date.now();
-    const minLeasedAt = leasedTimes.length > 0 ? Math.min(...leasedTimes) : Date.now();
-    // Observations sampled around each start; the one recorded for the winning start is the
-    // network its cycle was actually taken from.
-    const observations = deviceIds.length > 0
-      ? await db
-        .collection("mining_device_observations")
-        .find(
-          {
-            deviceId: { $in: deviceIds },
-            observedAt: { $gte: new Date(minLeasedAt - 60 * 60 * 1000), $lte: new Date(maxLeasedAt + 60 * 1000) },
-          },
-          { projection: { deviceId: 1, observedAt: 1, ipHash: 1 } },
-        )
-        .toArray()
-        .catch(() => [])
-      : [];
-    const observationsByDevice = new Map<string, { observedAt: number; ipHash: string }[]>();
-    for (const observation of observations) {
-      const deviceId = observation["deviceId"];
-      const observedAt = observation["observedAt"];
-      const ipHashValue = observation["ipHash"];
-      if (typeof deviceId !== "string" || !(observedAt instanceof Date)) continue;
-      if (typeof ipHashValue !== "string" || ipHashValue.length === 0) continue;
-      const list = observationsByDevice.get(deviceId) ?? [];
-      list.push({ observedAt: observedAt.getTime(), ipHash: ipHashValue });
-      observationsByDevice.set(deviceId, list);
+    const clusterIds = [...new Set(batch.map((lease) => lease["deviceClusterId"]).filter((value): value is string => typeof value === "string" && value.length > 0))];
+    const devices = await db
+      .collection("mining_devices")
+      .find(
+        { $or: [{ publicId: { $in: deviceIds } }, { machineKeyHash: { $in: clusterIds } }, { deviceKeyHash: { $in: clusterIds } }] },
+        { projection: { publicId: 1, machineKeyHash: 1, deviceKeyHash: 1, lastIpHash: 1 } },
+      )
+      .toArray();
+    // Both the lease's record id and the identity keys it was taken on can name the owner, because a
+    // device whose key changed after the lease was written still owns the cycle it started.
+    const networkByKey = new Map<string, string>();
+    for (const device of devices) {
+      const network = device["lastIpHash"];
+      if (typeof network !== "string" || network.length === 0) continue;
+      for (const key of [device["publicId"], device["machineKeyHash"], device["deviceKeyHash"]]) {
+        if (typeof key === "string" && key.length > 0 && !networkByKey.has(key)) networkByKey.set(key, network);
+      }
     }
-    for (const list of observationsByDevice.values()) list.sort((left, right) => left.observedAt - right.observedAt);
+    let updated = 0;
     for (const lease of batch) {
-      const deviceId = typeof lease["deviceId"] === "string" ? (lease["deviceId"] as string) : null;
-      const leasedAt = lease["leasedAt"] instanceof Date ? (lease["leasedAt"] as Date).getTime() : null;
-      let network: string | null = null;
-      if (deviceId && leasedAt !== null) {
-        const candidates = observationsByDevice.get(deviceId) ?? [];
-        for (const candidate of candidates) {
-          if (candidate.observedAt <= leasedAt + 60 * 1000) network = candidate.ipHash;
-          else break;
-        }
-      }
-      if (network) {
-        await leases.updateOne({ _id: lease["_id"], ipHash: { $exists: false } }, { $set: { ipHash: network } });
-      } else {
-        // No attributable observation (records rotated out, or the start predates them): mark the
-        // lease so this scan advances past it instead of stopping. `null` never matches the lock's
-        // per-network query, so the lease stays invisible exactly as an un-backfilled one would.
-        await leases.updateOne({ _id: lease["_id"], ipHash: { $exists: false } }, { $set: { ipHash: null } });
-      }
+      const network = networkByKey.get(String(lease["deviceId"] ?? "")) ?? networkByKey.get(String(lease["deviceClusterId"] ?? ""));
+      if (!network) continue;
+      await leases.updateOne({ _id: lease["_id"], ipHash: { $exists: false } }, { $set: { ipHash: network } });
+      updated += 1;
     }
+    // No lease in this batch could be attributed: nothing further can be done for them.
+    if (updated === 0) return;
     if (batch.length < LMDG_BACKFILL_BATCH_SIZE) return;
   }
 }
@@ -540,32 +441,6 @@ async function migrateLegacyEnrollmentSlots(db: Db): Promise<void> {
     count?: unknown;
     expiresAt?: unknown;
   }>("mining_device_quotas");
-  // Per-machine rows written before reference tracking carry `at` but no `refs`. The live count
-  // now treats a missing `refs` as counted, so they keep enforcing their window without a rewrite —
-  // but backfilling `refs: 1` (and `expiresAt` when absent) brings them under the current schema
-  // and TTL, so they age out on the same schedule as new slots instead of lingering.
-  for (;;) {
-    const batch = await quotas
-      .find(
-        { at: { $exists: true }, refs: { $exists: false } },
-        { projection: { _id: 1, at: 1, windowMs: 1, expiresAt: 1 } },
-      )
-      .limit(LMDG_BACKFILL_BATCH_SIZE)
-      .toArray();
-    if (batch.length === 0) break;
-    for (const row of batch) {
-      const atValue = (row as { at?: unknown })["at"];
-      const at = atValue instanceof Date ? atValue : null;
-      const windowValue = (row as { windowMs?: unknown })["windowMs"];
-      const windowMs = typeof windowValue === "number" && windowValue > 0 ? windowValue : null;
-      const set: Record<string, unknown> = { refs: 1 };
-      if (!((row as { expiresAt?: unknown })["expiresAt"] instanceof Date) && at && windowMs) {
-        set["expiresAt"] = new Date(at.getTime() + windowMs);
-      }
-      await quotas.updateOne({ _id: row["_id"], refs: { $exists: false } }, { $set: set });
-    }
-    if (batch.length < LMDG_BACKFILL_BATCH_SIZE) break;
-  }
   for (;;) {
     const batch = await quotas
       .find(
@@ -701,22 +576,6 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("security_events").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "security_events_owner_history" }),
     db.collection("two_factor_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "two_factor_owner_unique" }),
     db.collection("transfer_password_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "transfer_password_owner_unique" }),
-    db.collection("transfer_authorizations").createIndex({ publicId: 1 }, { unique: true, name: "transfer_authorizations_public_id_unique" }),
-    // One approval can be consumed by one transaction. Consumption already happens by a conditional
-    // update inside the transfer's transaction; this index is the database-level statement of the
-    // same rule, so even a future code path that forgot the condition cannot spend an approval twice.
-    db.collection("transfer_authorizations").createIndex(
-      { consumedByTransactionPublicId: 1 },
-      { unique: true, partialFilterExpression: { consumedByTransactionPublicId: { $type: "string" } }, name: "transfer_authorizations_consumed_by_unique" },
-    ),
-    db.collection("transfer_authorizations").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "transfer_authorizations_owner_history" }),
-    // Retention, not validity: an approval stops working when its `expiresAt` passes (the consume is
-    // conditional on it), and the row is deleted a month later so the audit trail survives it.
-    db.collection("transfer_authorizations").createIndex({ retainUntil: 1 }, { expireAfterSeconds: 0, name: "transfer_authorizations_retain" }),
-    // The concurrency guarantee behind "one accepted code, one financial operation": an insert is
-    // the only way to spend a step, and this index refuses a second one.
-    db.collection("two_factor_uses").createIndex({ ownerUserId: 1, purpose: 1, timeStep: 1 }, { unique: true, name: "two_factor_uses_step_unique" }),
-    db.collection("two_factor_uses").createIndex({ retainUntil: 1 }, { expireAfterSeconds: 0, name: "two_factor_uses_retain" }),
     db.collection("notifications").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "notifications_owner_history" }),
     db.collection("mining_sessions").createIndex({ publicId: 1 }, { unique: true, name: "mining_sessions_public_id_unique" }),
     // The product rule (one live cycle per account) enforced by the database, not by a check-then-

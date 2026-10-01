@@ -34,8 +34,7 @@ const passwordSchema = z.string().min(8).max(128).regex(/[A-Za-z]/).regex(/\d/);
 const loginPasswordSchema = z.string().min(1).max(128);
 const publicIdSchema = z.string().uuid();
 const pageLimitSchema = z.coerce.number().int().min(1).max(50).optional();
-const transferSchema = z.object({ authorizationId: z.string().trim().uuid(), recipientAddress: z.string().trim().min(1).max(128), amount: z.string().min(1).max(32), note: z.string().max(MAX_NOTE_LENGTH).optional(), transferPassword: z.string().min(1).max(128).optional(), twoFactorCode: z.string().min(6).max(64).optional() }).strict();
-const transferPreviewSchema = z.object({ recipientAddress: z.string().trim().min(1).max(128), amount: z.string().min(1).max(32).optional(), note: z.string().max(MAX_NOTE_LENGTH).optional() }).strict();
+const transferSchema = z.object({ recipientAddress: z.string().trim().min(1).max(128), amount: z.string().min(1).max(32), note: z.string().max(MAX_NOTE_LENGTH).optional() }).strict();
 const registerSchema = z.object({ email: emailSchema, password: passwordSchema, displayName: z.string().trim().min(1).max(32) }).strict();
 const loginSchema = z.object({ email: emailSchema, password: loginPasswordSchema }).strict();
 const totpCodeSchema = z.string().trim().regex(/^\d{6}$/);
@@ -244,24 +243,10 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
 
   app.get("/api/v1/wallet", authenticated, async (request) => ({ wallet: await wallets.getWallet({ collections: app.collections, ownerUserId: getAuth(request).userId }) }));
 
-  /**
-   * The staged transfer form's own read: resolving the recipient address, and quoting the tax and the
-   * balance for an amount.
-   *
-   * It is a POST even though it writes nothing, for two reasons: the address a sender is about to pay
-   * is not something this API puts in a URL (access logs, `Referer`, browser history), and a session
-   * that is merely present in the browser must not be usable to probe which addresses exist from
-   * another origin — a state-changing method is the one the CSRF guard covers.
-   */
-  app.post("/api/v1/transfers/preview", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } }, schema: { body: { type: "object", required: ["recipientAddress"], additionalProperties: false, properties: { recipientAddress: { type: "string", minLength: 1, maxLength: 128 }, amount: { type: "string", minLength: 1, maxLength: 32 }, note: { type: "string", maxLength: MAX_NOTE_LENGTH } } } } }, async (request) => {
-    const body = parseBody(transferPreviewSchema, request.body);
-    return { preview: await transfers.previewTransfer({ collections: app.collections, ownerUserId: getAuth(request).userId, recipientAddress: body.recipientAddress, amount: body.amount, note: body.note, requestId: request.id }) };
-  });
-
-  app.post("/api/v1/transfers", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } }, schema: { headers: { type: "object", properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 128 } } }, body: { type: "object", required: ["authorizationId", "recipientAddress", "amount"], additionalProperties: false, properties: { authorizationId: { type: "string", format: "uuid" }, recipientAddress: { type: "string", minLength: 1, maxLength: 128 }, amount: { type: "string", minLength: 1, maxLength: 32 }, note: { type: "string", maxLength: MAX_NOTE_LENGTH }, transferPassword: { type: "string", minLength: 1, maxLength: 128 }, twoFactorCode: { type: "string", minLength: 6, maxLength: 64 } } } } }, async (request, reply) => {
+  app.post("/api/v1/transfers", { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } }, schema: { headers: { type: "object", properties: { "idempotency-key": { type: "string", minLength: 8, maxLength: 128 } } }, body: { type: "object", required: ["recipientAddress", "amount"], additionalProperties: false, properties: { recipientAddress: { type: "string", minLength: 1, maxLength: 128 }, amount: { type: "string", minLength: 1, maxLength: 32 }, note: { type: "string", maxLength: MAX_NOTE_LENGTH }, transferPassword: { type: "string", minLength: 1, maxLength: 128 } } } } }, async (request, reply) => {
     const current = getAuth(request);
-    const body = parseBody(transferSchema, request.body);
-    const result = await transfers.createTransfer({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ownerUserId: current.userId, ...body, idempotencyKey: Array.isArray(request.headers["idempotency-key"]) ? request.headers["idempotency-key"][0] : request.headers["idempotency-key"], requestId: request.id });
+    const body = parseBody(transferSchema.extend({ transferPassword: z.string().max(128).optional() }).strict(), request.body);
+    const result = await transfers.createTransfer({ collections: app.collections, mongoClient: app.mongoClient, config: app.config, ownerUserId: current.userId, ...body, idempotencyKey: Array.isArray(request.headers["idempotency-key"]) ? request.headers["idempotency-key"][0] : request.headers["idempotency-key"], transferPassword: body.transferPassword, requestId: request.id });
     return reply.code(result.replayed ? 200 : 201).send({ transaction: result, transfer: result });
   });
 
