@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/components/wallet-shell";
 import { MiningContent } from "@/components/mining-page";
-export const Route = createFileRoute("/mining")({
+export const Route = createFileRoute("/mining/")({
   head: () => ({
     meta: [
       { title: "Mining" },

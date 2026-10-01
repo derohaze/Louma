@@ -3,7 +3,7 @@ import { WalletPage } from "@/components/wallet-shell";
 import { TransactionDetailContent } from "@/components/transaction-detail";
 import { pageHead } from "@/lib/page-head";
 
-export const Route = createFileRoute("/history/$transferId")({
+export const Route = createFileRoute("/transactions/$transferId")({
   head: () => pageHead("Transaction", "One transfer with its amount, tax, status, and receipt."),
   component: TransactionRoute,
 });
