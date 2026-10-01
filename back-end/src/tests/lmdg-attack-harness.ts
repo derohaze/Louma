@@ -13,7 +13,7 @@
  *      node --import tsx src/tests/lmdg-attack-harness.ts --out results.json
  */
 
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import * as childProcess from "node:child_process";
 
@@ -30,6 +30,16 @@ const EDGE = process.env["HARNESS_EDGE"] ?? "C:/Program Files (x86)/Microsoft/Ed
 // simulation below measures server logic, not real-world observability.
 const FIREFOX = process.env["HARNESS_FIREFOX"] ?? null;
 const RUN = process.env["HARNESS_RUN"] ?? `h${Date.now().toString(36)}`;
+/** Wall-clock start of this run: every destructive isolation write is scoped to rows from it on. */
+const RUN_STARTED_MS = Date.now();
+/**
+ * The isolation helpers below rewrite rows the harness did not create (identity budgets, live
+ * leases). Against a populated database that is data loss and protection removal, not test setup, so
+ * they are refused unless the operator states the database is throwaway. Everything the harness
+ * needs for its own accounts (releasing *its* leases, closing *its* sessions) stays scoped to those
+ * accounts and needs no flag.
+ */
+const DESTRUCTIVE_CLEANUP_ALLOWED = (process.env["HARNESS_ALLOW_DESTRUCTIVE_CLEANUP"] ?? "").trim() === "1";
 
 const args = process.argv.slice(2);
 const outPath = args.includes("--out") ? (args[args.indexOf("--out") + 1] ?? "lmdg-harness-results.json") : null;
@@ -253,6 +263,10 @@ interface ChildProcessLike {
 function launchBrowser(exe: string, label: string, profileDir: string, extraArgs: string[] = []): LaunchedBrowser {
   const { spawn } = childProcess as { spawn: (exe: string, args: string[], opts: Record<string, unknown>) => ChildProcessLike };
   const port = 9222 + Math.floor(Math.random() * 500);
+  // A reused RUN label must not inherit the previous run's browser state: a stale
+  // `louma:has-session` flag makes the app skip the signup form, so every browser scenario fails on a
+  // page it never actually reached (measured as a harness crash, not as a security result).
+  rmSync(profileDir, { recursive: true, force: true });
   const edgeFirstRun = label === "edge" ? ["--disable-features=msEdgeWelcomePage,msImplicitSignin,EdgeSyncIntro", "--disable-sync"] : ["--disable-features=DialMediaRouteProvider"];
   const proc: ChildProcessLike = spawn(
     exe,
@@ -590,7 +604,15 @@ async function dbProbe<T>(fn: (collections: Record<string, any>) => Promise<T>):
  * cannot reach the database — the harness must still run.
  */
 async function resetEnrollmentBudget(): Promise<number | null> {
+  if (!DESTRUCTIVE_CLEANUP_ALLOWED) {
+    console.log("[isolation] enrollment budget reset skipped: set HARNESS_ALLOW_DESTRUCTIVE_CLEANUP=1 on a throwaway database");
+    return null;
+  }
   return await dbProbe(async (c) => {
+    // The budget is global by design (it is per network), so "only the test's rows" cannot be
+    // expressed as a filter without knowing every network hash involved; the guard above is the
+    // isolation contract instead. The count is returned and logged, so the operator sees exactly how
+    // many spent slots the run gave back.
     const result = await c["quotas"].deleteMany({});
     return result.deletedCount ?? 0;
   });
@@ -605,10 +627,56 @@ async function resetEnrollmentBudget(): Promise<number | null> {
  * starting state, so "exactly one wins" is a statement about the race.
  */
 async function releaseAllLeases(): Promise<number | null> {
+  if (!DESTRUCTIVE_CLEANUP_ALLOWED) {
+    console.log("[isolation] lease release skipped: set HARNESS_ALLOW_DESTRUCTIVE_CLEANUP=1 on a throwaway database");
+    return null;
+  }
   return await dbProbe(async (c) => {
-    const result = await c["leases"].updateMany({ status: "active" }, { $set: { status: "released", updatedAt: new Date() } });
+    // Scoped to leases this run took: releasing someone else's live lease would remove their
+    // protection and let a second cycle open on a machine that is still mining.
+    const result = await c["leases"].updateMany(
+      { status: "active", leasedAt: { $gte: new Date(RUN_STARTED_MS) } },
+      { $set: { status: "released", updatedAt: new Date() } },
+    );
     return result.modifiedCount ?? 0;
   });
+}
+
+/**
+ * Releases only the leases one harness account holds. Always safe: the rows are the test's own, and
+ * the scenario needs the state an attacker claims to be in ("trust earned, nothing running").
+ */
+async function releaseOwnLeases(ownerUserId: string): Promise<number | null> {
+  return await dbProbe(async (c) => {
+    const result = await c["leases"].updateMany(
+      { ownerUserId, status: "active" },
+      { $set: { status: "released", updatedAt: new Date() } },
+    );
+    return result.modifiedCount ?? 0;
+  });
+}
+
+/**
+ * Closes one harness account's active cycles the way an expired window is closed, so the account can
+ * start again. Only ever called for accounts this run created: it posts no settlement, which would
+ * strand the rewards of a real customer.
+ */
+async function settleOwnSessions(ownerUserId: string): Promise<number | null> {
+  return await dbProbe(async (c) => {
+    const result = await c["sessions"].updateMany(
+      { ownerUserId, status: "active" },
+      { $set: { status: "settled", updatedAt: new Date() } },
+    );
+    return result.modifiedCount ?? 0;
+  });
+}
+
+/** One device cluster's server-owned state, read where it is written (null when the probe is down). */
+async function deviceState(webglFingerprintHash: string): Promise<Record<string, any> | null> {
+  return await dbProbe(async (c) => c["devices"].findOne(
+    { webglFingerprintHash },
+    { projection: { publicId: 1, admissionCount: 1, proofCount: 1, trustState: 1, networkTrusts: 1 } },
+  )) as Record<string, any> | null;
 }
 
 /** Live leases / active cycles in the database the API is configured against. */
@@ -717,11 +785,22 @@ async function computeMetrics(runStartedAt: number): Promise<Record<string, unkn
       "API-IDENTITY-ROTATION": verdict("API-IDENTITY-ROTATION"),
       "API-ACCOUNT-ROTATION": verdict("API-ACCOUNT-ROTATION"),
     },
+    // The "earn trust while no cycle runs, then run beside a victim" bypass, in its two shapes: an
+    // identity whose trust came from a burst of assessed requests, and one that is globally trusted
+    // but never mined on this network. ALLOWED in either of the first two means the bypass is open;
+    // the third is the honest second device and must stay ALLOWED (a refusal there is a false deny).
+    bootstrapThenParallel: {
+      "API-BOOTSTRAP-THEN-PARALLEL": verdict("API-BOOTSTRAP-THEN-PARALLEL"),
+      "API-GLOBAL-TRUST-PARALLEL": verdict("API-GLOBAL-TRUST-PARALLEL"),
+      "API-NETWORK-RESIDENT-PARALLEL": verdict("API-NETWORK-RESIDENT-PARALLEL"),
+    },
+    bootstrapBypassSuccessCount: ["API-BOOTSTRAP-THEN-PARALLEL", "API-GLOBAL-TRUST-PARALLEL"].filter((id) => verdict(id) === "ALLOWED").length,
+    networkResidentFalseDenialCount: verdict("API-NETWORK-RESIDENT-PARALLEL") === "BLOCKED" ? 1 : 0,
   };
 }
 
 async function main(): Promise<void> {
-  const runStartedAt = Date.now();
+  const runStartedAt = RUN_STARTED_MS;
   console.log(`== LMDG attack harness == run=${RUN}`);
   const chrome = launchBrowser(CHROME, "chrome", `${process.env["TEMP"] ?? "/tmp"}/lmdg-h-${RUN}-chrome`);
   const edge = launchBrowser(EDGE, "edge", `${process.env["TEMP"] ?? "/tmp"}/lmdg-h-${RUN}-edge`);
@@ -887,6 +966,11 @@ async function main(): Promise<void> {
     // DIRECT-API IDENTITY ATTACKS: forged machines, identity rotation, stockpiling, races
     // ------------------------------------------------------------------
     await directIdentityAttacks();
+
+    // ------------------------------------------------------------------
+    // BOOTSTRAP-THEN-PARALLEL: trust built while nothing is mining, then used next to a victim
+    // ------------------------------------------------------------------
+    await bootstrapThenParallelScenario();
 
     // ------------------------------------------------------------------
     // DRIFT + NETWORK + FINGERPRINT-RANDOMIZATION (SIMULATED at the HTTP boundary)
@@ -1261,8 +1345,10 @@ async function directIdentityAttacks(): Promise<void> {
   record({
     id: "API-CONCURRENT-10", name: "10 concurrent starts on one forged device, two accounts", browser: "direct-api", context: "concurrency",
     account: `${raceA.email} + ${raceB.email}`, identityOutcome: `recent-clusters=${raceClusters ?? "?"}`, clusterOutcome: `accountA-200s=${raceAllowedA}/5 accountB-200s=${raceAllowedB}/5`, leaseOutcome: `active-leases-total=${activeLeases ?? "?"}`,
-    finalResult: raceAllowedA >= 1 && raceAllowedB >= 1 ? "ERROR" : "BLOCKED", httpStatus: null, reasonCode: [...new Set(attempts.map((r) => `${r.status}:${r.code ?? "-"}`))].join(" "), latencyMs: null,
-    evidence: `api | A=${raceAllowedA}/5 B=${raceAllowedB}/5`, notes: "expected: only ONE account obtains the cycle on this machine identity",
+    // A double win is the measured attack succeeding, not an instrument error: reading it as ERROR
+    // (as this scenario originally did) hid the bypass in the count that exists to report it.
+    finalResult: raceAllowedA >= 1 && raceAllowedB >= 1 ? "ALLOWED" : "BLOCKED", httpStatus: null, reasonCode: [...new Set(attempts.map((r) => `${r.status}:${r.code ?? "-"}`))].join(" "), latencyMs: null,
+    evidence: `api | A=${raceAllowedA}/5 B=${raceAllowedB}/5`, notes: "expected: only ONE account obtains the cycle on this machine identity; ALLOWED = both did (the bypass)",
   });
 
   // 8. Identity stockpiling: mint identities from many accounts while a lease is active, then check
@@ -1277,6 +1363,240 @@ async function directIdentityAttacks(): Promise<void> {
     finalResult: classifyStart(stockpileUse.status, stockpileUse.code), httpStatus: stockpileUse.status, reasonCode: stockpileUse.code, latencyMs: null, evidence: "api",
     notes: "expected: a second account cannot open a second cycle on a pre-minted identity",
   });
+}
+
+/** The machine traits that separate one simulated machine from another (the machine-key inputs). */
+interface MachineCore {
+  hardwareConcurrency: number;
+  maxTouchPoints: number;
+  audioSampleRate: number;
+  audioChannels: number;
+  colorGamut: string;
+  hdr: boolean;
+  screenColorDepth: number;
+}
+
+/** A victim machine and forged attackers that share no core trait (never one machine's twin). */
+const VICTIM_CORE: MachineCore = { hardwareConcurrency: 8, maxTouchPoints: 0, audioSampleRate: 44100, audioChannels: 1, colorGamut: "srgb", hdr: false, screenColorDepth: 24 };
+const FORGED_CORE: MachineCore = { hardwareConcurrency: 32, maxTouchPoints: 10, audioSampleRate: 96000, audioChannels: 2, colorGamut: "rec2020", hdr: true, screenColorDepth: 32 };
+
+/**
+ * Presses start and answers any risk challenge the server asks for, up to a bounded number of
+ * rounds. A `mining_device_challenge_required` answer is an invitation to prove, not a refusal, so
+ * a scenario that stops there would report a state the server never reached.
+ */
+async function startAnsweringChallenges(
+  account: { token: string; csrf: string },
+  evidence: Record<string, unknown>,
+  keyPair: CryptoKeyPair,
+  jwk: Record<string, unknown>,
+  rounds = 2,
+): Promise<{ final: { status: number; code: string | null }; steps: string[] }> {
+  const steps: string[] = [];
+  let result = await apiCall("/api/v1/mining/start", { method: "POST", token: account.token, csrf: account.csrf, body: { device: evidence } });
+  steps.push(`start=${result.status}:${result.code ?? "-"}`);
+  for (let round = 0; round < rounds && result.status === 409 && result.code === "mining_device_challenge_required"; round += 1) {
+    const challenge = await apiCall("/api/v1/mining/device/challenge", { method: "POST", token: account.token, csrf: account.csrf, body: { device: evidence } });
+    steps.push(`challenge=${challenge.status}`);
+    if (challenge.status !== 200) break;
+    const signature = Buffer.from(
+      await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keyPair.privateKey, new TextEncoder().encode(String(challenge.body?.payload ?? ""))),
+    ).toString("base64url");
+    const proof = await apiCall("/api/v1/mining/device/prove", {
+      method: "POST", token: account.token, csrf: account.csrf,
+      body: { nonce: challenge.body?.nonce, signature, publicKeyJwk: jwk, device: evidence },
+    });
+    steps.push(`prove=${proof.status}`);
+    result = await apiCall("/api/v1/mining/start", { method: "POST", token: account.token, csrf: account.csrf, body: { device: evidence } });
+    steps.push(`retry=${result.status}:${result.code ?? "-"}`);
+  }
+  return { final: { status: result.status, code: result.code }, steps };
+}
+
+/**
+ * The bootstrap-then-parallel bypass: earn trust for a forged identity while nothing is mining, then
+ * use it beside another account's live cycle on the same network.
+ *
+ * Three shapes are measured with their own account and forged machine each, all on the harness's one
+ * client address (the network lock's unit):
+ *
+ *   1. `API-BOOTSTRAP-THEN-PARALLEL` — the cheap bootstrap: a burst of concurrent starts that only
+ *      one committed cycle can win (the earlier code credited one admission per *request*, which is
+ *      what made three simultaneous requests enough to look established).
+ *   2. `API-GLOBAL-TRUST-PARALLEL` — the identity is trusted (`established`) but has never mined on
+ *      this network: trust earned elsewhere/earlier must not surface here.
+ *   3. `API-NETWORK-RESIDENT-PARALLEL` — trusted *and* credited on this network: the honest second
+ *      device, which must stay ALLOWED (its refusal would be a false denial).
+ *
+ * The forged device records are created before the victim starts (while the network is free — an
+ * identity cannot be enrolled behind an occupied network by design), then this run's leases and
+ * cycles for those accounts are released/closed so the state under test really is "trust earned,
+ * nothing running". Only then does the victim start, and the parallel attempts are measured against
+ * its live lease.
+ */
+async function bootstrapThenParallelScenario(): Promise<void> {
+  const victimCore = { ...VICTIM_CORE };
+  const forgedCore = { ...FORGED_CORE };
+  const machine = (core: MachineCore): Record<string, unknown> => ({
+    hardwareConcurrency: core.hardwareConcurrency, maxTouchPoints: core.maxTouchPoints,
+    audioSampleRate: core.audioSampleRate, audioChannels: core.audioChannels,
+    colorGamut: core.colorGamut, hdr: core.hdr, screenColorDepth: core.screenColorDepth,
+  });
+  const keyFor = async () => {
+    const keyPair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
+    const jwk = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as Record<string, unknown>;
+    return { keyPair, jwk };
+  };
+  /** One forged machine: its own core traits, its own rendering hashes, its own browser key. */
+  const evidenceWithCore = (label: string, core: MachineCore, jwk: Record<string, unknown>): Record<string, unknown> =>
+    forgedEvidence(forgeVariants()[0]!, {
+      ...machine(core),
+      webglHash: `webgl-${RUN}-${label}`,
+      webglRenderer: `ANGLE (${label})`,
+      canvasHash: `canvas-${RUN}-${label}`,
+      browserKeyPublicKey: JSON.stringify(jwk),
+    });
+  // Distinct machine cores per identity (the machine key must not merge them): the forged devices are
+  // given cores that differ from each other and from the victim in every trait that forms the key.
+  const forgedCores: MachineCore[] = [
+    forgedCore,
+    { ...forgedCore, hardwareConcurrency: 16, maxTouchPoints: 1, audioSampleRate: 44100, screenColorDepth: 30, colorGamut: "p3", hdr: false },
+    { ...forgedCore, hardwareConcurrency: 4, maxTouchPoints: 5, audioSampleRate: 48000, screenColorDepth: 24, colorGamut: "srgb", hdr: true },
+  ];
+  const attackAccount = await directAccount("bp-main");
+  const globalAccount = await directAccount("bp-global");
+  const residentAccount = await directAccount("bp-resident");
+  const victimAccount = await directAccount("bp-victim");
+  const attackKey = await keyFor();
+  const globalKey = await keyFor();
+  const residentKey = await keyFor();
+  const victimKey = await keyFor();
+  const attackerLabels = ["bp-main", "bp-global", "bp-resident"];
+  const attackerEvidence = [attackerLabels[0]!, attackerLabels[1]!, attackerLabels[2]!].map((label, index) =>
+    evidenceWithCore(label, forgedCores[index]!, [attackKey, globalKey, residentKey][index]!.jwk),
+  );
+  // The victim is a different *machine*, not only different core counts: its platform, display,
+  // memory, locale and network timezone are all its own, so the correlation matcher has no reason to
+  // fold it into a forged cluster (which would make every measurement below meaningless).
+  const victimEvidence = {
+    ...evidenceWithCore("bp-victim", victimCore, victimKey.jwk),
+    platform: "MacIntel",
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    screenWidth: 2560, screenHeight: 1440, screenAvailWidth: 2560, screenAvailHeight: 1370,
+    deviceMemory: 16, pixelRatio: 2,
+    timezone: "America/New_York", timezoneOffsetMinutes: 300, locale: "en-US", languages: "en-US,en", language: "en-US",
+  };
+
+  // Isolation: the phases above leave live leases and spend the per-network identity budget, and a
+  // victim that cannot start (or a forged enrollment refused by a spent *test* budget) says nothing
+  // about the rule under test. Both writes need `HARNESS_ALLOW_DESTRUCTIVE_CLEANUP=1`; without it the
+  // scenario still runs, but a refusal caused by the inherited state is reported as INCONCLUSIVE
+  // rather than as a block.
+  const releasedBefore = await releaseAllLeases();
+  const budgetBefore = await resetEnrollmentBudget();
+  console.log(`[bootstrap-then-parallel] isolation: released_leases=${releasedBefore} quota_rows_cleared=${budgetBefore}`);
+
+  // --- Phase 1: create the three forged identities while nothing is mining.
+  // The main attacker uses the shape the bypass used: three simultaneous starts, one of which can
+  // commit a cycle. The other two are ordinary single enrollments (a control needs a record, not a
+  // burst).
+  const burst = await Promise.all(
+    Array.from({ length: 3 }, () => apiCall("/api/v1/mining/start", { method: "POST", token: attackAccount.token, csrf: attackAccount.csrf, body: { device: attackerEvidence[0] } })),
+  );
+  const burstStatuses = burst.map((entry) => `${entry.status}:${entry.code ?? "-"}`).join(" ");
+  const attackBootstrap = await deviceState(`webgl-${RUN}-${attackerLabels[0]}`);
+  const globalBootstrap = await startAnsweringChallenges(globalAccount, attackerEvidence[1]!, globalKey.keyPair, globalKey.jwk);
+  const residentBootstrap = await startAnsweringChallenges(residentAccount, attackerEvidence[2]!, residentKey.keyPair, residentKey.jwk);
+
+  // --- Phase 2: the state the attacker claims — trust earned, nothing running.
+  await releaseOwnLeases(attackAccount.userId);
+  await releaseOwnLeases(globalAccount.userId);
+  await releaseOwnLeases(residentAccount.userId);
+  await settleOwnSessions(attackAccount.userId);
+  await settleOwnSessions(globalAccount.userId);
+  await settleOwnSessions(residentAccount.userId);
+
+  // --- Phase 3: the victim mines on this network. Everything below is measured beside its lease.
+  const victimOutcome = await startAnsweringChallenges(victimAccount, victimEvidence, victimKey.keyPair, victimKey.jwk);
+  const victimVerdict = classifyStart(victimOutcome.final.status, victimOutcome.final.code);
+  const victimLeases = await liveStateCounts();
+  const networkHash = ((attackBootstrap?.["networkTrusts"] ?? []) as { ipHash?: string }[])[0]?.ipHash ?? `network-${RUN}`;
+  const forgedCoreState = (state: Record<string, any> | null): string =>
+    state
+      ? `admissions=${state["admissionCount"] ?? "?"} trust=${state["trustState"] ?? "?"} networkCredits=${Array.isArray(state["networkTrusts"]) ? (state["networkTrusts"] as unknown[]).length : 0}`
+      : "unread";
+
+  const recordParallel = (id: string, name: string, outcome: { final: { status: number; code: string | null }; steps: string[] }, state: Record<string, any> | null, notes: string): void => {
+    record({
+      id, name, browser: "direct-api", context: "bootstrap-then-parallel",
+      account: `${RUN} forged identity beside a live victim cycle`,
+      identityOutcome: forgedCoreState(state),
+      clusterOutcome: "forged-identity",
+      leaseOutcome: outcome.final.status === 200 ? "active" : "none",
+      finalResult: victimVerdict === "ALLOWED" ? classifyStart(outcome.final.status, outcome.final.code) : "INCONCLUSIVE",
+      httpStatus: outcome.final.status, reasonCode: outcome.final.code, latencyMs: null,
+      evidence: `api | victim=${victimOutcome.final.status}:${victimOutcome.final.code ?? "-"} bootstrap=[${outcome.steps.join(" ")}] network-active=${JSON.stringify(victimLeases)}`,
+      notes: victimVerdict === "ALLOWED" ? notes : `victim could not mine on this network (${victimOutcome.final.status}:${victimOutcome.final.code ?? "-"}) — no parallel state to measure`,
+    });
+  };
+
+  // 1. The cheap bootstrap: trust from a burst of assessed requests, then used beside the victim.
+  const attackParallel = await startAnsweringChallenges(attackAccount, attackerEvidence[0]!, attackKey.keyPair, attackKey.jwk);
+  const afterParallel = await liveStateCounts();
+  recordParallel(
+    "API-BOOTSTRAP-THEN-PARALLEL",
+    "forged identity whose trust came from concurrent starts, then used beside a live cycle",
+    { final: attackParallel.final, steps: [`burst=[${burstStatuses}]`, ...attackParallel.steps] },
+    attackBootstrap,
+    "BLOCKED = the burst did not establish the identity and the network lock held; ALLOWED = the identity mined beside the victim",
+  );
+
+  // 2. Globally trusted, never mined here: trust must not travel between networks.
+  const globalState = await deviceState(`webgl-${RUN}-${attackerLabels[1]}`);
+  if (globalState) {
+    await dbProbe(async (c) => c["devices"].updateOne(
+      { publicId: globalState["publicId"] },
+      { $set: { trustState: "established", establishedAt: new Date(), admissionCount: 3 } },
+    ));
+  }
+  const globalParallel = await startAnsweringChallenges(globalAccount, attackerEvidence[1]!, globalKey.keyPair, globalKey.jwk);
+  recordParallel(
+    "API-GLOBAL-TRUST-PARALLEL",
+    "globally established identity that never mined on this network, used beside a live cycle",
+    globalParallel,
+    await deviceState(`webgl-${RUN}-${attackerLabels[1]}`),
+    "BLOCKED = trust is scoped to the network it was earned on; ALLOWED = a global flag still exempts a stranger here",
+  );
+
+  // 3. Trusted *and* credited on this network (scaffolded from the real credit the committed cycle
+  // wrote, with the identity budget the server would have earned over admitted cycles): the honest
+  // second device must not be refused.
+  const residentState = await deviceState(`webgl-${RUN}-${attackerLabels[2]}`);
+  const residentCredits = (residentState?.["networkTrusts"] ?? []) as { ipHash?: string }[];
+  const residentNetwork = residentCredits[0]?.ipHash ?? networkHash;
+  if (residentState) {
+    await dbProbe(async (c) => c["devices"].updateOne(
+      { publicId: residentState["publicId"] },
+      {
+        $set: {
+          trustState: "established",
+          establishedAt: new Date(),
+          admissionCount: 3,
+          networkTrusts: [{ ipHash: residentNetwork, admissions: 3, proofs: 0, firstAt: new Date(Date.now() - 60_000), lastAt: new Date() }],
+        },
+      },
+    ));
+  }
+  const residentParallel = await startAnsweringChallenges(residentAccount, attackerEvidence[2]!, residentKey.keyPair, residentKey.jwk);
+  recordParallel(
+    "API-NETWORK-RESIDENT-PARALLEL",
+    "identity credited on this network (the honest second device), used beside a live cycle",
+    residentParallel,
+    await deviceState(`webgl-${RUN}-${attackerLabels[2]}`),
+    "ALLOWED = a device that has mined here is still admitted; BLOCKED = the rule denies an honest second device (false denial)",
+  );
+  const finalState = await liveStateCounts();
+  console.log(`[bootstrap-then-parallel] burst=[${burstStatuses}] attacker=${forgedCoreState(attackBootstrap)} global-bootstrap=${globalBootstrap.final.status} resident-bootstrap=${residentBootstrap.final.status} active-after=${JSON.stringify(afterParallel)} active-final=${JSON.stringify(finalState)}`);
 }
 
 /**

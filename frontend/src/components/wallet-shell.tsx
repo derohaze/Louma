@@ -121,19 +121,29 @@ export function CopyButton({ text }: { text: string }) {
       title="Copy address"
       aria-label="Copy address"
       onClick={async () => {
+        let copySucceeded = false;
         try {
           await navigator.clipboard.writeText(text);
+          copySucceeded = true;
         } catch {
-          // Clipboard API needs a secure context: fall back to the legacy execCommand path.
+          // Clipboard API needs a secure context: fall back to the legacy execCommand path, whose
+          // boolean answer is the only signal that the address actually reached the clipboard.
           const area = document.createElement("textarea");
           area.value = text;
           area.style.position = "fixed";
           area.style.opacity = "0";
           document.body.appendChild(area);
           area.select();
-          document.execCommand("copy");
+          try {
+            copySucceeded = document.execCommand("copy");
+          } catch {
+            copySucceeded = false;
+          }
           area.remove();
         }
+        // Never confirm a copy that did not happen: the checkmark would tell the user the address is
+        // on their clipboard when it is not.
+        if (!copySucceeded) return;
         setCopied(true);
         if (timer.current !== null) window.clearTimeout(timer.current);
         timer.current = window.setTimeout(() => setCopied(false), 1800);

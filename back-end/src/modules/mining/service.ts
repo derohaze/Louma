@@ -330,6 +330,8 @@ export async function startMining(input: {
   // duplicates). A racing start cannot take a duplicate row and open a second cycle on one machine.
   let leaseKeys: string[] = [];
   let leaseDeviceId: string | null = null;
+  // The device cluster this start resolves to, credited with one admission once the cycle commits.
+  let creditDeviceId: string | null = null;
   if (deviceLeaseEnabled && input.device) {
     const guard = await import("../mining-device/service.js");
     // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
@@ -470,6 +472,9 @@ export async function startMining(input: {
       leaseKeys = eligibility.decision === "deny" ? [] : eligibility.equivalentLeaseKeys;
       leaseDeviceId = eligibility.decision === "deny" ? null : eligibility.device.publicId;
     }
+    // A cycle is about to be created on this cluster whichever mode ran (monitor only skips the
+    // lease, not the cycle), so the admission is credited to it once the session commits below.
+    creditDeviceId = eligibility.device.publicId;
   }
 
   if (leaseKeys.length > 0) {
@@ -495,6 +500,10 @@ export async function startMining(input: {
             collections,
             leaseKeys,
             deviceId: leaseDeviceId,
+            // The network this cycle is taken from is recorded on its lease, so the network lock can
+            // read live leases per network instead of guessing from device records.
+            ip: input.device?.ip ?? null,
+            secret: config.encryptionKey,
             ownerUserId: input.ownerUserId,
             miningSessionId: session.publicId,
             leaseEndsAt: session.endsAt,
@@ -539,6 +548,23 @@ export async function startMining(input: {
       }
       throw error;
     }
+  }
+
+  // The cycle and its lease are committed: credit the resolved device cluster with one admission on
+  // the network this start was taken from. This is the only writer of admissions, so `established`
+  // counts cycles that actually started — never requests that merely reached admission control, and
+  // never several credits for one cycle. It happens after the commit on purpose: a credit before the
+  // transaction could age a cluster toward `established` while the lease insert was still racing.
+  if (creditDeviceId !== null) {
+    const guard = await import("../mining-device/service.js");
+    await guard
+      .creditGrantedStart({
+        collections,
+        config,
+        devicePublicId: creditDeviceId,
+        ip: input.device?.ip ?? null,
+      })
+      .catch(() => undefined);
   }
 
   await recordSecurityEvent({

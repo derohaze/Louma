@@ -35,6 +35,12 @@ const SAMPLES = Number(process.env["BENCH_SAMPLES"] ?? 60);
 const PASSWORD = "SmokeTest1234";
 const OUT = process.env["BENCH_OUT"] ?? null;
 /**
+ * `clearState` below releases every active device lease and closes every active mining session
+ * (without settling it), which is only acceptable on a database whose contents are disposable. The
+ * benchmark cannot tell a throwaway database from a shared one, so the operator has to say so.
+ */
+const DESTRUCTIVE_CLEANUP_ALLOWED = (process.env["BENCH_ALLOW_DESTRUCTIVE_CLEANUP"] ?? "").trim() === "1";
+/**
  * TEST-NET-3 (RFC 5737) addresses, one per request. `isPublicIp` accepts them, so each request
  * carries its own network identity — which keeps the benchmark from measuring the per-network
  * identity budget, or another sample's network lease, instead of the start path itself.
@@ -302,6 +308,13 @@ function summarise(samples: Sample[]): Record<string, unknown> {
 }
 
 async function main(): Promise<void> {
+  if (!DESTRUCTIVE_CLEANUP_ALLOWED) {
+    console.error(
+      "BENCHMARK REFUSED: between samples this benchmark releases every active device lease and closes every active mining session (without settling it)." +
+        " Point it at a throwaway database and set BENCH_ALLOW_DESTRUCTIVE_CLEANUP=1 to confirm that is what it is pointed at.",
+    );
+    process.exit(2);
+  }
   const config = loadConfig();
   const connection = await connectMongo(config, { serverSelectionTimeoutMS: 30_000, connectTimeoutMS: 20_000 });
   const client = connection.client;
@@ -374,6 +387,12 @@ async function main(): Promise<void> {
     return await timed(() => call("POST", "/api/v1/mining/start", { token, body: { device: evidence } }));
   };
 
+  /**
+   * Resets the state between samples. Guarded by `BENCH_ALLOW_DESTRUCTIVE_CLEANUP=1` (checked at
+   * startup): it releases live leases and marks active sessions `settled` without running the
+   * settlement path, so on a database that holds anyone else's rows it would both remove their
+   * one-device protection and strand their pending rewards.
+   */
   const clearState = async (): Promise<void> => {
     await real.miningDeviceLeases.updateMany({ status: "active" }, { $set: { status: "released", updatedAt: new Date() } });
     // "settled" is the only terminal status the schema has; this is a throwaway benchmark database.

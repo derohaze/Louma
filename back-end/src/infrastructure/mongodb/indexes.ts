@@ -1,6 +1,6 @@
 import { MongoServerError, type Db, type Document } from "mongodb";
 import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
-import { MAX_CLUSTER_ALIASES } from "../../modules/mining-device/policy.js";
+import { MAX_CLUSTER_ALIASES, MAX_NETWORK_TRUSTS } from "../../modules/mining-device/policy.js";
 
 /**
  * How long each append-only log is kept.
@@ -177,6 +177,23 @@ const schemas: Record<string, Document> = {
         proofCount: { bsonType: "int", minimum: 0 },
         establishedAt: { bsonType: ["date", "null"] },
         findingCount: { bsonType: "int", minimum: 0 },
+        // Credited mining activity per network context (bounded); the network lock reads the entry
+        // for the current network, so trust is "mined here, recently", never "trusted everywhere".
+        networkTrusts: {
+          bsonType: "array",
+          maxItems: MAX_NETWORK_TRUSTS,
+          items: {
+            bsonType: "object",
+            required: ["ipHash", "admissions", "proofs", "firstAt", "lastAt"],
+            properties: {
+              ipHash: { bsonType: "string" },
+              admissions: { bsonType: "int", minimum: 0 },
+              proofs: { bsonType: "int", minimum: 0 },
+              firstAt: { bsonType: "date" },
+              lastAt: { bsonType: "date" },
+            },
+          },
+        },
         firstSeenAt: { bsonType: "date" },
         lastSeenAt: { bsonType: "date" },
         createdAt: { bsonType: "date" },
@@ -187,15 +204,17 @@ const schemas: Record<string, Document> = {
   mining_device_quotas: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["scope", "windowMs", "bucketStart", "count", "expiresAt"],
+      required: ["scope", "subject", "windowMs", "at", "identityKey", "expiresAt"],
       properties: {
-        // `_id` is the bucket key `${scope}:${windowMs}:${bucketStartMs}`; the atomic $inc upsert on
-        // it IS the rate limiter, so no read-then-write check exists to race.
+        // `_id` is the consumed-slot key `${scope}:${windowMs}:${windowIndex}:${subject}:${identity}`,
+        // which makes spending the same machine's slot twice inside one window impossible; the
+        // rolling limit itself is the count of `at` values inside the window.
         _id: { bsonType: "string" },
         scope: { enum: ["account", "network"] },
+        subject: { bsonType: "string" },
         windowMs: { bsonType: ["int", "long", "double"] },
-        bucketStart: { bsonType: "date" },
-        count: { bsonType: ["int", "long", "double"], minimum: 0 },
+        at: { bsonType: "date" },
+        identityKey: { bsonType: "string" },
         expiresAt: { bsonType: "date" },
       },
     },
@@ -209,6 +228,8 @@ const schemas: Record<string, Document> = {
         deviceClusterId: { bsonType: "string" },
         deviceId: { bsonType: ["string", "null"] },
         ownerUserId: { bsonType: "string" },
+        // The network the cycle was taken from; the network lock queries live leases by it.
+        ipHash: { bsonType: ["string", "null"] },
         miningSessionId: { bsonType: "string" },
         leasedAt: { bsonType: "date" },
         leaseEndsAt: { bsonType: "date" },
@@ -472,13 +493,13 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("mining_devices").createIndex({ normalizedSignalHash: 1 }, { name: "mining_devices_signal_hash" }),
     db.collection("mining_devices").createIndex({ lastSeenAt: -1 }, { name: "mining_devices_last_seen" }),
     db.collection("mining_devices").createIndex({ status: 1, lastSeenAt: -1 }, { name: "mining_devices_status_seen" }),
-    // Network-scoped admission checks (another lease on this network, network churn) look devices up
-    // by the last observed IP hash; without this they would scan the device population.
-    db.collection("mining_devices").createIndex({ lastIpHash: 1, lastSeenAt: -1 }, { name: "mining_devices_network_seen" }),
     // One active lease per device cluster: the database guarantee behind "one device, one cycle".
     db.collection("mining_device_leases").createIndex({ deviceClusterId: 1 }, { unique: true, partialFilterExpression: { status: "active" }, name: "mining_device_leases_one_active_per_device" }),
     db.collection("mining_device_leases").createIndex({ ownerUserId: 1, status: 1 }, { name: "mining_device_leases_owner_active" }),
     db.collection("mining_device_leases").createIndex({ deviceClusterId: 1, leaseEndsAt: -1 }, { name: "mining_device_leases_device_ends" }),
+    // The network lock reads the live leases taken from one network directly; the index keeps that
+    // query proportional to the cycles running on the network, never to the device population.
+    db.collection("mining_device_leases").createIndex({ ipHash: 1, status: 1, leaseEndsAt: -1 }, { name: "mining_device_leases_network_active" }),
     // Deliberately NOT unique: one cycle leases every identity its machine is known by (the machine
     // key plus the browser key, and any duplicate record), so one session owns several rows. The
     // uniqueness that matters is one *active lease per device identity*, which is the index above.
@@ -488,8 +509,10 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
     db.collection("mining_device_nonces").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_device_nonces_ttl" }),
     db.collection("mining_device_observations").createIndex({ deviceId: 1, observedAt: -1 }, { name: "mining_device_observations_device_time" }),
     db.collection("mining_device_observations").createIndex({ ownerUserId: 1, observedAt: -1 }, { name: "mining_device_observations_owner_time" }),
-    // Enrollment-rate buckets are short-lived counters: the TTL index is what keeps them bounded.
+    // Enrollment slots are short-lived rows: the TTL index is what keeps them bounded.
     db.collection("mining_device_quotas").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_device_quotas_ttl" }),
+    // The rolling-window count for one account or network: served by this index, one row per slot.
+    db.collection("mining_device_quotas").createIndex({ scope: 1, subject: 1, windowMs: 1, at: -1 }, { name: "mining_device_quotas_window" }),
   ]);
 
   if (options.retentionTtlEnabled) {

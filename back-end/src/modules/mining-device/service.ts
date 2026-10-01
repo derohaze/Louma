@@ -48,15 +48,19 @@ import {
   LMDG_EVENT_TYPES,
   LMDG_PROOF_ACTION,
   LMDG_PROOF_VERSION,
+  LIVE_LEASE_BACKSTOP_LIMIT,
   MAX_ACCOUNTS_PER_DEVICE_CLUSTER,
   MAX_CLUSTER_ALIASES,
   MAX_DEVICES_PER_ACCOUNT,
-  NETWORK_DEVICE_PROBE_LIMIT,
   OBSERVATION_MIN_INTERVAL_MS,
   PROVE_MAX_PER_HOUR,
 } from "./policy.js";
 import {
+  bumpNetworkTrust,
   consumeEnrollmentBudget,
+  networkTrustEstablished,
+  networkTrustFresh,
+  networkTrustOf,
   nextTrustState,
   recentClusterChurn,
   trustStateOf,
@@ -67,8 +71,8 @@ import {
   findDeviceByKeyHash,
   findDeviceByPublicKey,
   findDeviceBySignature,
-  findDevicesOnNetwork,
   findLiveLeases,
+  findLiveLeasesOnNetwork,
   isDuplicateKeyError,
   listClusterCandidates,
   lookupMachineKey,
@@ -424,6 +428,9 @@ export async function resolveOrCreateDevice(input: {
       },
       ownerUserId: input.ownerUserId,
       ipHash: input.ip ? ipHash(config.encryptionKey, input.ip) : null,
+      // The machine identity this slot belongs to: a racing duplicate of the same machine must not
+      // spend a second slot, and a retry of the same enrollment must not either.
+      identityKey: machineKey ?? keyHash,
       nowMs,
     });
     if (!budget.allowed) {
@@ -509,6 +516,8 @@ async function createDevice(
     proofCount: 0,
     establishedAt: null,
     findingCount: 0,
+    // No credited activity yet: trust is earned per network by committing cycles there.
+    networkTrusts: [],
     browserKeyPublicKey: input.browserKeyPublicKey,
     fingerprintVisitorIdHash: input.visitorHash,
     fingerprintVersion: input.fingerprintVersion?.slice(0, 32) ?? null,
@@ -583,7 +592,7 @@ async function recordDeviceSeen(
   collections: Collections,
   secret: Buffer,
   device: MiningDeviceRecord,
-  input: { intel: IpIntel; ip: string | null; correlationId: string; findings: string[]; establishMinAdmissions: number },
+  input: { intel: IpIntel; ip: string | null; correlationId: string; findings: string[] },
   observed: ObservedFeatures,
 ): Promise<void> {
   const now = new Date();
@@ -615,18 +624,12 @@ async function recordDeviceSeen(
   // accepts a snapshot match independently of the profile — so a contradicted (drifted) value must
   // not replace the snapshot either. Contradicted keys keep their previous snapshot value (or stay
   // absent when there is none); everything else advances to this observation.
-  // The admission and the consistency findings are the only things that move the trust state; both
-  // happen here, on the allowed path only. A rejected request never reaches this function, so it can
-  // never age a cluster toward `established` or push it to `suspicious`.
-  const admissionCount = (device.admissionCount ?? 0) + 1;
-  const findingCount = (device.findingCount ?? 0) + input.findings.length;
-  const transition = nextTrustState({
-    device,
-    admissionCount,
-    proofCount: device.proofCount ?? 0,
-    findingCount,
-    minAdmissions: input.establishMinAdmissions,
-  });
+  // The trust counters are deliberately NOT touched here. An allowed start is only an intent to mine
+  // until the mining session and its lease commit, so the admission is credited by
+  // `creditGrantedStart` *after* that transaction lands: a request that lost the unique-lease race
+  // can never age a cluster toward `established`. The findings are one input to that decision, so
+  // they are incremented (never read-modify-written) here — a stale in-memory copy cannot overwrite
+  // a concurrent update.
   // Append-only alias: the machine key this observation produced, when the server has decided this
   // cluster is the same machine (here: the admission was allowed and resolution matched the
   // cluster). The anchor is never rewritten, aliases are bounded, and a rejected request adds none.
@@ -665,16 +668,100 @@ async function recordDeviceSeen(
         // to null: a client that stops reporting the trait keeps the last value it did report.
         ...(machineKey ? { machineKeyHash: machineKey } : {}),
         aliasHashes,
-        admissionCount,
-        findingCount,
-        trustState: transition.state,
-        ...(transition.becameEstablished ? { establishedAt: now } : {}),
+        // The last network this cluster was observed on, for the record's own history. The network
+        // *lock* does not read it: it asks the leases, which carry the network their cycle was
+        // actually taken from, so a stale device field can never decide an admission.
+        ...(input.ip ? { lastIpHash: ipHash(secret, input.ip) } : {}),
         ...(observed.raw["platform"] ? { platform: observed.raw["platform"] } : {}),
         ...(input.intel.asn ? { lastAsn: input.intel.asn } : {}),
         ...(input.intel.country ? { lastCountry: input.intel.country } : {}),
       },
+      $inc: { findingCount: input.findings.length },
     },
   ).catch(() => undefined);
+}
+
+/**
+ * Credits one *committed* admission (and the findings of that observation) to a device cluster.
+ *
+ * This is the only writer of `admissionCount`, of the admission side of `networkTrusts`, and of the
+ * `establishedAt` that admissions earn; it is called by the mining service only after the session and its lease
+ * transaction has committed — so the number of admissions is the number of cycles that actually
+ * started on the cluster, never the number of requests that merely reached admission control. A
+ * burst of concurrent starts therefore credits one admission, not one per request, which is what
+ * makes "established" mean several occasions instead of one fabricated moment.
+ *
+ * The credit is recorded against the network the cycle was taken from: trust is then readable as
+ * "this identity has mined here, recently", which is the only statement the network lock is allowed
+ * to accept from it.
+ */
+export async function creditGrantedStart(input: {
+  collections: Collections;
+  config: Pick<AppConfig, "encryptionKey" | "lmdg">;
+  devicePublicId: string;
+  ip: string | null;
+  nowMs?: number;
+}): Promise<void> {
+  const nowMs = input.nowMs ?? Date.now();
+  const now = new Date(nowMs);
+  // Atomic increment, then a decision on the fresh document: two credits landing together cannot
+  // overwrite each other's count the way a read-modify-write of the in-memory record would.
+  const updated = await input.collections.miningDevices
+    .findOneAndUpdate(
+      { publicId: input.devicePublicId, status: { $ne: "blocked" } },
+      { $inc: { admissionCount: 1 }, $set: { lastSeenAt: now, updatedAt: now } },
+      { returnDocument: "after" },
+    )
+    .catch(() => null);
+  if (!updated) return;
+  await applyCommittedCredit({
+    collections: input.collections,
+    cluster: updated,
+    ipHashValue: input.ip ? ipHash(input.config.encryptionKey, input.ip) : null,
+    credit: "admission",
+    nowMs,
+    minAdmissions: input.config.lmdg.establishMinAdmissions,
+  });
+}
+
+/**
+ * Recomputes and persists a cluster's trust after one committed credit.
+ *
+ * Shared by the admission credit (a cycle that committed) and the proof credit (a verified
+ * single-use handshake), so both move `trustState`, `networkTrusts` and `establishedAt` through the
+ * same rule and both record *where* the activity happened. Callers pass the document as returned by
+ * their atomic `$inc`, never an earlier read: a concurrent credit must not be overwritten.
+ */
+async function applyCommittedCredit(input: {
+  collections: Collections;
+  cluster: MiningDeviceRecord;
+  ipHashValue: string | null;
+  credit: "admission" | "proof";
+  nowMs: number;
+  minAdmissions: number;
+}): Promise<void> {
+  const networkTrusts = input.ipHashValue
+    ? bumpNetworkTrust(input.cluster.networkTrusts, input.ipHashValue, input.credit, input.nowMs)
+    : (input.cluster.networkTrusts ?? []);
+  const transition = nextTrustState({
+    device: input.cluster,
+    admissionCount: input.cluster.admissionCount ?? 0,
+    proofCount: input.cluster.proofCount ?? 0,
+    findingCount: input.cluster.findingCount ?? 0,
+    minAdmissions: input.minAdmissions,
+  });
+  await input.collections.miningDevices
+    .updateOne(
+      { _id: input.cluster._id },
+      {
+        $set: {
+          trustState: transition.state,
+          networkTrusts,
+          ...(transition.becameEstablished ? { establishedAt: new Date(input.nowMs) } : {}),
+        },
+      },
+    )
+    .catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +773,31 @@ export interface DeviceBinding {
   anchorHash: string | null;
   /** The enrolled cluster (`publicId`) when the evidence resolved to one; null for a first-sight device. */
   clusterId: string | null;
+  /**
+   * The browser key the evidence presented (as sent), null when it presented none. A cluster with no
+   * machine anchor is named *by* this key, so the proof for it must also be signed by this key — the
+   * comparison is by key material (`p256KeyFingerprint`), not by the exact JSON serialization.
+   */
+  browserKeyText: string | null;
+}
+
+/**
+ * The key material of a P-256 JWK as a comparable value: `x|y`, null for anything that is not a
+ * well-formed public EC key. Two serializations of the same key compare equal; a different key does
+ * not, whatever member order or extra metadata it carries.
+ */
+export function p256KeyFingerprint(jwkText: string | null | undefined): string | null {
+  if (typeof jwkText !== "string" || jwkText.length === 0) return null;
+  try {
+    const parsed = JSON.parse(jwkText) as Record<string, unknown>;
+    if (parsed?.["kty"] !== "EC" || parsed["crv"] !== "P-256") return null;
+    const x = parsed["x"];
+    const y = parsed["y"];
+    if (typeof x !== "string" || typeof y !== "string" || x.length === 0 || y.length === 0) return null;
+    return `${x}|${y}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -705,15 +817,16 @@ export async function resolveDeviceBinding(input: {
   const signals = normalizeSignals(evidence);
   const observed = observedFeatures(input.config.encryptionKey, signals);
   const machineKey = machineKeyHash(input.config.encryptionKey, observed.raw);
+  const browserKeyText = evidence.browserKeyPublicKey;
   if (machineKey) {
     const byAnchor = await findDeviceByAnchor(input.collections, machineKey);
-    if (byAnchor) return { anchorHash: byAnchor.anchorHash ?? machineKey, clusterId: byAnchor.publicId };
+    if (byAnchor) return { anchorHash: byAnchor.anchorHash ?? machineKey, clusterId: byAnchor.publicId, browserKeyText };
   }
-  if (evidence.browserKeyPublicKey) {
-    const byKey = await findDeviceByPublicKey(input.collections, evidence.browserKeyPublicKey);
-    if (byKey) return { anchorHash: byKey.anchorHash ?? null, clusterId: byKey.publicId };
+  if (browserKeyText) {
+    const byKey = await findDeviceByPublicKey(input.collections, browserKeyText);
+    if (byKey) return { anchorHash: byKey.anchorHash ?? null, clusterId: byKey.publicId, browserKeyText };
   }
-  return { anchorHash: machineKey, clusterId: null };
+  return { anchorHash: machineKey, clusterId: null, browserKeyText };
 }
 
 export async function issueChallenge(input: {
@@ -890,13 +1003,15 @@ function verifyEcdsaP256(publicKeyJwk: Record<string, unknown>, payload: string,
 
 export async function verifyProof(input: {
   collections: Collections;
-  config: Pick<AppConfig, "lmdg">;
+  config: Pick<AppConfig, "encryptionKey" | "lmdg">;
   ownerUserId: string;
   nonce: string;
   signature: string;
   publicKeyJwk: Record<string, unknown>;
   /** The server-resolved binding recomputed from the evidence presented with this proof request. */
   binding?: DeviceBinding | null;
+  /** Server-observed peer address, so a proof credits the network it was actually answered from. */
+  ip?: string | null;
   origin?: string | null;
   correlationId: string;
   nowMs?: number;
@@ -944,12 +1059,28 @@ export async function verifyProof(input: {
   // The signature must cover the canonical bound payload, not just the nonce. A bare-nonce
   // signature from any earlier build (or minted elsewhere) verifies against nothing here.
   const storedAnchor = (record as { boundAnchorHash?: string | null }).boundAnchorHash ?? null;
+  const storedClusterId = (record as { boundClusterId?: string | null }).boundClusterId ?? null;
   const presentedAnchor = input.binding?.anchorHash ?? null;
+  const presentedClusterId = input.binding?.clusterId ?? null;
   // The handshake belongs to the enrollment it was issued for. A proof presented with different
   // device evidence than the challenge was issued under is a binding mismatch, not a proof — this
   // is what stops a proof minted for one device/account context being spent on another.
-  if (storedAnchor !== null && presentedAnchor !== null && storedAnchor !== presentedAnchor) return fail("device_binding_mismatch");
+  if (storedAnchor !== null && storedAnchor !== presentedAnchor) return fail("device_binding_mismatch");
   if (storedAnchor !== null && presentedAnchor === null) return fail("device_binding_missing");
+  // A cluster with no machine anchor is named by its browser key alone (too few machine traits were
+  // reported to derive a key). For such an enrollment the *cluster* and the *key* are the binding:
+  // the proof must be signed by the key that named the cluster, so a verified proof can never be
+  // credited to an unrelated signing key. Clusters that carry an anchor need no such rule — the
+  // anchor in the signed payload already identifies the machine that must have produced it.
+  const keyOnlyEnrollment = storedAnchor === null && storedClusterId !== null;
+  if (keyOnlyEnrollment) {
+    if (presentedClusterId !== storedClusterId) return fail("device_binding_mismatch");
+    const signingKey = p256KeyFingerprint(JSON.stringify(input.publicKeyJwk));
+    const namedKey = p256KeyFingerprint(input.binding?.browserKeyText ?? null);
+    if (signingKey === null || namedKey === null || signingKey !== namedKey) return fail("device_binding_mismatch");
+  }
+  // A nonce with no anchor and no cluster was issued without device evidence (a legacy client): it
+  // binds no enrollment, so verification still runs but no cluster can be credited from it.
   const payload = buildProofPayload({
     nonce: record.nonce,
     origin: input.origin ?? null,
@@ -976,30 +1107,27 @@ export async function verifyProof(input: {
   ).catch(() => undefined);
   // Bind the proof to the enrollment it was issued for: a verified proof is independent evidence
   // (it happened on another occasion than the start), so it counts toward establishing the cluster
-  // and can never be recorded against a cluster the evidence did not resolve to.
-  const boundClusterId = (record as { boundClusterId?: string | null }).boundClusterId ?? null;
-  const cluster = boundClusterId ? await input.collections.miningDevices.findOne({ publicId: boundClusterId }).catch(() => null) : null;
+  // and can never be recorded against a cluster the evidence did not resolve to. The credit lands on
+  // the server-resolved cluster id stored on the nonce, never on a client-supplied value.
+  const cluster = storedClusterId ? await input.collections.miningDevices.findOne({ publicId: storedClusterId }).catch(() => null) : null;
   if (cluster) {
-    const proofCount = (cluster.proofCount ?? 0) + 1;
-    const transition = nextTrustState({
-      device: cluster,
-      admissionCount: cluster.admissionCount ?? 0,
-      proofCount,
-      findingCount: cluster.findingCount ?? 0,
-      minAdmissions: input.config.lmdg.establishMinAdmissions,
-    });
-    await input.collections.miningDevices.updateOne(
-      { _id: cluster._id },
-      {
-        $set: {
-          proofCount,
-          trustState: transition.state,
-          lastSeenAt: new Date(nowMs),
-          updatedAt: new Date(nowMs),
-          ...(transition.becameEstablished ? { establishedAt: new Date(nowMs) } : {}),
-        },
-      },
-    ).catch(() => undefined);
+    const credited = await input.collections.miningDevices
+      .findOneAndUpdate(
+        { _id: cluster._id },
+        { $inc: { proofCount: 1 }, $set: { lastSeenAt: new Date(nowMs), updatedAt: new Date(nowMs) } },
+        { returnDocument: "after" },
+      )
+      .catch(() => null);
+    if (credited) {
+      await applyCommittedCredit({
+        collections: input.collections,
+        cluster: credited,
+        ipHashValue: input.ip ? ipHash(input.config.encryptionKey, input.ip) : null,
+        credit: "proof",
+        nowMs,
+        minAdmissions: input.config.lmdg.establishMinAdmissions,
+      });
+    }
   }
   await recordSecurityEvent({
     collections: input.collections,
@@ -1128,42 +1256,37 @@ export async function assessMiningStart(input: {
   // Live-lease backstop: the fuzzy sweep compares only the most recently seen records, so a
   // still-mining device that fell behind newer records — and whose machine traits and browser key
   // have since changed — would drop out of the comparison and its active lease would be missed.
-  // Every identity holding a live lease is therefore pulled in explicitly, regardless of recency.
-  // Both lookups are batched without an unordered cap: truncating either one can strand a
-  // lease-holder outside both the backstop and the recent-50 sweep. Records are also resolved by
-  // the lease's device record id, so a machine whose newly reported traits changed its direct key
-  // still has its old lease compared instead of silently mining twice.
+  // The newest live leases are therefore pulled in explicitly, and they are resolved by both the
+  // lease's identity key and its device record id, so a machine whose newly reported traits changed
+  // its direct key still has its old lease compared instead of silently mining twice.
+  //
+  // This is a bounded, best-effort *similarity* backstop, capped rather than proportional to the
+  // whole active mining population (see `LIVE_LEASE_BACKSTOP_LIMIT`): the exact guarantees are the
+  // identity checks above (a lease on any identity this observation produces, or that its record is
+  // known by) and the per-network lease query below, both of which are indexed and complete.
   const liveLeaseFilter = { status: "active", leaseEndsAt: { $gt: new Date(nowMs) } } as const;
-  const [liveLeaseIdsRaw, liveLeaseDeviceIdsRaw] = await Promise.all([
-    collections.miningDeviceLeases.distinct("deviceClusterId", liveLeaseFilter).catch(() => [] as unknown[]),
-    collections.miningDeviceLeases.distinct("deviceId", liveLeaseFilter).catch(() => [] as unknown[]),
-  ]);
-  const liveIds = (liveLeaseIdsRaw as unknown[]).filter((value): value is string => typeof value === "string");
-  const liveDeviceIds = (liveLeaseDeviceIdsRaw as unknown[]).filter((value): value is string => typeof value === "string");
+  const liveLeases = await collections.miningDeviceLeases
+    .find(liveLeaseFilter, { projection: { deviceClusterId: 1, deviceId: 1 } })
+    .sort({ leasedAt: -1 })
+    .limit(LIVE_LEASE_BACKSTOP_LIMIT)
+    .toArray()
+    .catch(() => []);
+  const liveLeaseKeys = [...new Set(liveLeases.map((lease) => lease.deviceClusterId))].filter(Boolean);
+  const liveDeviceIds = [...new Set(liveLeases.map((lease) => lease.deviceId))].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
   const knownIds = new Set(sweep.map((entry) => entry.publicId));
-  const addBackstop = (entries: typeof sweep): void => {
-    for (const entry of entries) {
-      if (!knownIds.has(entry.publicId)) {
-        sweep.push(entry);
-        knownIds.add(entry.publicId);
-      }
+  const leasedRecords = liveLeaseKeys.length === 0 && liveDeviceIds.length === 0
+    ? []
+    : await collections.miningDevices
+        .find({ $or: [{ publicId: { $in: liveDeviceIds } }, { machineKeyHash: { $in: liveLeaseKeys } }, { deviceKeyHash: { $in: liveLeaseKeys } }] })
+        .toArray()
+        .catch(() => []);
+  for (const entry of leasedRecords) {
+    if (!knownIds.has(entry.publicId)) {
+      sweep.push(entry);
+      knownIds.add(entry.publicId);
     }
-  };
-  for (let start = 0; start < liveIds.length; start += 500) {
-    const chunk = liveIds.slice(start, start + 500);
-    const leased = await collections.miningDevices
-      .find({ $or: [{ machineKeyHash: { $in: chunk } }, { deviceKeyHash: { $in: chunk } }] })
-      .toArray()
-      .catch(() => []);
-    addBackstop(leased);
-  }
-  for (let start = 0; start < liveDeviceIds.length; start += 500) {
-    const chunk = liveDeviceIds.slice(start, start + 500);
-    const leased = await collections.miningDevices
-      .find({ publicId: { $in: chunk } })
-      .toArray()
-      .catch(() => []);
-    addBackstop(leased);
   }
   const sameClusterKeys: string[] = [];
   const ambiguousClusterKeys: string[] = [];
@@ -1199,17 +1322,22 @@ export async function assessMiningStart(input: {
   // Every identity this machine is known by must be leased together, so a start that raced ours (or
   // one holding a lease an earlier build took on the browser key) cannot open a second cycle.
   const equivalentLeaseKeys = [...new Set([...ownLeaseKeys, ...sameClusterKeys])];
-  // Network-scoped evidence: which clusters have recently been seen behind this network, whether
-  // another account is already mining behind it, and how much identity churn it has produced. All
-  // bounded indexed lookups — never a scan of the device population.
+  // Network-scoped evidence: whether another account is already mining from this network, read
+  // directly from the live leases (each carries the network its cycle was taken on), so the answer
+  // is complete regardless of how many device records were seen there or how recently. Then: has
+  // *this* cluster itself mined on this network, recently enough to be a resident of it.
   const ownKeySet = new Set(equivalentLeaseKeys);
-  const networkDevices = networkHash ? await findDevicesOnNetwork(collections, networkHash, NETWORK_DEVICE_PROBE_LIMIT) : [];
-  const networkLeaseKeys = [...new Set(networkDevices.flatMap(recordLeaseKeys))];
-  const networkLeases = networkLeaseKeys.length === 0 ? [] : await findLiveLeases(collections, networkLeaseKeys, nowMs);
+  const networkLeases = networkHash ? await findLiveLeasesOnNetwork(collections, networkHash, nowMs) : [];
   const foreignNetworkLease =
     networkLeases.find(
       (lease) => lease.ownerUserId !== input.ownerUserId && !ownKeySet.has(lease.deviceClusterId) && lease.deviceId !== device.publicId,
     ) ?? null;
+  const networkTrust = networkHash ? networkTrustOf(device, networkHash) : null;
+  const networkResident = Boolean(
+    networkTrust &&
+      networkTrustEstablished(networkTrust, config.lmdg.establishMinAdmissions) &&
+      networkTrustFresh(networkTrust, nowMs, config.lmdg.networkTrustFreshnessSeconds * 1000),
+  );
   // A satisfied proof-of-possession this start can present, bound to this cluster (see
   // `verifyProof` and `findBoundProof`). Computed lazily and memoised: it costs two indexed reads
   // and is only ever consulted when a browser key is actually presented — by the risk-challenge
@@ -1220,24 +1348,30 @@ export async function assessMiningStart(input: {
     if (boundProofCache === null) boundProofCache = await findBoundProof();
     return boundProofCache;
   };
-  // Network admission rule. A machine identity that has not earned server-owned trust, appearing on
-  // a network where another account already holds a live lease, is the exact shape of "same physical
-  // environment, second identity" — and it is refused outright.
+  // Network admission rule. A machine identity that has not earned server-owned trust *on this
+  // network*, appearing on a network where another account already holds a live lease, is the exact
+  // shape of "same physical environment, second identity" — and it is refused outright.
   //
   // This rule is deliberately NOT satisfiable by a proof of possession, and that is the whole point
   // of it. A browser key proves continuity of a *storage context*, and an attacker can generate as
   // many as it likes; when a fresh key answering the challenge cleared this rule, the attack was
   // "forge M2, prove possession of your own new key, retry" and it produced a second parallel mining
-  // cycle from one network (measured). Proof therefore never converts this rule into an allow, and
-  // the only exemption is server-owned trust: a cluster the server has already admitted repeatedly
-  // (`established`). A brand-new device behind an occupied network waits for the cycle to end — the
-  // one case browser-only evidence cannot distinguish from a forged identity, and the honest price
-  // of a hard one-environment rule.
-  if (config.lmdg.networkLeaseLock && trustState !== "established" && foreignNetworkLease) {
+  // cycle from one network (measured). Proof therefore never converts this rule into an allow.
+  //
+  // The exemption is not the cluster's global trust state either — that was the *next* bypass:
+  // trust is network- and time-bound. A cluster is a resident of a network only if it committed
+  // admissions or proofs *on that network*, at (or near) its establishment threshold, within the
+  // freshness window. Its credits are written by `creditGrantedStart` after a session and lease
+  // commit, never by a burst of assessed requests, so an attacker cannot mint `established` while no
+  // cycle runs and then surface next to another account's live cycle: the identity must have mined
+  // here, repeatedly, recently. A device that has never mined on this network waits for the cycle to
+  // end — the one case browser-only evidence cannot distinguish from a forged identity, and the
+  // honest price of a hard one-environment rule.
+  if (config.lmdg.networkLeaseLock && !networkResident && foreignNetworkLease) {
     await recordSecurityEvent({
       collections, ownerUserId: input.ownerUserId, sessionId: null,
       eventType: LMDG_EVENT_TYPES.networkInUse, outcome: "failure", correlationId: input.correlationId,
-      metadata: { deviceId: device.publicId, reason: "network_lease_active", trustState, hadBrowserKey: Boolean(evidence.browserKeyPublicKey) },
+      metadata: { deviceId: device.publicId, reason: "network_lease_active", trustState, networkResident, hadBrowserKey: Boolean(evidence.browserKeyPublicKey) },
     }).catch(() => undefined);
     // A refused start is still an observation of this account on this device — the accumulated history
     // is what makes a repeat attempt riskier than the first — but it is recorded as a refusal, so it
@@ -1396,19 +1530,28 @@ export async function assessMiningStart(input: {
   async function findBoundProof(): Promise<boolean> {
     if (!evidence.browserKeyPublicKey) return false;
     const proofWindow = new Date(nowMs - config.lmdg.challengeTtlSeconds * 1000);
-    const proof = await collections.miningDeviceNonces.findOne(
-      { ownerUserId: input.ownerUserId, verifiedBrowserKey: evidence.browserKeyPublicKey, consumedAt: { $gt: proofWindow } },
-      { projection: { consumedAt: 1, deviceKeyHash: 1, boundAnchorHash: 1 } },
-    ).catch(() => null);
-    if (!proof || !proof.consumedAt) return false;
-    // A nonce bound to a device identity only satisfies a start on that same identity — and the
-    // binding is the *server-resolved* anchor recorded when the challenge was issued, never a key
-    // string the client supplied. A proof minted for another enrollment (or a nonce issued before
-    // device evidence was required) does not convert a challenge here.
-    const boundAnchor = (proof as { boundAnchorHash?: string | null }).boundAnchorHash ?? null;
-    if (boundAnchor === null) return false;
-    const resolvedAnchor = input.resolution.machineKey ?? device.anchorHash ?? null;
-    if (resolvedAnchor === null || boundAnchor !== resolvedAnchor) return false;
+    // Newest first, and a few of them: one browser key can have several consumed proofs inside the
+    // window (an earlier one consumed for another enrollment, the one this challenge is asking
+    // for). Reading an unordered single row could return the older one, reject it, and leave a
+    // properly answered challenge unsatisfied forever.
+    const proofs = await collections.miningDeviceNonces
+      .find(
+        { ownerUserId: input.ownerUserId, verifiedBrowserKey: evidence.browserKeyPublicKey, consumedAt: { $gt: proofWindow } },
+        { projection: { consumedAt: 1, deviceKeyHash: 1, boundAnchorHash: 1, boundClusterId: 1, verifiedBrowserKey: 1 }, sort: { consumedAt: -1 }, limit: 5 },
+      )
+      .toArray()
+      .catch(() => []);
+    if (proofs.length === 0) return false;
+    // Every identity the cluster this start resolved to is known by: a machine key that moved and
+    // was accepted as an alias, the latest key it reported, and the immutable anchor. A nonce
+    // records the anchor the server resolved when it was *issued*, which is the anchor — while a
+    // later start compares the current machine key — so the identity-set check, never a single
+    // equality against today's key.
+    const knownAnchors = new Set<string>(
+      [device.anchorHash, device.machineKeyHash, ...(device.aliasHashes ?? []), input.resolution.machineKey].filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      ),
+    );
     // The proof must follow the risk assessment it satisfies: a proof consumed before the latest
     // challenge is stale evidence from an earlier, cleaner-looking session, not an answer to this
     // challenge. (The current decision records its own challenge event below, after this check.)
@@ -1416,8 +1559,30 @@ export async function assessMiningStart(input: {
       { ownerUserId: input.ownerUserId, eventType: LMDG_EVENT_TYPES.challenge },
       { sort: { createdAt: -1 }, projection: { createdAt: 1 } },
     ).catch(() => null);
-    if (lastChallenge && proof.consumedAt.getTime() <= lastChallenge.createdAt.getTime()) return false;
-    return true;
+    const presentedKey = p256KeyFingerprint(evidence.browserKeyPublicKey);
+    for (const proof of proofs) {
+      if (!proof.consumedAt) continue;
+      const boundAnchor = proof.boundAnchorHash ?? null;
+      const boundClusterId = proof.boundClusterId ?? null;
+      if (boundAnchor !== null) {
+        // A nonce bound to a machine identity only satisfies a start on that same identity — and the
+        // binding is the *server-resolved* anchor recorded when the challenge was issued, never a key
+        // string the client supplied.
+        if (!knownAnchors.has(boundAnchor)) continue;
+      } else if (boundClusterId !== null) {
+        // A cluster with no machine anchor (too few machine traits to derive one) is named by the
+        // cluster id and the browser key that resolved it; the proof must be one of that key's.
+        if (boundClusterId !== device.publicId) continue;
+        if (presentedKey === null || p256KeyFingerprint(proof.verifiedBrowserKey ?? null) !== presentedKey) continue;
+      } else {
+        // No binding at all (a nonce issued before device evidence was required): it names nothing and
+        // satisfies nothing here.
+        continue;
+      }
+      if (lastChallenge && proof.consumedAt.getTime() <= lastChallenge.createdAt.getTime()) continue;
+      return true;
+    }
+    return false;
   }
   let finalDecision = result.decision;
   let finalReasonCode = result.reasonCode;
@@ -1477,9 +1642,9 @@ export async function assessMiningStart(input: {
         ip: input.ip,
         correlationId: input.correlationId,
         // Only an allowed admission may fold findings into the record: a rejected request must not be
-        // able to age a cluster or push it toward `suspicious` with fabricated observations.
+        // able to age a cluster or push it toward `suspicious` with fabricated observations. The
+        // admission itself is credited later, by the mining service, once the cycle has committed.
         findings,
-        establishMinAdmissions: config.lmdg.establishMinAdmissions,
       },
       input.resolution.observed,
     );
@@ -1501,12 +1666,16 @@ export async function insertLeaseInSession(input: {
   leaseKeys: string[];
   /** The device record (`publicId`) the lease is taken for — keeps the backstop reachable by record even after a key change. */
   deviceId: string | null;
+  /** Server-observed peer address of this start; hashed here so the network identity never leaves this module. */
+  ip: string | null;
+  secret: Buffer;
   ownerUserId: string;
   miningSessionId: string;
   leaseEndsAt: Date;
   mongoSession: ClientSession;
 }): Promise<void> {
   const now = new Date();
+  const networkHash = input.ip ? ipHash(input.secret, input.ip) : null;
   await input.collections.miningDeviceLeases.insertMany(
     [...new Set(input.leaseKeys)].map((deviceClusterId) => ({
       _id: new ObjectId(),
@@ -1515,6 +1684,7 @@ export async function insertLeaseInSession(input: {
       deviceId: input.deviceId,
       ownerUserId: input.ownerUserId,
       miningSessionId: input.miningSessionId,
+      ipHash: networkHash,
       leasedAt: now,
       leaseEndsAt: input.leaseEndsAt,
       status: "active",

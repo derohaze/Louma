@@ -159,6 +159,8 @@ export function MiningContent() {
   const [error, setError] = useState("");
   /** Cycles whose completion the page has already asked to settle, so it asks exactly once each. */
   const settleRequested = useRef<Set<string>>(new Set());
+  /** When `canSettle` was last re-read per cycle, so a stale flag can be refreshed without busy-looping. */
+  const canSettleRefetchAt = useRef<Map<string, number>>(new Map());
 
   /**
    * Local activity feed: narrates real page events (cycle announcements,
@@ -295,16 +297,22 @@ export function MiningContent() {
     if (session.settledMinor >= live.accruedMinor) return;
     // `canSettle` is a snapshot from the last server read: a cycle that loaded while nothing had
     // accrued yet reports `canSettle: false`, and the per-second countdown advances locally without
-    // refreshing that flag. Re-read once the local view shows a collectable reward so a stale flag
-    // cannot block collection (or leave Collect disabled); while settlement is paused the fresh
-    // read still reports `canSettle: false` and the endpoint is never retried.
-    if (!session.canSettle && !settleRequested.current.has(`refetched-${session.id}`)) {
-      settleRequested.current.add(`refetched-${session.id}`);
-      void refetch();
+    // refreshing that flag. Before the window closes one re-read is enough (nothing has accrued, the
+    // flag may simply be stale). After it closes the flag is re-read on a cooldown instead: a
+    // settlement that was paused can resume while the page stays open, and a single read taken while
+    // it was paused must not pin `canSettle` false forever — that would leave Collect disabled and
+    // the reward uncollected until some unrelated event refreshed the page.
+    if (!session.canSettle) {
+      const lastReadAt = canSettleRefetchAt.current.get(session.id) ?? 0;
+      const due = live.completed ? Date.now() - lastReadAt >= 30_000 : !settleRequested.current.has(`refetched-${session.id}`);
+      if (due) {
+        settleRequested.current.add(`refetched-${session.id}`);
+        canSettleRefetchAt.current.set(session.id, Date.now());
+        void refetch();
+      }
       return;
     }
     if (!live.completed) return;
-    if (!session.canSettle) return;
     if (settleRequested.current.has(session.id)) return;
     if (settleInFlight.current.has(session.id)) return;
     const failedAt = autoSettleFailedAt.current.get(session.id) ?? 0;

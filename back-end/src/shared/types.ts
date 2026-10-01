@@ -451,23 +451,53 @@ export interface MiningDeviceRecord {
   establishedAt?: Date | null;
   /** Bounded counter of consistency/drift findings; feeds the risk engine, never a verdict alone. */
   findingCount?: number;
+  /**
+   * Where and when this cluster actually mined: one entry per network context (server-observed IP
+   * hash) that has credited an admission or proof, most recent first and bounded (see
+   * `MAX_NETWORK_TRUSTS`). This is what the network lock reads — trust is not a property the cluster
+   * carries everywhere, it is "this identity has mined *here*, recently", so an identity that
+   * earned trust elsewhere cannot appear next to another account's live cycle on this network.
+   */
+  networkTrusts?: MiningDeviceNetworkTrust[];
   createdAt: Date;
   updatedAt: Date;
 }
 
 /**
- * One enrollment-rate counter bucket.
+ * Credited mining activity of one device cluster on one network context.
  *
- * `_id` is `${scope}:${window}:${bucketStartMs}`, so the `$inc` upsert that consumes a unit is a
- * single atomic document write — the rate limit is enforced by MongoDB, not by a read-then-write in
- * the application. `expiresAt` is a TTL index: buckets are evidence with a short life, not history.
+ * `admissions` and `proofs` are counts of *committed* events — a start whose session and lease
+ * transaction landed, or a verified single-use proof — never of requests that were merely assessed.
+ */
+export interface MiningDeviceNetworkTrust {
+  /** HMAC of the server-observed peer address; never the address itself. */
+  ipHash: string;
+  admissions: number;
+  proofs: number;
+  firstAt: Date;
+  lastAt: Date;
+}
+
+/**
+ * One consumed enrollment slot.
+ *
+ * The budget is a sliding window, so a slot is a row with the instant it was consumed rather than a
+ * counter on a calendar bucket: counting the rows inside `now - windowMs` is exactly the rolling
+ * limit, with no double-rate window straddling an hour or day boundary. `identityKey` makes the
+ * consumption idempotent per machine within the window (a retry or a racing duplicate of the same
+ * machine consumes one slot, not two), and `expiresAt` is a TTL index — a slot's row is deleted
+ * when it can no longer affect any window.
  */
 export interface MiningDeviceQuotaRecord {
   _id: string;
   scope: "account" | "network";
+  /** The account id or network hash the slot belongs to. */
+  subject: string;
   windowMs: number;
-  bucketStart: Date;
-  count: number;
+  /** Consumed instant; the rolling window counts rows newer than `now - windowMs`. */
+  at: Date;
+  /** The machine identity this slot was spent on (machine key, else browser key hash). */
+  identityKey: string;
   expiresAt: Date;
 }
 
@@ -485,6 +515,12 @@ export interface MiningDeviceLeaseRecord {
   deviceId: string | null;
   ownerUserId: string;
   miningSessionId: string;
+  /**
+   * HMAC of the server-observed peer address the cycle was started from. The network lock reads
+   * live leases by this value: a lease is tied to the network the cycle was actually taken on, so
+   * neither a later IP change nor a truncated device sweep can hide a live cycle from it.
+   */
+  ipHash: string | null;
   leasedAt: Date;
   leaseEndsAt: Date;
   status: MiningDeviceLeaseStatus;

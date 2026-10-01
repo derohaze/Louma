@@ -37,7 +37,17 @@ import {
 } from "./identity.js";
 import { evaluateMiningDeviceTrust } from "./risk.js";
 import { detectEvidenceContradictions, detectSimultaneousTraitReplacement } from "./consistency.js";
-import { consumeEnrollmentBudget, nextTrustState, trustStateOf } from "./enrollment.js";
+import {
+  bumpNetworkTrust,
+  consumeEnrollmentBudget,
+  networkTrustEstablished,
+  networkTrustFresh,
+  networkTrustOf,
+  nextTrustState,
+  trustStateOf,
+} from "./enrollment.js";
+import { MAX_NETWORK_TRUSTS } from "./policy.js";
+import type { MiningDeviceNetworkTrust } from "../../shared/types.js";
 
 /**
  * LMDG unit tests: pure domain logic without a database.
@@ -670,35 +680,50 @@ test("hiding traits on a known device feeds the score without banning on its own
 });
 
 /**
- * Minimal in-memory stand-in for the quota collection: the production path is one `$inc` upsert on a
- * deterministic `_id`, which is exactly what this models (create-or-increment, atomically), so the
- * budget logic can be tested without a database.
+ * Minimal in-memory stand-in for the quota collection: consumption is one insert on a deterministic
+ * `_id` (a duplicate key means "this machine already spent its slot in this window"), the limit is a
+ * count of the rows inside the window, and a rollback is a delete — exactly what the production
+ * queries do, so the budget logic can be tested without a database.
  */
 function fakeQuotas() {
-  const docs = new Map<string, Record<string, number | string | Date>>();
+  const docs = new Map<string, Record<string, unknown>>();
   return {
-    findOneAndUpdate: async (filter: { _id: string }, update: { $inc?: Record<string, number>; $setOnInsert?: Record<string, unknown> }) => {
-      const existing = docs.get(filter._id);
-      if (!existing) {
-        const created = { _id: filter._id, ...(update.$setOnInsert ?? {}), ...(update.$inc ?? {}) } as Record<string, number | string | Date>;
-        docs.set(filter._id, created);
-        return created;
-      }
-      for (const [key, delta] of Object.entries(update.$inc ?? {})) {
-        existing[key] = (existing[key] as number) + delta;
-      }
-      return existing;
+    insertOne: async (doc: Record<string, unknown>) => {
+      const id = String(doc["_id"]);
+      if (docs.has(id)) throw Object.assign(new Error("duplicate key"), { code: 11000 });
+      docs.set(id, { ...doc });
+      return { acknowledged: true, insertedId: id };
+    },
+    countDocuments: async (filter: Record<string, unknown>) => {
+      const at = filter["at"] as { $gt: Date } | undefined;
+      return [...docs.values()].filter(
+        (doc) =>
+          doc["scope"] === filter["scope"] &&
+          doc["subject"] === filter["subject"] &&
+          doc["windowMs"] === filter["windowMs"] &&
+          (at === undefined || (doc["at"] as Date).getTime() > at.$gt.getTime()),
+      ).length;
+    },
+    deleteMany: async (filter: { _id: { $in: string[] } }) => {
+      let deletedCount = 0;
+      for (const id of filter._id.$in) if (docs.delete(id)) deletedCount += 1;
+      return { deletedCount };
     },
     findOne: async (filter: { _id: string }) => docs.get(filter._id) ?? null,
   };
 }
 
-test("enrollment budget: new machine identities are capped per account and per network", async () => {
+test("enrollment budget: new machine identities are capped per account and per network, in a true rolling window", async () => {
   const quotas = fakeQuotas();
   const limits = { maxNewClustersPerAccountPerDay: 3, maxNewClustersPerNetworkPerHour: 2, maxNewClustersPerNetworkPerDay: 10 };
   const now = Date.UTC(2026, 0, 1, 12, 0, 0);
-  const charge = (owner: string, ip: string) =>
-    consumeEnrollmentBudget({ collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: owner, ipHash: ip, nowMs: now });
+  let machine = 0;
+  const charge = (owner: string, ip: string, at = now) => {
+    machine += 1;
+    return consumeEnrollmentBudget({
+      collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: owner, ipHash: ip, identityKey: `machine-${machine}`, nowMs: at,
+    });
+  };
   // One account: the fourth new identity of the day is refused.
   assert.equal((await charge("acct", "ip-1")).allowed, true);
   assert.equal((await charge("acct", "ip-2")).allowed, true);
@@ -712,11 +737,56 @@ test("enrollment budget: new machine identities are capped per account and per n
   const overNetwork = await charge("acct-4", "shared-ip");
   assert.equal(overNetwork.allowed, false);
   assert.equal(overNetwork.hit?.scope, "network");
-  // The counters are bucketed, so the next window starts clean.
-  const nextHour = await consumeEnrollmentBudget({
-    collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: "acct-4", ipHash: "shared-ip", nowMs: now + 60 * 60 * 1000,
+  // A refused enrollment must not spend the refused account's own budget: the account slot charged
+  // before the network limit was checked is rolled back with the refusal.
+  assert.equal((await charge("acct-4", "fresh-ip-1")).allowed, true);
+  assert.equal((await charge("acct-4", "fresh-ip-2")).allowed, true);
+  assert.equal((await charge("acct-4", "fresh-ip-3")).allowed, true, "the account still has its three daily slots");
+  assert.equal((await charge("acct-4", "fresh-ip-4")).allowed, false);
+  // A retry (or a concurrent duplicate) of the *same* machine is the same consumption, not a second
+  // slot: the budget must not shrink because a request was retried.
+  const retried = () => consumeEnrollmentBudget({
+    collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: "acct-5", ipHash: "retry-ip", identityKey: "machine-1", nowMs: now,
   });
-  assert.equal(nextHour.allowed, true);
+  assert.equal((await retried()).allowed, true);
+  assert.equal((await retried()).allowed, true);
+
+  // The window rolls: two enrollments just before the hour boundary and two just after are one
+  // window (the fixed-calendar-bucket version admitted all four under a limit of two).
+  const edge = Date.UTC(2026, 0, 1, 12, 59, 30);
+  assert.equal((await charge("edge-a", "edge-ip", edge - 60_000)).allowed, true);
+  assert.equal((await charge("edge-b", "edge-ip", edge)).allowed, true);
+  const acrossBoundary = await charge("edge-c", "edge-ip", edge + 60_000);
+  assert.equal(acrossBoundary.allowed, false, "the hour boundary does not reset the rolling network window");
+  // ...and it does clear once the first consumptions fall out of the window.
+  assert.equal((await charge("edge-d", "edge-ip", edge + 60 * 60 * 1000)).allowed, true);
+});
+
+test("network trust: an exemption is earned per network, with a threshold and a freshness bound", () => {
+  const now = Date.UTC(2026, 0, 2, 12, 0, 0);
+  let trust: MiningDeviceNetworkTrust[] = [];
+  trust = bumpNetworkTrust(trust, "ip-home", "admission", now);
+  trust = bumpNetworkTrust(trust, "ip-home", "admission", now + 1000);
+  trust = bumpNetworkTrust(trust, "ip-office", "admission", now + 2000);
+  const home = networkTrustOf({ networkTrusts: trust }, "ip-home");
+  assert.ok(home);
+  assert.equal(home.admissions, 2);
+  assert.equal(home.proofs, 0);
+  assert.equal(networkTrustEstablished(home, 3), false, "two admissions are not yet a resident");
+  assert.equal(networkTrustEstablished(home, 2), true);
+  assert.equal(networkTrustEstablished({ admissions: 2, proofs: 1 }, 3), true, "a bound proof substitutes for the third admission");
+  assert.equal(networkTrustEstablished({ admissions: 1, proofs: 1 }, 3), false);
+  // Trust does not travel: the same cluster on another network has no credit there.
+  assert.equal(networkTrustOf({ networkTrusts: trust }, "ip-cafe"), null);
+  // ...and it ages out.
+  assert.equal(networkTrustFresh(home, now + 1000 + 60 * 60 * 1000, 60 * 60 * 1000), true);
+  assert.equal(networkTrustFresh(home, now + 1000 + 60 * 60 * 1000 + 1, 60 * 60 * 1000), false);
+  // Bounded and most recent first: the oldest network falls away rather than accumulating.
+  trust = bumpNetworkTrust(trust, "ip-3", "admission", now + 3000);
+  trust = bumpNetworkTrust(trust, "ip-4", "admission", now + 4000);
+  assert.equal(trust.length, MAX_NETWORK_TRUSTS);
+  assert.equal(trust[0]?.ipHash, "ip-4");
+  assert.equal(networkTrustOf({ networkTrusts: trust }, "ip-home"), null);
 });
 
 test("trust transitions: nothing is born established, and findings cannot silently upgrade a device", () => {

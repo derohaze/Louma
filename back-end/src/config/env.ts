@@ -60,15 +60,24 @@ export interface LmdgConfig {
   /** New device clusters one network context may enroll per rolling 24h. */
   maxNewClustersPerNetworkPerDay: number;
   /**
-   * When a network context already holds another account's live mining lease, a *provisional* new
-   * cluster on that network must answer a satisfied proof-of-possession before it can be admitted;
-   * an established cluster (or a disabled flag) is unaffected. This is the rule that stops
-   * "same network, freshly minted second identity" without locking out a device that can prove the
-   * browser key it already holds.
+   * When a network context already holds another account's live mining lease, a cluster that has not
+   * earned trust *on that network* is refused; neither a proof of possession nor a global
+   * `established` state clears it. The only exemption is server-owned, network-scoped and fresh
+   * credited activity — see `networkTrustFreshnessSeconds`. This is the rule that stops "same
+   * network, freshly minted second identity" without locking out a device that has already mined
+   * here.
    */
   networkLeaseLock: boolean;
   /** Allowed admissions (or bound proofs) a cluster needs before it becomes `established`. */
   establishMinAdmissions: number;
+  /**
+   * How long credited activity on one network keeps a cluster's exemption from the network lock.
+   *
+   * Trust is bound to the network it was earned on *and* to time: a cluster is a resident of a
+   * network only while it has mined there recently. The window must comfortably exceed one mining
+   * cycle, or an actively mining device would lose its own exemption between cycles.
+   */
+  networkTrustFreshnessSeconds: number;
 }
 
 export interface AppConfig {
@@ -301,7 +310,22 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   // The device and account risk checks read a 30-day history window: a shorter observation
   // retention would silently undercount prior activity and lower risk scores, so the floor is the
   // window the engine reasons over, not an arbitrary duration.
-  const observationTtlSeconds = positiveInteger("LMDG_DEVICE_OBSERVATION_TTL_SECONDS", values["LMDG_DEVICE_OBSERVATION_TTL_SECONDS"] ?? String(90 * 24 * 60 * 60), 30 * 24 * 60 * 60);
+  //
+  // An installation that configured a *valid* value under the old range (say seven days) must not
+  // fail to boot because the floor moved: the configured value is raised to the floor with a
+  // warning instead, so the effective retention is the one the engine can reason over and the
+  // operator is told exactly what changed. The value is still validated (a positive integer).
+  const configuredObservationTtlSeconds = positiveInteger(
+    "LMDG_DEVICE_OBSERVATION_TTL_SECONDS",
+    values["LMDG_DEVICE_OBSERVATION_TTL_SECONDS"] ?? String(90 * 24 * 60 * 60),
+  );
+  const observationTtlSecondsFloor = 30 * 24 * 60 * 60;
+  const observationTtlSeconds = Math.max(configuredObservationTtlSeconds, observationTtlSecondsFloor);
+  if (observationTtlSeconds !== configuredObservationTtlSeconds) {
+    console.warn(
+      `LMDG_DEVICE_OBSERVATION_TTL_SECONDS=${configuredObservationTtlSeconds} is below the ${observationTtlSecondsFloor}-second history window the risk engine reads; using ${observationTtlSeconds} so prior device activity is not silently undercounted.`,
+    );
+  }
   const ipIntelTtlSeconds = positiveInteger("LMDG_IP_INTELLIGENCE_TTL_SECONDS", values["LMDG_IP_INTELLIGENCE_TTL_SECONDS"] ?? String(24 * 60 * 60), 300);
   const browserKeyRequired = booleanFlag("LMDG_BROWSER_KEY_REQUIRED", values["LMDG_BROWSER_KEY_REQUIRED"], false);
   const rawMode = (values["LMDG_RISK_MODE"] ?? "enforce").trim();
@@ -315,6 +339,11 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   }
   const networkLeaseLock = booleanFlag("LMDG_NETWORK_LEASE_LOCK", values["LMDG_NETWORK_LEASE_LOCK"], true);
   const establishMinAdmissions = positiveInteger("LMDG_ESTABLISH_MIN_ADMISSIONS", values["LMDG_ESTABLISH_MIN_ADMISSIONS"] ?? "3", 2);
+  const networkTrustFreshnessSeconds = positiveInteger(
+    "LMDG_NETWORK_TRUST_FRESHNESS_SECONDS",
+    values["LMDG_NETWORK_TRUST_FRESHNESS_SECONDS"] ?? String(3 * 24 * 60 * 60),
+    60 * 60,
+  );
   return {
     enabled,
     leaseEnabled,
@@ -332,6 +361,7 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
     maxNewClustersPerNetworkPerDay,
     networkLeaseLock,
     establishMinAdmissions,
+    networkTrustFreshnessSeconds,
   };
 }
 

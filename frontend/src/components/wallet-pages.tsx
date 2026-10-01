@@ -35,7 +35,11 @@ import { FactList, FormMessage, Panel } from "./security-ui";
 
 export function TransferContent() {
   const { wallet, security, refresh, refreshNotifications } = useWallet();
-  const [tab, setTab] = useState<"send" | "receive">("send");
+  // The overview's Receive action links here with `#receive`; honour it on arrival instead of always
+  // opening on Send (the tab the deep link explicitly asked not to see).
+  const [tab, setTab] = useState<"send" | "receive">(() =>
+    typeof window !== "undefined" && window.location.hash === "#receive" ? "receive" : "send",
+  );
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
