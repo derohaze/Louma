@@ -86,6 +86,10 @@ function poolSpecError(value: unknown): string | null {
   if (!isSafePositiveInt(min) || !isSafePositiveInt(max)) return "rewardMinBps and rewardMaxBps must be positive integers";
   if ((min as number) > 50_000 || (max as number) > 50_000) return "reward bands are capped at 50000 (5.0x)";
   if ((min as number) > (max as number)) return "rewardMinBps must not exceed rewardMaxBps";
+  // Pool choice changes variance, not average issuance: the band must straddle 1.0x and average
+  // 1.0x, so e.g. rewardMinBps=rewardMaxBps=50000 (a 5x payout multiplier) is rejected.
+  if ((min as number) > 10_000 || (max as number) < 10_000) return "reward band must include 10000 (1.0x)";
+  if ((min as number) + (max as number) !== 20_000) return "reward band must average 10000 (1.0x)";
   if (!isSafePositiveInt(spec["maxMembers"])) return "maxMembers must be a positive integer";
   return null;
 }
@@ -149,7 +153,15 @@ export async function loadMiningSettings(
   collections: Collections,
   defaults: EnvDefaults,
 ): Promise<ResolvedMiningConfig> {
-  const docs = await collections.miningSettings.find({}).toArray().catch(() => []);
+  let docs: { key: string; value: unknown }[];
+  try {
+    docs = await collections.miningSettings.find({}).toArray();
+  } catch {
+    // A failed read must not substitute the enabling env defaults over a stored pause:
+    // with the store unreadable the safe answer is mining off until the next successful read.
+    console.warn("[mining-settings] read failed; mining and settlement disabled until readable");
+    return { mining: { ...defaults.mining, enabled: false, settlementEnabled: false }, miningPools: defaults.miningPools };
+  }
   const { config, warnings } = resolveMiningSettingsFromDocs(docs, defaults);
   for (const warning of warnings) console.warn(`[mining-settings] ${warning}`);
   return config;

@@ -179,6 +179,20 @@ export async function joinMiningPool(input: {
     { $set: { poolId: pool.id, updatedAt: now }, $setOnInsert: { joinedAt: now } },
     { upsert: true },
   );
+  // The pre-check above races: two joins against one seat can both pass `countDocuments`
+  // before either upsert lands. Enforce the cap after the write by keeping the earliest
+  // joiners; a loser removes its own membership and reports full instead of overfilling.
+  const members = await input.collections.miningPoolMembers
+    .find({ poolId: pool.id }, { projection: { ownerUserId: 1, joinedAt: 1 } })
+    .sort({ joinedAt: 1, _id: 1 })
+    .toArray();
+  if (members.length > pool.maxMembers) {
+    const kept = new Set(members.slice(0, pool.maxMembers).map((m) => m.ownerUserId));
+    if (!kept.has(input.ownerUserId)) {
+      await input.collections.miningPoolMembers.deleteOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
+      throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
+    }
+  }
   return getMiningPoolsState({ collections: input.collections, config: live, ownerUserId: input.ownerUserId });
 }
 

@@ -177,7 +177,15 @@ function QrScanner({ onDetected }: { onDetected: (address: string) => void }) {
       });
       streamRef.current = stream;
       const video = videoRef.current;
-      if (!video) return;
+      if (!video || doneRef.current) {
+        // The scanner was hidden while permission was pending: unmount cleanup ran before a
+        // stream existed, so the grant arriving now must release its tracks immediately
+        // instead of leaving the camera active with no video element.
+        stream.getTracks().forEach((track) => track.stop());
+        if (streamRef.current === stream) streamRef.current = null;
+        setWorking(false);
+        return;
+      }
       video.srcObject = stream;
       await video.play();
       const Detector = (
@@ -313,9 +321,9 @@ export function TransferContent() {
    * original transfer instead of moving funds twice. Only a confirmed transfer ends the attempt.
    */
   const attempt = useRef<{ key: string; fingerprint: string } | null>(null);
-  /** Mirrors the backend's fingerprint: the same fields make two attempts the same one. */
-  const attemptFingerprint = (target: string, amountValue: string) =>
-    JSON.stringify([target.trim().toLowerCase(), amountValue]);
+  /** Mirrors the backend's fingerprint: recipient, amounts, and note make two attempts the same one. */
+  const attemptFingerprint = (target: string, amountValue: string, noteValue: string) =>
+    JSON.stringify([target.trim().toLowerCase(), amountValue, noteValue]);
   const frozen = security?.wallet.status === "frozen";
   const passwordSet = security?.transferPassword.enabled ?? false;
   const authenticatorSet = security?.twoFactor.enabled ?? false;
@@ -466,7 +474,10 @@ export function TransferContent() {
     }
     setBusy("send");
     try {
-      const fingerprint = attemptFingerprint(verifiedAddress, quote.amount);
+      // The note is part of the fingerprint (as on the server): after an ambiguous send,
+      // editing only the note mints a fresh idempotency key instead of reusing the old one
+      // and being rejected as `idempotency_key_reused`.
+      const fingerprint = attemptFingerprint(verifiedAddress, quote.amount, note);
       const pending =
         attempt.current?.fingerprint === fingerprint
           ? attempt.current

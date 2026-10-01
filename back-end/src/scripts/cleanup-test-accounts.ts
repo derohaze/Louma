@@ -61,10 +61,13 @@ async function main(): Promise<void> {
       .toArray();
     const transactionIds = transactions.map((transaction) => transaction.publicId);
 
+    // Only entries that belong to test-owned accounts (or the suites' funding lines) are
+    // removed. Entries are never selected by transaction alone: a transfer between a test
+    // account and a real account shares one transaction id, and matching on it would delete
+    // the real wallet's entry while only fee/treasury projections are reversed.
     const entryFilter = {
       $or: [
         { ledgerAccountId: { $in: accountIds } },
-        { transactionId: { $in: transactionIds } },
         { correlationId: { $regex: `^(${TEST_FUNDING_PREFIXES.join("|")})` } },
       ],
     };
@@ -78,8 +81,12 @@ async function main(): Promise<void> {
     for (const account of sharedAccounts) {
       const mine = entries.filter((entry) => entry.ledgerAccountId === account.publicId);
       if (mine.length === 0) continue;
+      // Signed contribution on the account's normal side (see reconciliation.ts): fee revenue is
+      // credit-normal, the treasury is debit-normal. A treasury funding debit grows its
+      // projection, so its removal must decrement it — not increment it.
+      const multiplier = account.accountType === "system_treasury" ? 1 : -1;
       const deltaMinor = mine.reduce(
-        (total, entry) => total + (entry.side === "credit" ? entry.amountMinor : -entry.amountMinor),
+        (total, entry) => total + (entry.side === "credit" ? -entry.amountMinor : entry.amountMinor) * multiplier,
         0,
       );
       deltas.push({ account, deltaMinor });
@@ -97,24 +104,41 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(report, null, 2));
     if (!apply) return;
 
-    await collections.ledgerEntries.deleteMany(entryFilter);
-    for (const { account, deltaMinor } of deltas) {
-      await collections.ledgerAccounts.updateOne({ _id: account._id }, { $inc: { balanceMinor: -deltaMinor } });
+    // One transaction: entries and their projection adjustments commit together, so a
+    // crash cannot leave balances referencing deleted entries (a rerun only sees remains).
+    // Only transactions with no real-wallet participation are removed; shared transfers keep
+    // their header so the surviving counterparty entry still resolves.
+    const realInvolvedIds = new Set(
+      transactions
+        .filter((tx) => !userIds.includes(tx.senderUserId) || !userIds.includes(tx.receiverUserId))
+        .map((tx) => tx.publicId),
+    );
+    const deletableTransactionIds = transactionIds.filter((id) => !realInvolvedIds.has(id));
+    const session = client.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await collections.ledgerEntries.deleteMany(entryFilter, { session });
+        for (const { account, deltaMinor } of deltas) {
+          if (deltaMinor !== 0) await collections.ledgerAccounts.updateOne({ _id: account._id }, { $inc: { balanceMinor: -deltaMinor } }, { session });
+        }
+        if (deletableTransactionIds.length > 0) await collections.transactions.deleteMany({ publicId: { $in: deletableTransactionIds } }, { session });
+        await collections.ledgerAccounts.deleteMany({ publicId: { $in: accountIds } }, { session });
+        await collections.wallets.deleteMany({ publicId: { $in: walletIds } }, { session });
+        await collections.transferAuthorizations.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.twoFactorUses.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.transferPasswordCredentials.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.twoFactorCredentials.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.notifications.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.securityEvents.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.sessions.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.miningSessions.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.miningSettlements.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.miningDeviceLeases.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        await collections.users.deleteMany({ publicId: { $in: userIds } }, { session });
+      });
+    } finally {
+      await session.endSession();
     }
-    await collections.transactions.deleteMany({ publicId: { $in: transactionIds } });
-    await collections.ledgerAccounts.deleteMany({ publicId: { $in: accountIds } });
-    await collections.wallets.deleteMany({ publicId: { $in: walletIds } });
-    await collections.transferAuthorizations.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.twoFactorUses.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.transferPasswordCredentials.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.twoFactorCredentials.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.notifications.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.securityEvents.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.sessions.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.miningSessions.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.miningSettlements.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.miningDeviceLeases.deleteMany({ ownerUserId: { $in: userIds } });
-    await collections.users.deleteMany({ publicId: { $in: userIds } });
     console.log(JSON.stringify({ applied: true, removedUsers: userIds.length }, null, 2));
   } finally {
     await client.close();

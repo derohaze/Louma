@@ -263,7 +263,7 @@ export async function confirmTwoFactorSetup(input: { collections: Collections; c
   return { enabledAt: now.toISOString(), recoveryCodes };
 }
 
-export async function disableTwoFactor(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown; code: unknown; requestId: string }) {
+export async function disableTwoFactor(input: { collections: Collections; config: AppConfig; ownerUserId: string; password: unknown; code: unknown; requestId: string; mongoClient?: MongoClient }) {
   // Turning the factor off weakens the account, so it asks for both what the account knows (the
   // password) and what the account is (the authenticator or recovery code), not only the code.
   await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
@@ -271,8 +271,27 @@ export async function disableTwoFactor(input: { collections: Collections; config
   if (!verification) throw forbidden("invalid_two_factor_code", "The authenticator or recovery code is incorrect.");
   // The delete is conditional on the recovery-code set that was verified: a code invalidated by a
   // regeneration in the meantime must not still authorise turning the second factor off.
-  const result = await input.collections.twoFactorCredentials.deleteOne({ _id: verification.credential._id, enabledAt: { $ne: null }, recoveryCodeHashes: verification.credential.recoveryCodeHashes });
-  if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
+  // The wallet's `financialVersion` is bumped in the same transaction (as in
+  // setTransferPassword): a transfer holds a snapshot of this credential and compares it inside
+  // its own transaction, so without the shared guard a TOTP-proven transfer could commit after
+  // its factor was disabled here.
+  const deleteFilter = { _id: verification.credential._id, enabledAt: { $ne: null }, recoveryCodeHashes: verification.credential.recoveryCodeHashes };
+  if (input.mongoClient) {
+    const session = input.mongoClient.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const result = await input.collections.twoFactorCredentials.deleteOne(deleteFilter as never, { session });
+        if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
+        await input.collections.wallets.updateOne({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } }, { session });
+      });
+    } finally {
+      await session.endSession();
+    }
+  } else {
+    const result = await input.collections.twoFactorCredentials.deleteOne(deleteFilter as never);
+    if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
+    await input.collections.wallets.updateOne({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } });
+  }
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_disabled", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } });
   return { enabled: false };
 }

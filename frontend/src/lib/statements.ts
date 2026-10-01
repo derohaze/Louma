@@ -13,7 +13,11 @@ import { displayNote } from "@/lib/address-book";
 const MAX_EXPORT_ROWS = 2000;
 
 function csvCell(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  // A sender-controlled note can begin with `=`, `+`, `-`, or `@`: without neutralising the
+  // formula prefix, opening the export in a spreadsheet interprets the sender's text as a
+  // formula. Prefixing with `'` keeps the text visible while preventing evaluation.
+  const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 function toCsv(headers: string[], rows: string[][]): string {
