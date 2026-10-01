@@ -63,6 +63,13 @@ export interface RiskInput {
   consistencyFindings: number;
   /** Another account holds a live lease on a *different* cluster behind this network. */
   networkLeaseConflict: boolean;
+  /**
+   * The live-lease similarity backstop compared only the newest `LIVE_LEASE_BACKSTOP_LIMIT` cycles,
+   * so an older live lease was not compared against this observation. This is not proof of anything —
+   * the identity-keyed checks are complete and unaffected — but on a platform this busy a machine
+   * that also changed its keys cannot be ruled out by comparison, so the request carries the weight.
+   */
+  leaseBackstopTruncated: boolean;
   /** A browser key was presented that this deployment has never verified by proof-of-possession. */
   unverifiedBrowserKey: boolean;
   /** proxycheck detections; all-false when the provider is disabled or degraded. */
@@ -118,6 +125,7 @@ export function evaluateMiningDeviceTrust(input: RiskInput): RiskResult {
   else if (input.consistencyFindings === 2) risk += 10;
   else if (input.consistencyFindings === 1) risk += 5;
   if (input.networkLeaseConflict) risk += 15;
+  if (input.leaseBackstopTruncated) risk += 18;
   if (input.unverifiedBrowserKey) risk += 4;
   if (input.history.accountsOnDevice >= 5) risk += 25;
   else if (input.history.accountsOnDevice >= 3) risk += 12;

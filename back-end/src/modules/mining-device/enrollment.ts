@@ -1,12 +1,7 @@
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { MiningDeviceNetworkTrust, MiningDeviceRecord, MiningDeviceTrustState } from "../../shared/types.js";
 import { isDuplicateKeyError } from "./repository.js";
-import {
-  ENROLLMENT_DAY_MS,
-  ENROLLMENT_HOUR_MS,
-  MAX_CONSISTENCY_FINDINGS,
-  MAX_NETWORK_TRUSTS,
-} from "./policy.js";
+import { ENROLLMENT_DAY_MS, ENROLLMENT_HOUR_MS, MAX_CONSISTENCY_FINDINGS } from "./policy.js";
 
 /**
  * LMDG device enrollment: identity creation is a budgeted, server-owned transition.
@@ -31,15 +26,19 @@ export interface EnrollmentLimitHit {
 /**
  * Consumes one slot in a true sliding window.
  *
- * The slot is a row recording *when* it was spent, and the limit is the count of rows inside the
- * last `windowMs` — so a burst on either side of an hour or day boundary is one window, not two, and
- * the limits mean what their names say. Counting is not read-then-write: the row is inserted first,
- * the window is then counted including it, and a count over the limit is rolled back by the caller
- * (the row is deleted again) — the direction a rate limiter must fail in.
+ * The slot is a row recording *when* it was spent, and the limit is the number of rows inside the
+ * last `windowMs` that a request still relies on — so a burst on either side of an hour or day
+ * boundary is one window, not two, and the limits mean what their names say. Counting is not
+ * read-then-write: the row is inserted first, the window is then counted including it, and a refusal
+ * releases the references this request took — the direction a rate limiter must fail in.
  *
  * The row `_id` includes the machine identity and the window it falls in, so a retry or a concurrent
- * duplicate enrollment of the *same* machine is one consumed slot rather than two. `expiresAt` is a
- * TTL index: a slot's row is deleted once it can no longer affect any window.
+ * duplicate enrollment of the *same* machine joins one slot rather than spending two. `refs` counts
+ * the requests currently relying on that slot, and a refusal releases only its own reference: a
+ * plain delete would have taken the slot away from a concurrent request that had already enrolled
+ * the same machine (its enrollment then stopped counting against the account's day), and leaving the
+ * row in place would have charged a request that never enrolled anything. `expiresAt` is a TTL
+ * index: a slot's row is deleted once it can no longer affect any window.
  */
 async function consumeEnrollmentQuota(input: {
   collections: Pick<Collections, "miningDeviceQuotas">;
@@ -49,9 +48,9 @@ async function consumeEnrollmentQuota(input: {
   limit: number;
   identityKey: string;
   nowMs: number;
-}): Promise<{ allowed: boolean; count: number; insertedId: string | null }> {
+}): Promise<{ allowed: boolean; count: number; slotId: string | null }> {
   const id = `${input.scope}:${input.windowMs}:${Math.floor(input.nowMs / input.windowMs)}:${input.subject}:${input.identityKey}`;
-  let inserted = false;
+  let slotId: string | null = null;
   try {
     await input.collections.miningDeviceQuotas.insertOne({
       _id: id,
@@ -60,19 +59,36 @@ async function consumeEnrollmentQuota(input: {
       windowMs: input.windowMs,
       at: new Date(input.nowMs),
       identityKey: input.identityKey,
+      refs: 1,
       expiresAt: new Date(input.nowMs + input.windowMs),
     });
-    inserted = true;
+    slotId = id;
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error;
+    // Another request already spent this slot — a retry, or a concurrent attempt for the same
+    // machine. Join it and add a reference, so a later release by either request still leaves the
+    // slot counted for the enrollment the other one performed.
+    const joined = await input.collections.miningDeviceQuotas.updateOne({ _id: id }, { $inc: { refs: 1 } });
+    slotId = (joined.matchedCount ?? 0) > 0 ? id : null;
   }
   const count = await input.collections.miningDeviceQuotas.countDocuments({
     scope: input.scope,
     subject: input.subject,
     windowMs: input.windowMs,
+    refs: { $gt: 0 },
     at: { $gt: new Date(input.nowMs - input.windowMs) },
   });
-  return { allowed: count <= input.limit, count, insertedId: inserted ? id : null };
+  return { allowed: count <= input.limit, count, slotId };
+}
+
+/** Releases the references one refused request holds; other requests' references stay counted. */
+async function releaseEnrollmentSlots(
+  collections: Pick<Collections, "miningDeviceQuotas">,
+  slotIds: string[],
+): Promise<void> {
+  await collections.miningDeviceQuotas
+    .updateMany({ _id: { $in: slotIds } }, { $inc: { refs: -1 } })
+    .catch(() => undefined);
 }
 
 export interface EnrollmentBudgetInput {
@@ -99,10 +115,11 @@ export interface EnrollmentBudgetInput {
  *
  * Order matters only for which limit is *reported*; all three are consumed so an attacker cannot
  * exhaust one dimension by staying under the others. A request that is over budget on a later scope
- * rolls back the slots it inserted on earlier scopes, so a refusal never spends the account's budget
- * for an enrollment that did not happen. A missing IP hash (privacy tooling, a socket without a
- * usable peer address) simply has no network budget to charge — it counts against the account only,
- * which is still a hard limit.
+ * releases the references it took on earlier scopes, so a refusal never spends the account's budget
+ * for an enrollment that did not happen, and never takes a slot away from a concurrent request that
+ * did enroll the same machine. A missing IP hash (privacy tooling, a socket without a usable peer
+ * address) simply has no network budget to charge — it counts against the account only, which is
+ * still a hard limit.
  */
 export async function consumeEnrollmentBudget(input: EnrollmentBudgetInput): Promise<{ allowed: boolean; hit: EnrollmentLimitHit | null }> {
   const charges: { scope: EnrollmentScope; subject: string; windowMs: number; limit: number }[] = [
@@ -114,7 +131,7 @@ export async function consumeEnrollmentBudget(input: EnrollmentBudgetInput): Pro
         ]
       : []),
   ];
-  const inserted: string[] = [];
+  const slots: string[] = [];
   for (const charge of charges) {
     const result = await consumeEnrollmentQuota({
       collections: input.collections,
@@ -125,11 +142,9 @@ export async function consumeEnrollmentBudget(input: EnrollmentBudgetInput): Pro
       identityKey: input.identityKey,
       nowMs: input.nowMs,
     });
-    if (result.insertedId) inserted.push(result.insertedId);
+    if (result.slotId) slots.push(result.slotId);
     if (!result.allowed) {
-      if (inserted.length > 0) {
-        await input.collections.miningDeviceQuotas.deleteMany({ _id: { $in: inserted } }).catch(() => undefined);
-      }
+      if (slots.length > 0) await releaseEnrollmentSlots(input.collections, slots);
       return { allowed: false, hit: { scope: charge.scope, limit: charge.limit, count: result.count, windowMs: charge.windowMs } };
     }
   }
@@ -143,11 +158,13 @@ export async function recentClusterChurn(input: {
   nowMs: number;
 }): Promise<number> {
   // The budget rows are the record the gate already keeps; counting the day window is one indexed
-  // count rather than a scan of the device population.
+  // count rather than a scan of the device population. A row whose references all released (a
+  // refused attempt) is not churn: nothing was enrolled on it.
   return input.collections.miningDeviceQuotas.countDocuments({
     scope: "network",
     subject: input.ipHash,
     windowMs: ENROLLMENT_DAY_MS,
+    refs: { $gt: 0 },
     at: { $gt: new Date(input.nowMs - ENROLLMENT_DAY_MS) },
   }).catch(() => 0);
 }
@@ -181,28 +198,27 @@ export function networkTrustFresh(entry: Pick<MiningDeviceNetworkTrust, "lastAt"
 }
 
 /**
- * Records one committed credit against the network it actually happened on.
+ * The entry written when a network first appears on a device's credited activity.
  *
- * Most recent first and bounded to `MAX_NETWORK_TRUSTS`: the entry for the current network is the
- * only one the lock reads, and the oldest networks fall away rather than accumulating.
+ * Credits are not merged in application memory: `applyCommittedCredit` increments the matching entry
+ * in place (or prepends this entry when the network is new) inside one atomic update, so two credits
+ * landing together cannot overwrite each other. Most recent first and bounded to
+ * `MAX_NETWORK_TRUSTS` — the entry for the current network is the only one the lock reads, and the
+ * oldest networks fall away rather than accumulating.
  */
-export function bumpNetworkTrust(
-  entries: MiningDeviceNetworkTrust[] | undefined,
+export function networkTrustEntry(
   ipHashValue: string,
   credit: "admission" | "proof",
   nowMs: number,
-): MiningDeviceNetworkTrust[] {
+): MiningDeviceNetworkTrust {
   const at = new Date(nowMs);
-  const existing = (entries ?? []).find((entry) => entry.ipHash === ipHashValue) ?? null;
-  const updated: MiningDeviceNetworkTrust = existing
-    ? {
-        ...existing,
-        admissions: existing.admissions + (credit === "admission" ? 1 : 0),
-        proofs: existing.proofs + (credit === "proof" ? 1 : 0),
-        lastAt: at,
-      }
-    : { ipHash: ipHashValue, admissions: credit === "admission" ? 1 : 0, proofs: credit === "proof" ? 1 : 0, firstAt: at, lastAt: at };
-  return [updated, ...(entries ?? []).filter((entry) => entry.ipHash !== ipHashValue)].slice(0, MAX_NETWORK_TRUSTS);
+  return {
+    ipHash: ipHashValue,
+    admissions: credit === "admission" ? 1 : 0,
+    proofs: credit === "proof" ? 1 : 0,
+    firstAt: at,
+    lastAt: at,
+  };
 }
 
 /**

@@ -485,8 +485,11 @@ export interface MiningDeviceNetworkTrust {
  * counter on a calendar bucket: counting the rows inside `now - windowMs` is exactly the rolling
  * limit, with no double-rate window straddling an hour or day boundary. `identityKey` makes the
  * consumption idempotent per machine within the window (a retry or a racing duplicate of the same
- * machine consumes one slot, not two), and `expiresAt` is a TTL index — a slot's row is deleted
- * when it can no longer affect any window.
+ * machine consumes one slot, not two). `refs` counts the requests relying on the slot right now: a
+ * refusal releases its own reference instead of deleting the row, so the release cannot take a
+ * slot away from a concurrent request that did enroll on the same machine, while a refused attempt
+ * (all references released) stops counting immediately. `expiresAt` is a TTL index — a slot's row is
+ * deleted when it can no longer affect any window.
  */
 export interface MiningDeviceQuotaRecord {
   _id: string;
@@ -498,6 +501,8 @@ export interface MiningDeviceQuotaRecord {
   at: Date;
   /** The machine identity this slot was spent on (machine key, else browser key hash). */
   identityKey: string;
+  /** Requests currently relying on this slot; only slots with a positive count are spend. */
+  refs: number;
   expiresAt: Date;
 }
 

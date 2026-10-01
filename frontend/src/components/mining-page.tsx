@@ -161,6 +161,8 @@ export function MiningContent() {
   const settleRequested = useRef<Set<string>>(new Set());
   /** When `canSettle` was last re-read per cycle, so a stale flag can be refreshed without busy-looping. */
   const canSettleRefetchAt = useRef<Map<string, number>>(new Map());
+  /** How many times it has been re-read per cycle, so a long pause backs off instead of polling at 30s. */
+  const canSettleRefetchCount = useRef<Map<string, number>>(new Map());
 
   /**
    * Local activity feed: narrates real page events (cycle announcements,
@@ -303,11 +305,19 @@ export function MiningContent() {
     // it was paused must not pin `canSettle` false forever — that would leave Collect disabled and
     // the reward uncollected until some unrelated event refreshed the page.
     if (!session.canSettle) {
+      // Mining switched off cannot settle: `canSettle` is gated on it server-side, so a re-read here
+      // is a request that can never change the answer.
+      if (mining.data?.enabled === false) return;
+      const attempts = canSettleRefetchCount.current.get(session.id) ?? 0;
+      // A server-side settlement pause can last arbitrarily long, so keep checking — but back off, so
+      // an open page costs a handful of requests per hour instead of one every 30 seconds.
+      const cooldownMs = Math.min(30_000 * 2 ** Math.min(attempts, 4), 5 * 60_000);
       const lastReadAt = canSettleRefetchAt.current.get(session.id) ?? 0;
-      const due = live.completed ? Date.now() - lastReadAt >= 30_000 : !settleRequested.current.has(`refetched-${session.id}`);
+      const due = live.completed ? Date.now() - lastReadAt >= cooldownMs : !settleRequested.current.has(`refetched-${session.id}`);
       if (due) {
         settleRequested.current.add(`refetched-${session.id}`);
         canSettleRefetchAt.current.set(session.id, Date.now());
+        canSettleRefetchCount.current.set(session.id, attempts + 1);
         void refetch();
       }
       return;
@@ -332,7 +342,7 @@ export function MiningContent() {
         autoSettleFailedAt.current.set(session.id, Date.now());
       }
     });
-  }, [session, live, settle, pushFeed, refetch]);
+  }, [session, live, settle, pushFeed, refetch, mining.data?.enabled]);
 
   // LMDG: submits multi-signal device evidence with the start; the server alone decides
   // eligibility. A rejection names no account, IP, or detection detail — just the device rule.

@@ -204,7 +204,7 @@ const schemas: Record<string, Document> = {
   mining_device_quotas: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["scope", "subject", "windowMs", "at", "identityKey", "expiresAt"],
+      required: ["scope", "subject", "windowMs", "at", "identityKey", "refs", "expiresAt"],
       properties: {
         // `_id` is the consumed-slot key `${scope}:${windowMs}:${windowIndex}:${subject}:${identity}`,
         // which makes spending the same machine's slot twice inside one window impossible; the
@@ -215,6 +215,9 @@ const schemas: Record<string, Document> = {
         windowMs: { bsonType: ["int", "long", "double"] },
         at: { bsonType: "date" },
         identityKey: { bsonType: "string" },
+        // Requests relying on the slot; a refused request releases its reference instead of
+        // deleting the row, so it cannot take the slot away from a concurrent enrollment.
+        refs: { bsonType: "int", minimum: 0 },
         expiresAt: { bsonType: "date" },
       },
     },
@@ -366,6 +369,113 @@ async function createIndexMigratingOptions(db: Db, collection: string, key: Docu
 /** One backfill write touches at most this many documents, so startup never holds one unbounded op. */
 const PARTICIPANT_BACKFILL_BATCH_SIZE = 500;
 
+/** Same bound for the LMDG transition backfills below; those collections are far smaller. */
+const LMDG_BACKFILL_BATCH_SIZE = 200;
+
+/**
+ * Leases taken by the previous release carry no network, and the network lock reads live leases by
+ * `ipHash` alone — so an un-backfilled lease stays invisible to it for the rest of its 24-hour
+ * cycle, and a new identity could start on a network where another account is already mining. The
+ * owning device's `lastIpHash` is the best available attribution for a cycle taken before the field
+ * existed, and it can only ever *widen* the lock (a lease attributed to a network denies a start the
+ * lock would have allowed), never punch a hole in it. Bounded and idempotent: a lease with no
+ * attributable network is left alone — it expires with its cycle — and every other is written once.
+ */
+async function backfillLeaseNetworks(db: Db): Promise<void> {
+  const leases = db.collection("mining_device_leases");
+  for (;;) {
+    const batch = await leases
+      .find({ status: "active", ipHash: { $exists: false } }, { projection: { _id: 1, deviceId: 1, deviceClusterId: 1 } })
+      .limit(LMDG_BACKFILL_BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) return;
+    const deviceIds = [...new Set(batch.map((lease) => lease["deviceId"]).filter((value): value is string => typeof value === "string" && value.length > 0))];
+    const clusterIds = [...new Set(batch.map((lease) => lease["deviceClusterId"]).filter((value): value is string => typeof value === "string" && value.length > 0))];
+    const devices = await db
+      .collection("mining_devices")
+      .find(
+        { $or: [{ publicId: { $in: deviceIds } }, { machineKeyHash: { $in: clusterIds } }, { deviceKeyHash: { $in: clusterIds } }] },
+        { projection: { publicId: 1, machineKeyHash: 1, deviceKeyHash: 1, lastIpHash: 1 } },
+      )
+      .toArray();
+    // Both the lease's record id and the identity keys it was taken on can name the owner, because a
+    // device whose key changed after the lease was written still owns the cycle it started.
+    const networkByKey = new Map<string, string>();
+    for (const device of devices) {
+      const network = device["lastIpHash"];
+      if (typeof network !== "string" || network.length === 0) continue;
+      for (const key of [device["publicId"], device["machineKeyHash"], device["deviceKeyHash"]]) {
+        if (typeof key === "string" && key.length > 0 && !networkByKey.has(key)) networkByKey.set(key, network);
+      }
+    }
+    let updated = 0;
+    for (const lease of batch) {
+      const network = networkByKey.get(String(lease["deviceId"] ?? "")) ?? networkByKey.get(String(lease["deviceClusterId"] ?? ""));
+      if (!network) continue;
+      await leases.updateOne({ _id: lease["_id"], ipHash: { $exists: false } }, { $set: { ipHash: network } });
+      updated += 1;
+    }
+    // No lease in this batch could be attributed: nothing further can be done for them.
+    if (updated === 0) return;
+    if (batch.length < LMDG_BACKFILL_BATCH_SIZE) return;
+  }
+}
+
+/**
+ * Enrollment slots written by the previous release are fixed-window counters
+ * (`{ scope, windowMs, bucketStart, count }`), not per-machine rows, so the rolling-window count
+ * cannot see them: an account or network that had already spent its limit would get the whole new
+ * limit again inside the same window. Each live legacy counter is converted into the rows it stands
+ * for — `count` placeholder identities stamped inside the current window — so the spend it
+ * represents keeps counting until it ages out. The counter row is then deleted, which makes the
+ * conversion idempotent and stops it from ever counting twice.
+ */
+async function migrateLegacyEnrollmentSlots(db: Db): Promise<void> {
+  // The previous release's rows are described here rather than by the collection's default schema:
+  // their `_id` is a slot key string, not the ObjectId the driver infers from an untyped collection.
+  const quotas = db.collection<{
+    _id: string;
+    scope?: unknown;
+    windowMs?: unknown;
+    bucketStart?: unknown;
+    count?: unknown;
+    expiresAt?: unknown;
+  }>("mining_device_quotas");
+  for (;;) {
+    const batch = await quotas
+      .find(
+        { at: { $exists: false }, bucketStart: { $exists: true } },
+        { projection: { _id: 1, scope: 1, windowMs: 1, bucketStart: 1, count: 1, expiresAt: 1 } },
+      )
+      .limit(LMDG_BACKFILL_BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) return;
+    for (const row of batch) {
+      const scope = row["scope"] === "network" ? "network" : row["scope"] === "account" ? "account" : null;
+      const windowMs = typeof row["windowMs"] === "number" && row["windowMs"] > 0 ? row["windowMs"] : null;
+      const count = typeof row["count"] === "number" && row["count"] > 0 ? Math.floor(row["count"]) : 0;
+      const bucketStart = row["bucketStart"] instanceof Date ? row["bucketStart"] : null;
+      // The legacy key is `${scope}:${windowMs}:${bucketStart}:${subject}`; the subject is the tail.
+      const segments = String(row["_id"]).split(":");
+      const subject = segments.length >= 4 ? segments.slice(3).join(":") : null;
+      if (scope && windowMs && count > 0 && bucketStart && subject) {
+        const now = Date.now();
+        const at = new Date(Math.max(bucketStart.getTime(), now - windowMs + 1));
+        const expiresAt = row["expiresAt"] instanceof Date ? row["expiresAt"] : new Date(at.getTime() + windowMs);
+        for (let index = 0; index < count; index += 1) {
+          await quotas.updateOne(
+            { _id: `${scope}:${windowMs}:${Math.floor(at.getTime() / windowMs)}:${subject}:legacy-${index}` },
+            { $setOnInsert: { scope, subject, windowMs, at, identityKey: `legacy-${index}`, refs: 1, expiresAt } },
+            { upsert: true },
+          );
+        }
+      }
+      await quotas.deleteOne({ _id: row["_id"] });
+    }
+    if (batch.length < LMDG_BACKFILL_BATCH_SIZE) return;
+  }
+}
+
 async function backfillTransactionParticipants(db: Db): Promise<void> {
   // Bounded batches instead of one unbounded `updateMany`: on a database with many legacy
   // transactions a single multi-million-document write must finish before the API listens, and
@@ -417,6 +527,12 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
       },
     ],
   );
+
+  // LMDG transition backfills. Like the wallet backfill above they run before the validators so a
+  // row written by the previous release is never the subject of a rejected update, and each one is
+  // bounded and idempotent so several instances can start together.
+  await backfillLeaseNetworks(db);
+  await migrateLegacyEnrollmentSlots(db);
 
   for (const [name, validator] of Object.entries(schemas)) await ensureCollection(db, name, validator);
 

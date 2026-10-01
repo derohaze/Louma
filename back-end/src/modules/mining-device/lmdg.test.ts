@@ -38,8 +38,8 @@ import {
 import { evaluateMiningDeviceTrust } from "./risk.js";
 import { detectEvidenceContradictions, detectSimultaneousTraitReplacement } from "./consistency.js";
 import {
-  bumpNetworkTrust,
   consumeEnrollmentBudget,
+  networkTrustEntry,
   networkTrustEstablished,
   networkTrustFresh,
   networkTrustOf,
@@ -607,6 +607,7 @@ const RISK_NEUTRAL = {
   identityChurn: 0,
   consistencyFindings: 0,
   networkLeaseConflict: false,
+  leaseBackstopTruncated: false,
   unverifiedBrowserKey: false,
 };
 
@@ -681,12 +682,37 @@ test("hiding traits on a known device feeds the score without banning on its own
 
 /**
  * Minimal in-memory stand-in for the quota collection: consumption is one insert on a deterministic
- * `_id` (a duplicate key means "this machine already spent its slot in this window"), the limit is a
- * count of the rows inside the window, and a rollback is a delete — exactly what the production
+ * `_id` (a duplicate key means "this machine already spent its slot in this window" and joins it as
+ * one more reference), the limit counts the rows inside the window that a request still relies on,
+ * and a refusal releases a reference instead of deleting the row — exactly what the production
  * queries do, so the budget logic can be tested without a database.
  */
 function fakeQuotas() {
   const docs = new Map<string, Record<string, unknown>>();
+  /** One-shot gate a test can set to interleave two requests deterministically. */
+  const hooks: { beforeCount?: () => Promise<void> } = {};
+  const matches = (doc: Record<string, unknown>, filter: Record<string, unknown>): boolean => {
+    const at = filter["at"] as { $gt: Date } | undefined;
+    const refs = filter["refs"] as { $gt: number } | undefined;
+    return (
+      doc["scope"] === filter["scope"] &&
+      doc["subject"] === filter["subject"] &&
+      doc["windowMs"] === filter["windowMs"] &&
+      (at === undefined || (doc["at"] as Date).getTime() > at.$gt.getTime()) &&
+      (refs === undefined || ((doc["refs"] as number) ?? 0) > refs.$gt)
+    );
+  };
+  const addRefs = (filter: { _id: string } | { _id: { $in: string[] } }, refs: number): number => {
+    const ids = typeof filter._id === "string" ? [filter._id] : filter._id.$in;
+    let matched = 0;
+    for (const id of ids) {
+      const doc = docs.get(id);
+      if (!doc) continue;
+      doc["refs"] = ((doc["refs"] as number) ?? 0) + refs;
+      matched += 1;
+    }
+    return matched;
+  };
   return {
     insertOne: async (doc: Record<string, unknown>) => {
       const id = String(doc["_id"]);
@@ -694,22 +720,21 @@ function fakeQuotas() {
       docs.set(id, { ...doc });
       return { acknowledged: true, insertedId: id };
     },
+    updateOne: async (filter: { _id: string }, update: { $inc: { refs: number } }) => {
+      const matchedCount = addRefs(filter, update.$inc.refs);
+      return { matchedCount, modifiedCount: matchedCount };
+    },
+    updateMany: async (filter: { _id: { $in: string[] } }, update: { $inc: { refs: number } }) => {
+      const matchedCount = addRefs(filter, update.$inc.refs);
+      return { matchedCount, modifiedCount: matchedCount };
+    },
     countDocuments: async (filter: Record<string, unknown>) => {
-      const at = filter["at"] as { $gt: Date } | undefined;
-      return [...docs.values()].filter(
-        (doc) =>
-          doc["scope"] === filter["scope"] &&
-          doc["subject"] === filter["subject"] &&
-          doc["windowMs"] === filter["windowMs"] &&
-          (at === undefined || (doc["at"] as Date).getTime() > at.$gt.getTime()),
-      ).length;
+      const gate = hooks.beforeCount;
+      delete hooks.beforeCount;
+      if (gate) await gate();
+      return [...docs.values()].filter((doc) => matches(doc, filter)).length;
     },
-    deleteMany: async (filter: { _id: { $in: string[] } }) => {
-      let deletedCount = 0;
-      for (const id of filter._id.$in) if (docs.delete(id)) deletedCount += 1;
-      return { deletedCount };
-    },
-    findOne: async (filter: { _id: string }) => docs.get(filter._id) ?? null,
+    hooks,
   };
 }
 
@@ -762,12 +787,62 @@ test("enrollment budget: new machine identities are capped per account and per n
   assert.equal((await charge("edge-d", "edge-ip", edge + 60 * 60 * 1000)).allowed, true);
 });
 
+test("enrollment budget: a refusal releases its own reference, never a concurrent enrollment's slot", async () => {
+  const quotas = fakeQuotas();
+  const limits = { maxNewClustersPerAccountPerDay: 1, maxNewClustersPerNetworkPerHour: 1, maxNewClustersPerNetworkPerDay: 5 };
+  const now = Date.UTC(2026, 0, 3, 9, 0, 0);
+  const charge = (owner: string, ip: string, identityKey: string) =>
+    consumeEnrollmentBudget({
+      collections: { miningDeviceQuotas: quotas } as never, limits, ownerUserId: owner, ipHash: ip, identityKey, nowMs: now,
+    });
+  // The network that the racing request is about to hit is already at its hourly limit.
+  assert.equal((await charge("filler", "ip-full", "machine-filler")).allowed, true);
+  // Request A (a new machine for this account) is paused right after it inserted the account slot.
+  // Request B — the same machine, another network — joins that slot and enrolls it; A is then refused
+  // by the network limit and releases its reference. B's enrollment must stay counted against the
+  // account (a delete here took the slot with it, and the account could enroll one machine too many).
+  let raced = false;
+  quotas.hooks.beforeCount = async () => {
+    if (raced) return;
+    raced = true;
+    assert.equal((await charge("race", "ip-other", "machine-x")).allowed, true);
+  };
+  const refusedA = await charge("race", "ip-full", "machine-x");
+  assert.equal(refusedA.allowed, false);
+  assert.equal(refusedA.hit?.scope, "network");
+  assert.equal(raced, true, "the concurrent enrollment ran while the refused request held the slot");
+  // The account's one slot is still spent on machine-x: a different machine cannot reuse it.
+  const second = await charge("race", "ip-third", "machine-y");
+  assert.equal(second.allowed, false);
+  assert.equal(second.hit?.scope, "account");
+});
+
 test("network trust: an exemption is earned per network, with a threshold and a freshness bound", () => {
   const now = Date.UTC(2026, 0, 2, 12, 0, 0);
+  /**
+   * Reference model for what production does atomically in MongoDB: an existing network's entry is
+   * incremented in place, a new one is prepended by `networkTrustEntry`, and the array stays bounded.
+   */
+  const bump = (entries: MiningDeviceNetworkTrust[], ipHash: string, credit: "admission" | "proof", at: number): MiningDeviceNetworkTrust[] => {
+    const existing = entries.find((entry) => entry.ipHash === ipHash);
+    if (existing) {
+      return entries.map((entry) =>
+        entry === existing
+          ? {
+              ...entry,
+              admissions: entry.admissions + (credit === "admission" ? 1 : 0),
+              proofs: entry.proofs + (credit === "proof" ? 1 : 0),
+              lastAt: new Date(at),
+            }
+          : entry,
+      );
+    }
+    return [networkTrustEntry(ipHash, credit, at), ...entries].slice(0, MAX_NETWORK_TRUSTS);
+  };
   let trust: MiningDeviceNetworkTrust[] = [];
-  trust = bumpNetworkTrust(trust, "ip-home", "admission", now);
-  trust = bumpNetworkTrust(trust, "ip-home", "admission", now + 1000);
-  trust = bumpNetworkTrust(trust, "ip-office", "admission", now + 2000);
+  trust = bump(trust, "ip-home", "admission", now);
+  trust = bump(trust, "ip-home", "admission", now + 1000);
+  trust = bump(trust, "ip-office", "admission", now + 2000);
   const home = networkTrustOf({ networkTrusts: trust }, "ip-home");
   assert.ok(home);
   assert.equal(home.admissions, 2);
@@ -782,8 +857,8 @@ test("network trust: an exemption is earned per network, with a threshold and a 
   assert.equal(networkTrustFresh(home, now + 1000 + 60 * 60 * 1000, 60 * 60 * 1000), true);
   assert.equal(networkTrustFresh(home, now + 1000 + 60 * 60 * 1000 + 1, 60 * 60 * 1000), false);
   // Bounded and most recent first: the oldest network falls away rather than accumulating.
-  trust = bumpNetworkTrust(trust, "ip-3", "admission", now + 3000);
-  trust = bumpNetworkTrust(trust, "ip-4", "admission", now + 4000);
+  trust = bump(trust, "ip-3", "admission", now + 3000);
+  trust = bump(trust, "ip-4", "admission", now + 4000);
   assert.equal(trust.length, MAX_NETWORK_TRUSTS);
   assert.equal(trust[0]?.ipHash, "ip-4");
   assert.equal(networkTrustOf({ networkTrusts: trust }, "ip-home"), null);

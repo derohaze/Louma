@@ -564,7 +564,11 @@ export async function startMining(input: {
         devicePublicId: creditDeviceId,
         ip: input.device?.ip ?? null,
       })
-      .catch(() => undefined);
+      // Never fails the committed request, but never disappears either: a credit that was not written
+      // is an admission the device earned and does not get back (see `reportCreditFailure`).
+      .catch((error) => {
+        console.error(`[lmdg] committed credit not written for device ${creditDeviceId}:`, error);
+      });
   }
 
   await recordSecurityEvent({

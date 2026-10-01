@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   ArrowDownLeft01Icon,
@@ -40,6 +40,15 @@ export function TransferContent() {
   const [tab, setTab] = useState<"send" | "receive">(() =>
     typeof window !== "undefined" && window.location.hash === "#receive" ? "receive" : "send",
   );
+  // Keep the address in step with the visible tab: without this the hash still said Receive after the
+  // user switched to Send, so refreshing (or re-opening the link) silently flipped them back to the
+  // tab they had just left.
+  useEffect(() => {
+    const desired = tab === "receive" ? "#receive" : "#send";
+    if (window.location.hash !== desired) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${desired}`);
+    }
+  }, [tab]);
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
