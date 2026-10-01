@@ -1,5 +1,4 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createServerFn } from "@tanstack/react-start";
 import {
   Outlet,
   Link,
@@ -10,7 +9,6 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
-import { parseTheme, readThemeCookie, useTheme, THEME_COOKIE, type Theme } from "@/hooks/use-theme";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -85,38 +83,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
-/**
- * The theme cookie exactly as the request carried it.
- *
- * A server function, because the reader it needs is a server-only module the build refuses to place
- * in the browser bundle — and its handler is the one part of this file that build moves out of that
- * bundle. The browser side is a name it never calls: the theme of a document was already decided by
- * the server that served it, and only a later navigation in the same tab needs to read it again.
- */
-const readThemeFromRequest = createServerFn({ method: "GET" }).handler(async () => {
-  const { getCookie } = await import("@tanstack/react-start/server");
-  return parseTheme(getCookie(THEME_COOKIE) ?? null);
-});
-
-/**
- * The colour scheme the document is rendered with, read from the same cookie on both sides: from the
- * request on the server, and from `document.cookie` in the browser. It is the one input that cannot
- * be reconciled after the fact — `<html>`'s `class` and `color-scheme` — so the two sides have to
- * start from the same value rather than from a guess the other one is later asked to forgive.
- */
-async function readDocumentTheme(): Promise<Theme> {
-  if (typeof document !== "undefined") return readThemeCookie();
-  return readThemeFromRequest();
-}
-
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
-  /**
-   * Read before anything renders, because it decides `<html>`'s attributes. Doing it in a route load
-   * (rather than inside the shell) is what makes the value part of the dehydrated router state: the
-   * first client render then uses the very value the server rendered with, instead of reading storage
-   * again and disagreeing with it by one attribute.
-   */
-  beforeLoad: async () => ({ theme: await readDocumentTheme() }),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -176,25 +143,20 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
-  const { theme: documentTheme } = Route.useRouteContext();
-  /**
-   * The source of truth for these two attributes, on both sides of the wire. `documentTheme` is the
-   * value the server rendered with while this is the first client render (so the markup matches),
-   * and the store takes over from there — a switch flipped anywhere re-renders this element with the
-   * new choice, and the cookie it also writes means the next document is rendered with it as well.
-   *
-   * There is deliberately no bootstrap script writing these attributes before hydration: the server
-   * already rendered them, so the dark-mode visitor gets their theme from the first byte and there is
-   * nothing left for React to disagree with.
-   */
-  const { theme } = useTheme(documentTheme);
   return (
-    <html
-      lang="en"
-      className={theme === "dark" ? "dark" : undefined}
-      style={{ colorScheme: theme }}
-    >
+    <html lang="en">
       <head>
+        {/*
+         * Blocking theme bootstrap: runs before first paint so a returning dark-mode visitor
+         * never sees a white flash. It mirrors `use-theme.ts` (same key, same `.dark` class)
+         * and must stay in sync with it. `colorScheme` keeps UA widgets (scrollbars, inputs)
+         * on the right theme from the very first frame.
+         */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `!function(){try{var t=localStorage.getItem("louma-theme");var d=t==="dark";document.documentElement.classList.toggle("dark",d);document.documentElement.style.colorScheme=d?"dark":"light";}catch(e){}}();`,
+          }}
+        />
         <HeadContent />
         {/*
          * The font stylesheet loads with `media="print"` so it never blocks rendering, then flips

@@ -1,93 +1,59 @@
-import { useCallback, useSyncExternalStore } from "react";
-import { useIsomorphicLayoutEffect } from "@/hooks/use-isomorphic-layout-effect";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 export type Theme = "light" | "dark";
 
-/**
- * The choice lives in a readable cookie rather than only in localStorage, because the server has to
- * render the same document the browser will: `<html>`'s `dark` class is part of the HTML the first
- * paint uses, and a server render can only learn the choice from the request. The cookie holds no
- * secret — this module writes it from the browser — and the worst a forged value does is show its
- * sender the other colour scheme.
- */
-export const THEME_COOKIE = "louma_theme";
-/** The key the choice used before it moved into a cookie; still read once so nothing is thrown away. */
-const LEGACY_STORAGE_KEY = "louma-theme";
-const COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
-const COOKIE_PATTERN = new RegExp(`(?:^|;\\s*)${THEME_COOKIE}=([^;]*)`);
+const STORAGE_KEY = "louma-theme";
 
-/** Anything that is not exactly `dark` is light: a forged or truncated value can only pick a colour. */
-export function parseTheme(value: string | null | undefined): Theme {
-  return value === "dark" ? "dark" : "light";
+/** Read the stored theme without touching the DOM, so SSR stays safe. */
+function readStoredTheme(): Theme {
+  if (typeof window === "undefined") return "light";
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === "dark" || stored === "light") return stored;
+  } catch {
+    // Private mode or blocked storage: fall through to the default.
+  }
+  return "light";
 }
 
-/** The choice this browser holds, as the server rendered it. */
-export function readThemeCookie(): Theme {
-  if (typeof document === "undefined") return "light";
-  return parseTheme(COOKIE_PATTERN.exec(document.cookie)?.[1] ?? null);
-}
-
-/**
- * Writes the choice where the next server render will find it, and keeps the localStorage copy in
- * step: a cookie raises no cross-tab event, and the copy is what the sibling tabs read.
- */
-function persistTheme(theme: Theme): void {
+function applyTheme(theme: Theme): void {
   if (typeof document !== "undefined") {
-    const secure = window.location.protocol === "https:" ? "; secure" : "";
-    document.cookie = `${THEME_COOKIE}=${theme}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax${secure}`;
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    // Keep the UA widgets (scrollbars, form controls) in sync with the app theme.
+    document.documentElement.style.colorScheme = theme;
   }
   try {
-    window.localStorage?.setItem(LEGACY_STORAGE_KEY, theme);
+    window.localStorage?.setItem(STORAGE_KEY, theme);
   } catch {
-    // Storage is a progressive enhancement; the cookie above already carries the choice.
+    // Storage is a progressive enhancement; the class toggle above already applied.
   }
 }
 
 /**
- * What this browser last chose, and whether the answer came from before the choice moved into a
- * cookie — in which case the caller writes it back as one, so the server renders it from then on.
- */
-function readPersistedTheme(): { theme: Theme; migrated: boolean } {
-  if (typeof document === "undefined") return { theme: "light", migrated: false };
-  const fromCookie = COOKIE_PATTERN.exec(document.cookie);
-  if (fromCookie) return { theme: parseTheme(fromCookie[1]), migrated: false };
-  try {
-    const stored = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (stored === "dark" || stored === "light") return { theme: stored, migrated: true };
-  } catch {
-    // See persistTheme.
-  }
-  return { theme: "light", migrated: false };
-}
-
-/**
- * The one shared owner of the dashboard colour scheme.
+ * The single shared owner of the dashboard color scheme.
  *
- * The state lives once at module level: every `useTheme()` consumer subscribes to it, so the Settings
- * switch and the account-menu switch can never disagree about the same choice. Nothing here writes
- * the document's attributes directly — the root shell renders them from this store — which is what
- * lets the server's HTML and the first client render be the same markup (see `useTheme`).
+ * Previously every `useTheme()` call held its own `useState`, so the Settings switch and the
+ * account-menu switch could disagree about the same `document.class` and the same storage key.
+ * The state now lives once at module level: every consumer subscribes to it, so toggling from
+ * anywhere updates everywhere. Toggling adds/removes the `.dark` class on <html> (see
+ * styles.css `@custom-variant dark`), so every `dark:` Tailwind utility flips at once.
  */
-let currentTheme: Theme = readPersistedTheme().theme;
+let currentTheme: Theme = readStoredTheme();
 const listeners = new Set<() => void>();
 let storageHooked = false;
-
-function notify(): void {
-  for (const listener of [...listeners]) listener();
-}
 
 function setSharedTheme(next: Theme): void {
   if (next !== "light" && next !== "dark") return;
   if (currentTheme === next) return;
   currentTheme = next;
-  persistTheme(next);
-  notify();
+  applyTheme(next);
+  for (const notify of [...listeners]) notify();
 }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
+function subscribe(notify: () => void): () => void {
+  listeners.add(notify);
   return () => {
-    listeners.delete(listener);
+    listeners.delete(notify);
   };
 }
 
@@ -98,37 +64,24 @@ function getSnapshot(): Theme {
 function ensureStorageSync(): void {
   if (storageHooked || typeof window === "undefined") return;
   storageHooked = true;
-  // Another tab changing the same key converges this tab — and the cookie this writes is what the
-  // next server render of either tab reads.
+  // Another tab changing the same key converges this tab instead of forking it.
   window.addEventListener("storage", (event) => {
-    if (event.key !== LEGACY_STORAGE_KEY) return;
+    if (event.key !== STORAGE_KEY) return;
     if (event.newValue === "dark" || event.newValue === "light") setSharedTheme(event.newValue);
   });
 }
 
-/**
- * Reads the colour scheme and switches it.
- *
- * `initialTheme` is the value the document was rendered with: the root shell reads it from the
- * request on the server and passes the same dehydrated value on the client, so the first client
- * render reproduces the server's markup exactly instead of re-reading storage and disagreeing with
- * it. The store itself is filled in from this browser's actual choice in a layout effect, before the
- * first paint — the one moment a browser that chose a theme before the choice moved into a cookie can
- * be migrated, at the cost of a flip no one sees because nothing has been painted yet.
- */
-export function useTheme(initialTheme: Theme = "light") {
-  const theme = useSyncExternalStore(subscribe, getSnapshot, () => initialTheme);
+export function useTheme() {
+  const theme = useSyncExternalStore(subscribe, getSnapshot, () => "light" as Theme);
   const isDark = theme === "dark";
 
-  useIsomorphicLayoutEffect(() => {
+  useEffect(() => {
     ensureStorageSync();
-    const persisted = readPersistedTheme();
-    // A choice made before the move is written back as a cookie here, so from the next document load
-    // the server renders it too.
-    if (persisted.migrated) persistTheme(persisted.theme);
-    if (persisted.theme === currentTheme) return;
-    currentTheme = persisted.theme;
-    notify();
+    // Reconcile with whatever is stored now (a sibling tab may have written since load) and
+    // make sure the DOM class matches the store on first mount.
+    currentTheme = readStoredTheme();
+    applyTheme(currentTheme);
+    for (const notify of [...listeners]) notify();
   }, []);
 
   const setTheme = useCallback((next: Theme) => setSharedTheme(next), []);

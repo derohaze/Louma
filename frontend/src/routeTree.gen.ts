@@ -12,14 +12,14 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as MiningRouteRouteImport } from './routes/mining/route'
+import { Route as MiningRouteImport } from './routes/mining'
 import { Route as SignupRouteImport } from './routes/signup'
-import { Route as TransactionsRouteRouteImport } from './routes/transactions/route'
-import { Route as TransferRouteRouteImport } from './routes/transfer/route'
-import { Route as WalletRouteRouteImport } from './routes/wallet/route'
-import { Route as MiningIndexRouteImport } from './routes/mining/index'
-import { Route as MiningHistoryRouteImport } from './routes/mining/history'
+import { Route as TransferRouteImport } from './routes/transfer'
+import { Route as WalletRouteImport } from './routes/wallet'
+import { Route as HistoryIndexRouteImport } from './routes/history/index'
+import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
 import { Route as ProfileIndexRouteImport } from './routes/profile/index'
 import { Route as SecurityIndexRouteImport } from './routes/security/index'
 import { Route as SecurityDevicesRouteImport } from './routes/security/devices'
@@ -27,12 +27,6 @@ import { Route as SecurityFreezeRouteImport } from './routes/security/freeze'
 import { Route as SecurityTransferPasswordRouteImport } from './routes/security/transfer-password'
 import { Route as SecurityTwoFactorRouteImport } from './routes/security/two-factor'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
-import { Route as TransactionsIndexRouteImport } from './routes/transactions/index'
-import { Route as TransactionsTransferIdRouteImport } from './routes/transactions/$transferId'
-import { Route as TransferIndexRouteImport } from './routes/transfer/index'
-import { Route as TransferRecipientsRouteImport } from './routes/transfer/recipients'
-import { Route as WalletIndexRouteImport } from './routes/wallet/index'
-import { Route as WalletAddressBookRouteImport } from './routes/wallet/address-book'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -49,12 +43,17 @@ const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HistoryRouteRoute = HistoryRouteRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MiningRouteRoute = MiningRouteRouteImport.update({
+const MiningRoute = MiningRouteImport.update({
   id: '/mining',
   path: '/mining',
   getParentRoute: () => rootRouteImport,
@@ -64,30 +63,25 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TransactionsRouteRoute = TransactionsRouteRouteImport.update({
-  id: '/transactions',
-  path: '/transactions',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const TransferRouteRoute = TransferRouteRouteImport.update({
+const TransferRoute = TransferRouteImport.update({
   id: '/transfer',
   path: '/transfer',
   getParentRoute: () => rootRouteImport,
 } as any)
-const WalletRouteRoute = WalletRouteRouteImport.update({
+const WalletRoute = WalletRouteImport.update({
   id: '/wallet',
   path: '/wallet',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MiningIndexRoute = MiningIndexRouteImport.update({
+const HistoryIndexRoute = HistoryIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => MiningRouteRoute,
+  getParentRoute: () => HistoryRouteRoute,
 } as any)
-const MiningHistoryRoute = MiningHistoryRouteImport.update({
-  id: '/history',
-  path: '/history',
-  getParentRoute: () => MiningRouteRoute,
+const HistoryTransferIdRoute = HistoryTransferIdRouteImport.update({
+  id: '/$transferId',
+  path: '/$transferId',
+  getParentRoute: () => HistoryRouteRoute,
 } as any)
 const ProfileIndexRoute = ProfileIndexRouteImport.update({
   id: '/profile/',
@@ -125,199 +119,139 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TransactionsIndexRoute = TransactionsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => TransactionsRouteRoute,
-} as any)
-const TransactionsTransferIdRoute = TransactionsTransferIdRouteImport.update({
-  id: '/$transferId',
-  path: '/$transferId',
-  getParentRoute: () => TransactionsRouteRoute,
-} as any)
-const TransferIndexRoute = TransferIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => TransferRouteRoute,
-} as any)
-const TransferRecipientsRoute = TransferRecipientsRouteImport.update({
-  id: '/recipients',
-  path: '/recipients',
-  getParentRoute: () => TransferRouteRoute,
-} as any)
-const WalletIndexRoute = WalletIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => WalletRouteRoute,
-} as any)
-const WalletAddressBookRoute = WalletAddressBookRouteImport.update({
-  id: '/address-book',
-  path: '/address-book',
-  getParentRoute: () => WalletRouteRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/mining': typeof MiningRouteRouteWithChildren
-  '/transactions': typeof TransactionsRouteRouteWithChildren
-  '/transfer': typeof TransferRouteRouteWithChildren
-  '/wallet': typeof WalletRouteRouteWithChildren
+  '/history': typeof HistoryRouteRouteWithChildren
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/mining': typeof MiningRoute
   '/signup': typeof SignupRoute
-  '/mining/history': typeof MiningHistoryRoute
+  '/transfer': typeof TransferRoute
+  '/wallet': typeof WalletRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/transactions/$transferId': typeof TransactionsTransferIdRoute
-  '/transfer/recipients': typeof TransferRecipientsRoute
-  '/wallet/address-book': typeof WalletAddressBookRoute
-  '/mining/': typeof MiningIndexRoute
+  '/history/': typeof HistoryIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/security/': typeof SecurityIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/transactions/': typeof TransactionsIndexRoute
-  '/transfer/': typeof TransferIndexRoute
-  '/wallet/': typeof WalletIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/mining': typeof MiningRoute
   '/signup': typeof SignupRoute
-  '/mining/history': typeof MiningHistoryRoute
+  '/transfer': typeof TransferRoute
+  '/wallet': typeof WalletRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/transactions/$transferId': typeof TransactionsTransferIdRoute
-  '/transfer/recipients': typeof TransferRecipientsRoute
-  '/wallet/address-book': typeof WalletAddressBookRoute
-  '/mining': typeof MiningIndexRoute
+  '/history': typeof HistoryIndexRoute
   '/profile': typeof ProfileIndexRoute
   '/security': typeof SecurityIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/transactions': typeof TransactionsIndexRoute
-  '/transfer': typeof TransferIndexRoute
-  '/wallet': typeof WalletIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/mining': typeof MiningRouteRouteWithChildren
-  '/transactions': typeof TransactionsRouteRouteWithChildren
-  '/transfer': typeof TransferRouteRouteWithChildren
-  '/wallet': typeof WalletRouteRouteWithChildren
+  '/history': typeof HistoryRouteRouteWithChildren
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/mining': typeof MiningRoute
   '/signup': typeof SignupRoute
-  '/mining/history': typeof MiningHistoryRoute
+  '/transfer': typeof TransferRoute
+  '/wallet': typeof WalletRoute
+  '/history/$transferId': typeof HistoryTransferIdRoute
   '/security/devices': typeof SecurityDevicesRoute
   '/security/freeze': typeof SecurityFreezeRoute
   '/security/transfer-password': typeof SecurityTransferPasswordRoute
   '/security/two-factor': typeof SecurityTwoFactorRoute
-  '/transactions/$transferId': typeof TransactionsTransferIdRoute
-  '/transfer/recipients': typeof TransferRecipientsRoute
-  '/wallet/address-book': typeof WalletAddressBookRoute
-  '/mining/': typeof MiningIndexRoute
+  '/history/': typeof HistoryIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/security/': typeof SecurityIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/transactions/': typeof TransactionsIndexRoute
-  '/transfer/': typeof TransferIndexRoute
-  '/wallet/': typeof WalletIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/mining'
-    | '/transactions'
-    | '/transfer'
-    | '/wallet'
+    | '/history'
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/mining'
     | '/signup'
-    | '/mining/history'
+    | '/transfer'
+    | '/wallet'
+    | '/history/$transferId'
     | '/security/devices'
     | '/security/freeze'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/transactions/$transferId'
-    | '/transfer/recipients'
-    | '/wallet/address-book'
-    | '/mining/'
+    | '/history/'
     | '/profile/'
     | '/security/'
     | '/settings/'
-    | '/transactions/'
-    | '/transfer/'
-    | '/wallet/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/mining'
     | '/signup'
-    | '/mining/history'
+    | '/transfer'
+    | '/wallet'
+    | '/history/$transferId'
     | '/security/devices'
     | '/security/freeze'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/transactions/$transferId'
-    | '/transfer/recipients'
-    | '/wallet/address-book'
-    | '/mining'
+    | '/history'
     | '/profile'
     | '/security'
     | '/settings'
-    | '/transactions'
-    | '/transfer'
-    | '/wallet'
   id:
     | '__root__'
     | '/'
-    | '/mining'
-    | '/transactions'
-    | '/transfer'
-    | '/wallet'
+    | '/history'
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/mining'
     | '/signup'
-    | '/mining/history'
+    | '/transfer'
+    | '/wallet'
+    | '/history/$transferId'
     | '/security/devices'
     | '/security/freeze'
     | '/security/transfer-password'
     | '/security/two-factor'
-    | '/transactions/$transferId'
-    | '/transfer/recipients'
-    | '/wallet/address-book'
-    | '/mining/'
+    | '/history/'
     | '/profile/'
     | '/security/'
     | '/settings/'
-    | '/transactions/'
-    | '/transfer/'
-    | '/wallet/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  MiningRouteRoute: typeof MiningRouteRouteWithChildren
-  TransactionsRouteRoute: typeof TransactionsRouteRouteWithChildren
-  TransferRouteRoute: typeof TransferRouteRouteWithChildren
-  WalletRouteRoute: typeof WalletRouteRouteWithChildren
+  HistoryRouteRoute: typeof HistoryRouteRouteWithChildren
   CustomAddressRoute: typeof CustomAddressRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
+  MiningRoute: typeof MiningRoute
   SignupRoute: typeof SignupRoute
+  TransferRoute: typeof TransferRoute
+  WalletRoute: typeof WalletRoute
   SecurityDevicesRoute: typeof SecurityDevicesRoute
   SecurityFreezeRoute: typeof SecurityFreezeRoute
   SecurityTransferPasswordRoute: typeof SecurityTransferPasswordRoute
@@ -350,6 +284,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/history': {
+      id: '/history'
+      path: '/history'
+      fullPath: '/history'
+      preLoaderRoute: typeof HistoryRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -361,7 +302,7 @@ declare module '@tanstack/react-router' {
       id: '/mining'
       path: '/mining'
       fullPath: '/mining'
-      preLoaderRoute: typeof MiningRouteRouteImport
+      preLoaderRoute: typeof MiningRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signup': {
@@ -371,40 +312,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/transactions': {
-      id: '/transactions'
-      path: '/transactions'
-      fullPath: '/transactions'
-      preLoaderRoute: typeof TransactionsRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/transfer': {
       id: '/transfer'
       path: '/transfer'
       fullPath: '/transfer'
-      preLoaderRoute: typeof TransferRouteRouteImport
+      preLoaderRoute: typeof TransferRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/wallet': {
       id: '/wallet'
       path: '/wallet'
       fullPath: '/wallet'
-      preLoaderRoute: typeof WalletRouteRouteImport
+      preLoaderRoute: typeof WalletRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/mining/': {
-      id: '/mining/'
+    '/history/': {
+      id: '/history/'
       path: '/'
-      fullPath: '/mining/'
-      preLoaderRoute: typeof MiningIndexRouteImport
-      parentRoute: typeof MiningRouteRoute
+      fullPath: '/history/'
+      preLoaderRoute: typeof HistoryIndexRouteImport
+      parentRoute: typeof HistoryRouteRoute
     }
-    '/mining/history': {
-      id: '/mining/history'
-      path: '/history'
-      fullPath: '/mining/history'
-      preLoaderRoute: typeof MiningHistoryRouteImport
-      parentRoute: typeof MiningRouteRoute
+    '/history/$transferId': {
+      id: '/history/$transferId'
+      path: '/$transferId'
+      fullPath: '/history/$transferId'
+      preLoaderRoute: typeof HistoryTransferIdRouteImport
+      parentRoute: typeof HistoryRouteRoute
     }
     '/profile/': {
       id: '/profile/'
@@ -455,116 +389,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/transactions/': {
-      id: '/transactions/'
-      path: '/'
-      fullPath: '/transactions/'
-      preLoaderRoute: typeof TransactionsIndexRouteImport
-      parentRoute: typeof TransactionsRouteRoute
-    }
-    '/transactions/$transferId': {
-      id: '/transactions/$transferId'
-      path: '/$transferId'
-      fullPath: '/transactions/$transferId'
-      preLoaderRoute: typeof TransactionsTransferIdRouteImport
-      parentRoute: typeof TransactionsRouteRoute
-    }
-    '/transfer/': {
-      id: '/transfer/'
-      path: '/'
-      fullPath: '/transfer/'
-      preLoaderRoute: typeof TransferIndexRouteImport
-      parentRoute: typeof TransferRouteRoute
-    }
-    '/transfer/recipients': {
-      id: '/transfer/recipients'
-      path: '/recipients'
-      fullPath: '/transfer/recipients'
-      preLoaderRoute: typeof TransferRecipientsRouteImport
-      parentRoute: typeof TransferRouteRoute
-    }
-    '/wallet/': {
-      id: '/wallet/'
-      path: '/'
-      fullPath: '/wallet/'
-      preLoaderRoute: typeof WalletIndexRouteImport
-      parentRoute: typeof WalletRouteRoute
-    }
-    '/wallet/address-book': {
-      id: '/wallet/address-book'
-      path: '/address-book'
-      fullPath: '/wallet/address-book'
-      preLoaderRoute: typeof WalletAddressBookRouteImport
-      parentRoute: typeof WalletRouteRoute
-    }
   }
 }
 
-interface MiningRouteRouteChildren {
-  MiningHistoryRoute: typeof MiningHistoryRoute
-  MiningIndexRoute: typeof MiningIndexRoute
+interface HistoryRouteRouteChildren {
+  HistoryTransferIdRoute: typeof HistoryTransferIdRoute
+  HistoryIndexRoute: typeof HistoryIndexRoute
 }
 
-const MiningRouteRouteChildren: MiningRouteRouteChildren = {
-  MiningHistoryRoute: MiningHistoryRoute,
-  MiningIndexRoute: MiningIndexRoute,
+const HistoryRouteRouteChildren: HistoryRouteRouteChildren = {
+  HistoryTransferIdRoute: HistoryTransferIdRoute,
+  HistoryIndexRoute: HistoryIndexRoute,
 }
 
-const MiningRouteRouteWithChildren = MiningRouteRoute._addFileChildren(
-  MiningRouteRouteChildren,
-)
-
-interface TransactionsRouteRouteChildren {
-  TransactionsTransferIdRoute: typeof TransactionsTransferIdRoute
-  TransactionsIndexRoute: typeof TransactionsIndexRoute
-}
-
-const TransactionsRouteRouteChildren: TransactionsRouteRouteChildren = {
-  TransactionsTransferIdRoute: TransactionsTransferIdRoute,
-  TransactionsIndexRoute: TransactionsIndexRoute,
-}
-
-const TransactionsRouteRouteWithChildren =
-  TransactionsRouteRoute._addFileChildren(TransactionsRouteRouteChildren)
-
-interface TransferRouteRouteChildren {
-  TransferRecipientsRoute: typeof TransferRecipientsRoute
-  TransferIndexRoute: typeof TransferIndexRoute
-}
-
-const TransferRouteRouteChildren: TransferRouteRouteChildren = {
-  TransferRecipientsRoute: TransferRecipientsRoute,
-  TransferIndexRoute: TransferIndexRoute,
-}
-
-const TransferRouteRouteWithChildren = TransferRouteRoute._addFileChildren(
-  TransferRouteRouteChildren,
-)
-
-interface WalletRouteRouteChildren {
-  WalletAddressBookRoute: typeof WalletAddressBookRoute
-  WalletIndexRoute: typeof WalletIndexRoute
-}
-
-const WalletRouteRouteChildren: WalletRouteRouteChildren = {
-  WalletAddressBookRoute: WalletAddressBookRoute,
-  WalletIndexRoute: WalletIndexRoute,
-}
-
-const WalletRouteRouteWithChildren = WalletRouteRoute._addFileChildren(
-  WalletRouteRouteChildren,
+const HistoryRouteRouteWithChildren = HistoryRouteRoute._addFileChildren(
+  HistoryRouteRouteChildren,
 )
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  MiningRouteRoute: MiningRouteRouteWithChildren,
-  TransactionsRouteRoute: TransactionsRouteRouteWithChildren,
-  TransferRouteRoute: TransferRouteRouteWithChildren,
-  WalletRouteRoute: WalletRouteRouteWithChildren,
+  HistoryRouteRoute: HistoryRouteRouteWithChildren,
   CustomAddressRoute: CustomAddressRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
+  MiningRoute: MiningRoute,
   SignupRoute: SignupRoute,
+  TransferRoute: TransferRoute,
+  WalletRoute: WalletRoute,
   SecurityDevicesRoute: SecurityDevicesRoute,
   SecurityFreezeRoute: SecurityFreezeRoute,
   SecurityTransferPasswordRoute: SecurityTransferPasswordRoute,

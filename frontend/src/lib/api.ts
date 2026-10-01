@@ -77,33 +77,6 @@ export interface ApiTransaction {
   completedAt: string;
 }
 
-/**
- * What the staged transfer form needs before it can offer an amount: the resolved recipient, and —
- * once an amount is offered — the tax, the balance, and what the balance becomes, all computed by
- * the same backend arithmetic the transfer itself uses.
- */
-export interface ApiTransferPreview {
-  recipient: { address: string; displayName: string | null };
-  quote: {
-    amount: string;
-    fee: string;
-    netAmount: string;
-    balance: string;
-    balanceAfter: string;
-    sufficient: boolean;
-  } | null;
-  /**
-   * The server's approval of exactly this intent. The transfer consumes it, and the page only
-   * carries it: the recipient, amount and fee the transfer executes are the ones inside it, not
-   * whatever the form holds by the time the request is sent.
-   */
-  authorization: {
-    id: string;
-    expiresAt: string;
-    intent: { recipientAddress: string; amount: string; fee: string; netAmount: string; currency: string };
-  } | null;
-}
-
 export interface ApiSecurityOverview {
   wallet: { status: "active" | "frozen" };
   twoFactor: { enabled: boolean; enabledAt: string | null; recoveryCodesRemaining: number };

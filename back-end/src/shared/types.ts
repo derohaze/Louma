@@ -23,39 +23,6 @@ export const MAX_NOTE_LENGTH = 240;
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const PENDING_2FA_TTL_MS = 5 * 60 * 1000;
-/**
- * How long a server-issued transfer authorization stays usable, in milliseconds.
- *
- * Ten minutes is the window between the sender seeing the quote the server computed (recipient,
- * amount, fee, net) and proving a transfer credential over it. It is long enough for a slow
- * authenticator entry and short enough that an authorization left behind on a shared device is not
- * a standing licence to move that amount later. Validity is enforced by the conditional consume in
- * the transfer's own transaction, never by a timer.
- */
-export const TRANSFER_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
-/**
- * How long a consumed or expired transfer authorization is kept for audit, in milliseconds.
- *
- * The row is the only record tying a factor proof to the exact intent it authorised, so it outlives
- * its own validity by a month: an incident review can still answer "what did this approval cover?"
- * long after the transfer settled. Short enough that the collection stays proportional to a month of
- * quoting rather than growing for the life of the deployment.
- */
-export const TRANSFER_AUTHORIZATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-/**
- * The RFC 6238 time step, in seconds. It is what a consumed authenticator code is recorded against:
- * one accepted step authorises exactly one financial operation, no matter how many requests race.
- */
-export const TOTP_PERIOD_SECONDS = 30;
-/**
- * How long a consumed authenticator step is remembered, in milliseconds.
- *
- * Only replay inside the accepted window matters for correctness — the row is inserted in the same
- * transaction as the money it authorised — so the record is purely audit after thirty seconds. A
- * week keeps the trail long enough to correlate with the security log (which is kept for months)
- * without keeping every step of every account forever.
- */
-export const TWO_FACTOR_USE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type AccountStatus = "active" | "suspended";
 export type WalletStatus = "active" | "frozen";
@@ -171,9 +138,6 @@ export interface ReconciliationIssue {
   kind: "projection_mismatch" | "negative_balance" | "unbalanced_transaction" | "empty_transaction" | "orphan_entry" | "duplicate_transaction" | "currency_mismatch" | "invalid_reference";
   severity: "error" | "critical";
   detail: string;
-  /** Set on `orphan_entry`: the ids the finding is about, so callers can attribute it without parsing `detail`. */
-  entryPublicId?: string;
-  transactionId?: string;
 }
 
 export interface TransactionRecord {
@@ -599,109 +563,6 @@ export interface MiningDeviceObservationRecord {
   country: string | null;
   riskScore: number;
   decision: string;
-}
-
-/**
- * The financially significant content of one transfer, as the server computed it.
- *
- * Every field here is derived server-side — the recipient from the canonical address the wallet
- * holds, the amounts from the ledger's own arithmetic — and the authorization names exactly this
- * object, so a request cannot authorise one intent and execute another.
- */
-export interface TransferIntent {
-  recipientWalletId: string;
-  recipientUserId: string;
-  /** The wallet's canonical address (`customAddress` when it has one), never the spelling typed. */
-  recipientAddress: string;
-  amountMinor: number;
-  feeMinor: number;
-  netAmountMinor: number;
-  currency: typeof CURRENCY;
-  note: string;
-}
-
-/**
- * A server-issued, single-use approval of one transfer intent.
- *
- * It is the challenge half of the transfer flow: the preview endpoint computes the intent and issues
- * one of these, the sender proves a credential over it, and the transfer's own transaction consumes
- * it atomically with the money. Because consumption happens inside the financial transaction, a
- * transfer that fails does not burn the approval — and two requests cannot both execute one.
- *
- * The credential versions are the snapshot the proof was taken under: a transfer refuses to settle
- * when the password or the second factor was replaced after the proof (see setTransferPassword and
- * the two-factor endpoints), which is what stops a transfer in flight from landing under a
- * credential its owner has just revoked.
- */
-export interface TransferAuthorizationRecord {
-  _id: ObjectId;
-  publicId: string;
-  ownerUserId: string;
-  senderWalletId: string;
-  intent: TransferIntent;
-  /** sha256 over the canonical intent: the idempotency fingerprint and the mismatch guard. */
-  intentHash: string;
-  passwordChangedAt: Date | null;
-  twoFactorEnabledAt: Date | null;
-  consumedAt: Date | null;
-  consumedByTransactionPublicId: string | null;
-  correlationId: string;
-  createdAt: Date;
-  expiresAt: Date;
-  /** TTL anchor (`expiresAt` + retention). Never used for validity. */
-  retainUntil: Date;
-}
-
-/**
- * Which financial surface a consumed authenticator step belonged to. Scoped so a login-time code
- * and a transfer-time code are separate consumption windows (see `consumeTransferProof`).
- */
-export type TwoFactorUsePurpose = "transfer";
-
-/**
- * One accepted authenticator time step, consumed. The unique index on
- * `(ownerUserId, purpose, timeStep)` is the database guarantee that an accepted code cannot authorise
- * a second financial operation inside the same step — not a check-then-insert.
- */
-export interface TwoFactorUseRecord {
-  _id: ObjectId;
-  ownerUserId: string;
-  purpose: TwoFactorUsePurpose;
-  /** RFC 6238 step the accepted code belonged to: floor(epoch / TOTP_PERIOD_SECONDS). */
-  timeStep: number;
-  /** The intent this step authorised, so a step can never be spent on a different transfer. */
-  intentHash: string;
-  correlationId: string;
-  createdAt: Date;
-  /** TTL anchor. Never used for validity: the accepted step is decided by the server clock. */
-  retainUntil: Date;
-}
-
-/**
- * Operator controls for the financial surfaces, held as one document so an incident can stop writes
- * without a deploy. Absence of the document means "not paused": a database that has never been told
- * to stop must serve transfers.
- */
-export interface FinancialControlsRecord {
-  _id: "global";
-  transfersPaused: boolean;
-  payoutsPaused: boolean;
-  reason: string;
-  updatedAt: Date;
-  updatedBy: string;
-}
-
-/** The approval the preview endpoint hands the wizard; the id is what the transfer consumes. */
-export interface PublicTransferAuthorization {
-  id: string;
-  expiresAt: string;
-  intent: {
-    recipientAddress: string;
-    amount: string;
-    fee: string;
-    netAmount: string;
-    currency: typeof CURRENCY;
-  };
 }
 
 export interface NotificationRecord {

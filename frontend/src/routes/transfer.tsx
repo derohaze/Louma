@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/components/wallet-shell";
 import { TransferContent } from "@/components/wallet-pages";
-export const Route = createFileRoute("/transfer/")({
+export const Route = createFileRoute("/transfer")({
   head: () => ({
     meta: [
       { title: "Transfer LMA" },

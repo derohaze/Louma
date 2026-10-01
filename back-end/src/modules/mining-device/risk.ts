@@ -125,20 +125,7 @@ export function evaluateMiningDeviceTrust(input: RiskInput): RiskResult {
   else if (input.consistencyFindings === 2) risk += 10;
   else if (input.consistencyFindings === 1) risk += 5;
   if (input.networkLeaseConflict) risk += 15;
-  // The truncated similarity backstop is a gap in one heuristic comparison, not evidence about
-  // this caller: on a platform with more than 200 live leases it would otherwise add risk to every
-  // start. It only matters when this observation could plausibly be an uncompared lease holder
-  // whose keys changed — an ambiguous correlation, a swapped key, moved machine traits, hidden
-  // high-entropy fields, or an unverified browser key. Without such caller-specific uncertainty the
-  // identity-keyed checks already compared everything relevant, so unrelated load adds nothing.
-  const backstopRelevant =
-    input.clusterVerdict === "ambiguous" ||
-    input.missingHighEntropyFields ||
-    input.keyChangedForKnownDevice ||
-    input.uaChangedForKnownMachine ||
-    input.renderingTamperForKnownMachine ||
-    input.unverifiedBrowserKey;
-  if (input.leaseBackstopTruncated && backstopRelevant) risk += 18;
+  if (input.leaseBackstopTruncated) risk += 18;
   if (input.unverifiedBrowserKey) risk += 4;
   if (input.history.accountsOnDevice >= 5) risk += 25;
   else if (input.history.accountsOnDevice >= 3) risk += 12;

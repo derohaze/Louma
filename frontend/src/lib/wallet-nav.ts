@@ -2,9 +2,6 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
   BitcoinCpuIcon,
-  BookBookmark01Icon,
-  ChartIncreaseIcon,
-  FavouriteIcon,
   Home04Icon,
   QrCodeIcon,
   Settings01Icon,
@@ -20,12 +17,9 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 export type NavHref =
   | "/"
   | "/transfer"
-  | "/transfer/recipients"
   | "/mining"
-  | "/mining/history"
   | "/wallet"
-  | "/wallet/address-book"
-  | "/transactions"
+  | "/history"
   | "/custom-address"
   | "/profile"
   | SecurityHref
@@ -85,12 +79,6 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         searchTerms: "balance receiving address",
       },
       {
-        title: "Address Book",
-        href: "/wallet/address-book",
-        icon: BookBookmark01Icon,
-        searchTerms: "saved addresses recipients favorites send",
-      },
-      {
         title: "Custom Address",
         href: "/custom-address",
         icon: QrCodeIcon,
@@ -99,20 +87,14 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     ],
   },
   {
-    title: "Transfer",
+    title: "Transfers",
     icon: ArrowUpRight01Icon,
     items: [
       {
         title: "Transfer",
         href: "/transfer",
         icon: ArrowUpRight01Icon,
-        searchTerms: "send transfer receive funds",
-      },
-      {
-        title: "Recipients",
-        href: "/transfer/recipients",
-        icon: FavouriteIcon,
-        searchTerms: "saved recent recipients favorites addresses",
+        searchTerms: "send receive funds",
       },
     ],
   },
@@ -126,21 +108,15 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         icon: BitcoinCpuIcon,
         searchTerms: "mining rewards rate cycle earn lma earn",
       },
-      {
-        title: "History",
-        href: "/mining/history",
-        icon: ChartIncreaseIcon,
-        searchTerms: "mining cycles history earnings collected past",
-      },
     ],
   },
   {
-    title: "Transactions",
+    title: "History",
     icon: TransactionHistoryIcon,
     items: [
       {
         title: "Transactions",
-        href: "/transactions",
+        href: "/history",
         icon: TransactionHistoryIcon,
         searchTerms: "transactions history transfers search filter",
       },
