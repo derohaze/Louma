@@ -144,7 +144,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * already on screen reports itself through the screen's own message, instead of replacing a
    * working wallet with an error page.
    */
-  const sessionRejected = profile.error instanceof ApiError && profile.error.status === 401;
+  /**
+   * True when the API has refused this session or cannot answer for it at all. A 401 is the API
+   * saying "no session"; a 404 means the request never reached it (a backend that is not proxied),
+   * which is equally not a session worth rendering. Both send the visitor to the auth page instead
+   * of leaving them on a wallet-shaped error. A 5xx or transport fault is deliberately excluded: a
+   * working session can be behind one, and the screen's own error reports it.
+   */
+  const sessionRejected =
+    profile.error instanceof ApiError &&
+    (profile.error.status === 401 || profile.error.status === 404);
   const loading = !profile.data && (profile.isPending || sessionRejected);
   const failure = [profile, transactions, security].find(
     (query) => query.error && !query.data,
@@ -248,7 +257,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    */
   const handledRejection = useRef(false);
   useEffect(() => {
-    if (!profile.error || !(profile.error instanceof ApiError) || profile.error.status !== 401)
+    if (
+      !(profile.error instanceof ApiError) ||
+      (profile.error.status !== 401 && profile.error.status !== 404)
+    )
       return;
     if (handledRejection.current) return;
     handledRejection.current = true;
