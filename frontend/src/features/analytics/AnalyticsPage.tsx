@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Area,
@@ -15,7 +15,7 @@ import {
   ArrowUpRight01Icon,
   BitcoinCpuIcon,
 } from "@hugeicons/core-free-icons";
-import { useWallet, type Transaction } from "@/shared/hooks";
+import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
 import {
   moneyChartValue,
   shortAddress,
@@ -27,6 +27,7 @@ import {
   hasBrowserSession,
   serverStateFreshness,
   serverStateKeys,
+  type MiningHistoryPage,
 } from "@/shared/lib/platform";
 import { Icon } from "@/shared/ui/page";
 
@@ -150,8 +151,8 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
           day: "numeric",
           month: "short",
         }).format(new Date(b.start)),
-        income: Math.round(b.income * 100) / 100,
-        expense: Math.round(b.expense * 100) / 100,
+        income: Math.round(b.income * 10_000) / 10_000,
+        expense: Math.round(b.expense * 10_000) / 10_000,
         mined: b.mined,
       })),
     [buckets],
@@ -241,13 +242,45 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
 }
 
 export function AnalyticsContent() {
-  const { transactions } = useWallet();
-  const history = useQuery({
+  const { transactions, nextCursor, wallet } = useWallet();
+  const history = useInfiniteQuery<
+    MiningHistoryPage,
+    Error,
+    InfiniteData<MiningHistoryPage, string | null>,
+    typeof serverStateKeys.miningHistory,
+    string | null
+  >({
     queryKey: serverStateKeys.miningHistory,
-    queryFn: () => accountFetchers.miningHistory(null),
+    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: serverStateFreshness.miningHistoryMs,
     enabled: hasBrowserSession,
   });
+  // The totals below read the shared lists, so the walks feed every dashboard at once: totals
+  // computed from only the loaded pages would understate income, expenses, counts, and mining
+  // for any wallet whose window reaches past the first page.
+  useHistoryWalk({
+    queryKey: serverStateKeys.transactions,
+    fetchPage: accountFetchers.transactions,
+    nextCursor: (page) => page.nextCursor,
+    cap: 25,
+    enabled: wallet !== null,
+    tailCursor: nextCursor,
+  });
+  const miningTailCursor = history.data?.pages.at(-1)?.nextCursor ?? null;
+  useHistoryWalk<MiningHistoryPage>({
+    queryKey: serverStateKeys.miningHistory,
+    fetchPage: accountFetchers.miningHistory,
+    nextCursor: (page) => page.nextCursor,
+    cap: 10,
+    enabled: wallet !== null,
+    tailCursor: miningTailCursor,
+  });
+  const sessions = useMemo(
+    () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
+    [history.data],
+  );
   const [rangeId, setRangeId] = useState(RANGES[2]!.id);
   const range = RANGES.find((r) => r.id === rangeId) ?? RANGES[2]!;
   const [cardsIn, setCardsIn] = useState(false);
@@ -261,7 +294,7 @@ export function AnalyticsContent() {
     return { from: to - range.days * DAY_MS, to };
   }, [range]);
 
-  /** One pass over transfers + settled mining cycles, bucketed by day slice. */
+  /** One pass over transfers + paid-out mining cycles, bucketed by day slice. */
   const buckets = useMemo<Bucket[]>(() => {
     const span = window.to - window.from;
     const list: Bucket[] = Array.from({ length: range.buckets }, (_, i) => ({
@@ -279,15 +312,20 @@ export function AnalyticsContent() {
       if (t.direction === "received") bucket.income += moneyChartValue(t.netAmount);
       else bucket.expense += moneyChartValue(t.amount);
     }
-    for (const s of history.data?.sessions ?? []) {
-      if (s.status !== "settled" || !s.lastSettledAt) continue;
+    // A cycle can carry wallet-credited payouts while still `active` (collecting mid-cycle
+    // never closes it), so paid-out means a positive settled amount with a settlement time —
+    // not a terminal status. The cumulative settled amount is booked at its latest settlement,
+    // because per-settlement timestamps are not exposed: earlier partial payouts inside a
+    // multi-payout cycle land in the latest window rather than the one that earned them.
+    for (const s of sessions) {
+      if (s.settledMinor <= 0 || !s.lastSettledAt) continue;
       const time = new Date(s.lastSettledAt).getTime();
       if (time < window.from || time >= window.to) continue;
       const i = Math.min(range.buckets - 1, Math.floor(((time - window.from) / span) * range.buckets));
       list[i]!.mined += moneyChartValue(s.settled);
     }
     return list;
-  }, [transactions, history.data, window, range]);
+  }, [transactions, sessions, window, range]);
 
   const totals = useMemo(() => {
     const income = buckets.reduce((s, b) => s + b.income, 0);
@@ -320,8 +358,9 @@ export function AnalyticsContent() {
       .slice(0, 4);
   }, [transactions, window]);
 
-  const settledSessions = (history.data?.sessions ?? []).filter(
-    (s) => s.status === "settled" && s.lastSettledAt && new Date(s.lastSettledAt).getTime() >= window.from,
+  const settledSessions = sessions.filter(
+    (s) =>
+      s.settledMinor > 0 && s.lastSettledAt && new Date(s.lastSettledAt).getTime() >= window.from,
   );
   const minedTotal = sumMoney(settledSessions.map((s) => s.settled));
 
@@ -467,7 +506,7 @@ export function AnalyticsContent() {
         <section className={`${CARD} flex flex-col p-5`}>
           <h2 className="font-display text-[18px] font-semibold">Mining inside the window</h2>
           <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-            Settled cycles against transfers in the same {range.days} days
+            Collected mining against transfers in the same {range.days} days
           </p>
           <div className="mt-5 space-y-4">
             <div>

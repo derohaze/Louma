@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
@@ -39,6 +40,11 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
     setBookTick,
     verifyAmount,
   } = flow;
+  // Prefilled from the wallet owner's display name when there is one; the sender can still
+  // correct or personalize it before saving — an automatic fragment is only the fallback.
+  // (Kept above the early return: hooks cannot sit behind it. This card only mounts at stage
+  // two, after the recipient is verified, so the initial value is the verified one.)
+  const [label, setLabel] = useState(recipient?.displayName ?? "");
   if (!recipient) return null;
   return (
     <form
@@ -75,18 +81,28 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
             Saved
           </span>
         ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-8 rounded-full px-3 text-xs font-semibold"
-            onClick={() => {
-              saveAddress(userId, verifiedAddress, recipient.displayName ?? "");
-              setBookTick((tick) => tick + 1);
-            }}
-          >
-            <Icon icon={FavouriteIcon} size={15} />
-            Save
-          </Button>
+          <span className="flex w-full min-w-0 flex-wrap items-center gap-2">
+            <Input
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              maxLength={LIMITS.maxDisplayNameLength}
+              placeholder="Label for this recipient (optional)"
+              aria-label="Label for this recipient"
+              className="h-8 min-w-0 flex-1 text-xs"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-8 rounded-full px-3 text-xs font-semibold"
+              onClick={() => {
+                saveAddress(userId, verifiedAddress, label);
+                setBookTick((tick) => tick + 1);
+              }}
+            >
+              <Icon icon={FavouriteIcon} size={15} />
+              Save
+            </Button>
+          </span>
         )}
       </div>
       <label className="block text-sm font-semibold">

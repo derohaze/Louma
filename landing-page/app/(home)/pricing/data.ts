@@ -41,9 +41,8 @@ export const plans: PricingPlan[] = [
       'Settlement status and confirmation events',
       'Mining rewards, tracked by cycle',
       'Transaction history and search',
-      'Receipts and statements as PDF',
-      'Suspicious transfer review',
-      'Connected services',
+      'Receipts and transaction statements as CSV',
+      'Transfer password and 2FA approvals',
       'Security centre and active sessions',
     ],
   },
@@ -75,11 +74,6 @@ export const faqItems: FaqItem[] = [
     question: 'Are transfers limited?',
     answer:
       'No. Sending and receiving LMA is not capped by the plan — the Free plan includes the full wallet feature set, with no monthly transfer limit.',
-  },
-  {
-    question: 'Do all plans support connected services?',
-    answer:
-      'Yes. Connected services are a normal wallet capability and are included on Basic, the plan available today.',
   },
   {
     question: 'Can these packages change later?',

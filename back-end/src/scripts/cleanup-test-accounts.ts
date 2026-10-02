@@ -150,12 +150,23 @@ async function main(): Promise<void> {
       }
     }
     const testOnlyTxIdsToDelete = testOnlyTxIds.filter((id) => !retainedTestOnlyTxIds.has(id));
+    // Funding is minted as a pair on one transaction (treasury debit + test credit), but that
+    // transaction has no journal header, so it is neither shared nor test-only-retained. When the
+    // test side is kept because its account is entangled, the treasury side must stay too:
+    // deleting the debit while the credit survives leaves issuance without its offset — an
+    // unbacked credit the retained account's own balance still counts.
+    const retainedTxIds = new Set(
+      fetched
+        .filter((entry) => retainedTestAccountIds.has(entry.ledgerAccountId))
+        .map((entry) => entry.transactionId),
+    );
     const deletableSet = new Set(
       fetched
         .filter(
           (entry) =>
             !sharedTxIds.has(entry.transactionId) &&
             !retainedTestOnlyTxIds.has(entry.transactionId) &&
+            !retainedTxIds.has(entry.transactionId) &&
             !retainedTestAccountIds.has(entry.ledgerAccountId) &&
             (testAccountSet.has(entry.ledgerAccountId) ||
               sharedAccountSet.has(entry.ledgerAccountId) ||
@@ -239,16 +250,18 @@ async function main(): Promise<void> {
         if (testOnlyTxIdsToDelete.length > 0) await collections.transactions.deleteMany({ publicId: { $in: testOnlyTxIdsToDelete } }, { session });
         if (removableAccountIds.length > 0) await collections.ledgerAccounts.deleteMany({ publicId: { $in: removableAccountIds } }, { session });
         if (walletsToDeleteIds.length > 0) await collections.wallets.deleteMany({ publicId: { $in: walletsToDeleteIds } }, { session });
-        await collections.transferAuthorizations.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.twoFactorUses.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.transferPasswordCredentials.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.twoFactorCredentials.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.notifications.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.securityEvents.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.sessions.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.miningSessions.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.miningSettlements.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.miningDeviceLeases.deleteMany({ ownerUserId: { $in: userIds } }, { session });
+        // Retained users keep their whole account: credentials, sessions, and mining records
+        // belong to a user the script deliberately did not delete, so only removed users are swept.
+        await collections.transferAuthorizations.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.twoFactorUses.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.transferPasswordCredentials.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.twoFactorCredentials.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.notifications.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.securityEvents.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.sessions.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.miningSessions.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.miningSettlements.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
+        await collections.miningDeviceLeases.deleteMany({ ownerUserId: { $in: usersToDelete } }, { session });
         if (usersToDelete.length > 0) await collections.users.deleteMany({ publicId: { $in: usersToDelete } }, { session });
       });
     } finally {

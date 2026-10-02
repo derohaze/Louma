@@ -1,16 +1,18 @@
 import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import { QRCodeSVG } from "qrcode.react";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { CopyButton, Icon, PageHeader } from "@/shared/ui/page";
-import { useWallet, type Transaction } from "@/shared/hooks";
+import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
 import { currency, dateText, moneyChartValue } from "@/shared/lib/wallet";
 import {
   accountFetchers,
   hasBrowserSession,
   serverStateFreshness,
   serverStateKeys,
+  type MiningHistoryPage,
 } from "@/shared/lib/platform";
 
 /** Rolling window every figure on this dashboard describes. */
@@ -138,13 +140,44 @@ function BreakdownRows({ rows }: { rows: readonly Row[] }) {
  * other page, with the primary address kept in one slim strip on top.
  */
 export function WalletContent() {
-  const { wallet, transactions } = useWallet();
-  const history = useQuery({
+  const { wallet, transactions, nextCursor } = useWallet();
+  const history = useInfiniteQuery<
+    MiningHistoryPage,
+    Error,
+    InfiniteData<MiningHistoryPage, string | null>,
+    typeof serverStateKeys.miningHistory,
+    string | null
+  >({
     queryKey: serverStateKeys.miningHistory,
-    queryFn: () => accountFetchers.miningHistory(null),
+    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: serverStateFreshness.miningHistoryMs,
     enabled: hasBrowserSession,
   });
+  // Same shared lists the other dashboards read: without the walks this board's window totals
+  // would cover only the loaded pages.
+  useHistoryWalk({
+    queryKey: serverStateKeys.transactions,
+    fetchPage: accountFetchers.transactions,
+    nextCursor: (page) => page.nextCursor,
+    cap: 25,
+    enabled: wallet !== null,
+    tailCursor: nextCursor,
+  });
+  const miningTailCursor = history.data?.pages.at(-1)?.nextCursor ?? null;
+  useHistoryWalk<MiningHistoryPage>({
+    queryKey: serverStateKeys.miningHistory,
+    fetchPage: accountFetchers.miningHistory,
+    nextCursor: (page) => page.nextCursor,
+    cap: 10,
+    enabled: wallet !== null,
+    tailCursor: miningTailCursor,
+  });
+  const sessions = useMemo(
+    () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
+    [history.data],
+  );
   const to = useMemo(() => Date.now(), []);
   const from = to - WINDOW_DAYS * DAY_MS;
 
@@ -183,8 +216,11 @@ export function WalletContent() {
       }
     }
     let mined = 0;
-    for (const s of history.data?.sessions ?? []) {
-      if (s.status !== "settled" || !s.lastSettledAt) continue;
+    // Paid-out means a positive settled amount with a settlement time: a cycle can carry
+    // wallet-credited payouts while still `active`, and a terminal-status filter would show
+    // that real credit as zero mined.
+    for (const s of sessions) {
+      if (s.settledMinor <= 0 || !s.lastSettledAt) continue;
       const time = new Date(s.lastSettledAt).getTime();
       if (inWindow(time, from, to)) mined += moneyChartValue(s.settled);
     }
@@ -203,7 +239,7 @@ export function WalletContent() {
       incomeShare: volume > 0 ? income / volume : 0,
       deltaPct: prevVolume > 0 ? Math.round(((volume - prevVolume) / prevVolume) * 100) : null,
     };
-  }, [transactions, history.data, to, from]);
+  }, [transactions, sessions, to, from]);
 
   const frozen = wallet?.status === "frozen";
   const deltaUp = (stats.deltaPct ?? 0) >= 0;
@@ -248,6 +284,20 @@ export function WalletContent() {
         style={{ animationDelay: "0ms" }}
         className="card-enter card-enter-hover mb-4 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-[22px] border bg-card p-4 shadow-sm"
       >
+        {wallet?.address && (
+          /* The QR is generated in the browser, so the address never leaves the page. */
+          <div className="rounded-2xl border bg-white p-2">
+            <QRCodeSVG
+              value={wallet.address}
+              size={88}
+              level="M"
+              marginSize={1}
+              fgColor="#20123A"
+              bgColor="#FFFFFF"
+              aria-label="Receiving address QR code"
+            />
+          </div>
+        )}
         <span className="text-[12px] font-semibold text-muted-foreground">Primary address</span>
         <code className="min-w-0 flex-1 break-all text-sm font-semibold tabular-nums">
           {wallet?.address ?? "—"}

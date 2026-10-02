@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useInfiniteQuery, useQuery, type InfiniteData } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import NumberFlow from "@number-flow/react";
 import {
   Add01Icon,
@@ -8,7 +8,7 @@ import {
   ArrowRight01Icon,
   ArrowUpRight01Icon,
 } from "@hugeicons/core-free-icons";
-import { useWallet, type Transaction } from "@/shared/hooks";
+import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
 import type { ApiMiningState } from "@/shared/api";
 import {
   moneyChartValue,
@@ -23,6 +23,7 @@ import {
   serverStateFreshness,
   serverStateKeys,
   type TransactionPage,
+  type MiningHistoryPage,
 } from "@/shared/lib/platform";
 import { Icon, CopyButton } from "@/shared/ui/page";
 import { Switch } from "@/shared/ui/switch";
@@ -53,6 +54,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * very end would turn a dashboard into an unbounded request loop, so the walk is capped.
  */
 const HISTORY_PAGE_CAP = 25;
+
+/** Cycles settle about once a day, so ten pages cover a 90-day window with room to spare. */
+const MINING_HISTORY_PAGE_CAP = 10;
 
 /** How many bars the statistics card draws across the window. */
 const BAR_COUNT = 10;
@@ -318,16 +322,23 @@ function MiningCycleCard({
 
 export function OverviewContent() {
   const { wallet, transactions, nextCursor, security } = useWallet();
-  const queryClient = useQueryClient();
   const mining = useQuery({
     queryKey: serverStateKeys.mining,
     queryFn: accountFetchers.mining,
     staleTime: serverStateFreshness.miningMs,
     enabled: hasBrowserSession,
   });
-  const history = useQuery({
+  const history = useInfiniteQuery<
+    MiningHistoryPage,
+    Error,
+    InfiniteData<MiningHistoryPage, string | null>,
+    typeof serverStateKeys.miningHistory,
+    string | null
+  >({
     queryKey: serverStateKeys.miningHistory,
-    queryFn: () => accountFetchers.miningHistory(null),
+    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: serverStateFreshness.miningHistoryMs,
     enabled: hasBrowserSession,
   });
@@ -346,48 +357,30 @@ export function OverviewContent() {
   };
 
   /**
-   * Walks the shared transactions query to the end of its history, one page at a time.
-   *
-   * Every card describes a window of days, and the API pages newest-first, so a wallet whose window
-   * started before its twentieth transfer keeps part of it on later pages. The pages are appended to
-   * the same cache entry every screen reads, so this is not a private copy. The walk is bounded and
-   * only starts once the session is confirmed, and a failure leaves the pages already loaded on
-   * screen rather than blanking them.
+   * Walks the shared transactions and mining-history lists to the end of their history, one
+   * page at a time. Every card describes a window of days, and the API pages newest-first, so a
+   * wallet whose window started before its twentieth transfer keeps part of it on later pages.
+   * The pages are appended to the same cache entries every screen reads, so this is not a
+   * private copy. Each walk is bounded and only starts once the session is confirmed, and a
+   * failure leaves the pages already loaded on screen rather than blanking them.
    */
-  const paging = useRef(false);
-  useEffect(() => {
-    if (!wallet || !nextCursor || paging.current) return;
-    paging.current = true;
-    const read = () =>
-      queryClient.getQueryData<InfiniteData<TransactionPage, string | null>>(
-        serverStateKeys.transactions,
-      );
-    void (async () => {
-      try {
-        while (paging.current) {
-          const cached = read();
-          const pages = cached?.pages.length ?? 0;
-          if (!cached?.pages.at(-1)?.nextCursor || pages >= HISTORY_PAGE_CAP) break;
-          await queryClient.fetchInfiniteQuery({
-            queryKey: serverStateKeys.transactions,
-            queryFn: ({ pageParam }: { pageParam: string | null }) =>
-              accountFetchers.transactions(pageParam),
-            // The annotation widens the cursor type: inferred from a bare `null` it would infer the page
-            // param as null alone and reject the string cursors the API hands back.
-            initialPageParam: null as string | null,
-            getNextPageParam: (lastPage: TransactionPage) => lastPage.nextCursor,
-            staleTime: serverStateFreshness.transactionsMs,
-          });
-          // A cursor the API keeps answering with would append nothing; stop rather than spin.
-          if ((read()?.pages.length ?? 0) <= pages) break;
-        }
-      } catch {
-        // The pages already in the cache still describe this wallet.
-      } finally {
-        paging.current = false;
-      }
-    })();
-  }, [nextCursor, queryClient, wallet]);
+  useHistoryWalk<TransactionPage>({
+    queryKey: serverStateKeys.transactions,
+    fetchPage: accountFetchers.transactions,
+    nextCursor: (page) => page.nextCursor,
+    cap: HISTORY_PAGE_CAP,
+    enabled: wallet !== null,
+    tailCursor: nextCursor,
+  });
+  const miningTailCursor = history.data?.pages.at(-1)?.nextCursor ?? null;
+  useHistoryWalk<MiningHistoryPage>({
+    queryKey: serverStateKeys.miningHistory,
+    fetchPage: accountFetchers.miningHistory,
+    nextCursor: (page) => page.nextCursor,
+    cap: MINING_HISTORY_PAGE_CAP,
+    enabled: wallet !== null,
+    tailCursor: miningTailCursor,
+  });
 
   /**
    * The one request this board makes about mining: a re-read when the tab comes back to the
@@ -476,9 +469,16 @@ export function OverviewContent() {
   const balance = wallet?.balance ?? "0";
   const show = (value: string | number) => (balanceHidden ? "••••••" : amount(value));
 
-  /** Everything mining has already paid out, which is a total and not a live figure. */
-  const cycles = history.data?.sessions ?? [];
-  const settledCycles = cycles.filter((cycle) => cycle.status === "settled");
+  /**
+   * Everything mining has already paid out, which is a total and not a live figure. A cycle can
+   * carry wallet-credited payouts while still `active` (collecting mid-cycle never closes it),
+   * so paid-out means a positive settled amount with a settlement time — not a terminal status.
+   */
+  const cycles = useMemo(
+    () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
+    [history.data],
+  );
+  const settledCycles = cycles.filter((cycle) => cycle.settledMinor > 0 && cycle.lastSettledAt);
   const mined = sumMoney(settledCycles.map((cycle) => cycle.settled));
   const lastSettled = settledCycles[0]?.lastSettledAt ?? null;
 

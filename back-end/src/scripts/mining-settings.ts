@@ -54,11 +54,13 @@ async function main(): Promise<void> {
     mongoMaxPoolSize: positiveInteger("MONGODB_MAX_POOL_SIZE", process.env["MONGODB_MAX_POOL_SIZE"], 20),
   };
 
+  // Parsed before any connection exists: an invalid REDIS_URL or key prefix throws here, while
+  // there is still nothing open to leak.
+  const redis = new RedisHandle(loadRedisConfig(process.env));
   const { client, db } = await connectMongo(config);
   // API instances read mining settings through a Redis cache; an operator write must invalidate
   // the entry or a disabled switch keeps being read as enabled until the TTL. With REDIS_URL
   // unset this handle is disabled and invalidation is a no-op, exactly as in the API.
-  const redis = new RedisHandle(loadRedisConfig(process.env));
   await redis.connect();
   try {
     const collections = getCollections(db);

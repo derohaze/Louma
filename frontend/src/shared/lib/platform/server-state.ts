@@ -53,7 +53,7 @@ export interface NotificationPage {
 }
 
 /** One page of mining cycles, newest first, exactly as the API answers it. */
-interface MiningHistoryPage {
+export interface MiningHistoryPage {
   sessions: ApiMiningSession[];
   nextCursor: string | null;
 }

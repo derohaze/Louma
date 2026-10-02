@@ -90,9 +90,9 @@ export function MiningGuard() {
             Every cycle pays out.
           </h2>
           <p className="mt-4 max-w-lg text-[15px] leading-7 text-neutral-600 dark:text-neutral-300">
-            Start mining on a device you already own. Louma credits LMA straight to your wallet
-            each cycle — nothing to claim, nothing to confirm, and a receipt you can check long
-            after the fact.
+            Start mining on a device you already own. Louma credits LMA to your wallet when you
+            collect a finished cycle — one tap on the mining page, with a receipt you can check
+            long after the fact.
           </p>
 
           <dl className="mt-8 grid gap-x-8 gap-y-5 sm:grid-cols-3">
