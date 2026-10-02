@@ -393,6 +393,55 @@
   }
 }
 
+/*
+ * Dashboard cards: they rise in on mount, staggered by the card's own index, and lift a little
+ * under the pointer. Both motions are transform-only, so they composite without repainting the
+ * card's contents. The stagger is set per card (animation-delay), which keeps it independent of
+ * the entrance and the hover lift.
+ */
+@layer components {
+  @keyframes t-card-enter {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .card-enter {
+    animation: t-card-enter 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  .card-enter-hover {
+    transition:
+      transform 200ms ease,
+      box-shadow 200ms ease;
+  }
+
+  .card-enter-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 34px -14px color-mix(in oklab, var(--foreground) 28%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card-enter {
+      animation: none;
+      will-change: auto;
+    }
+    .card-enter-hover {
+      transition: none;
+    }
+    .card-enter-hover:hover {
+      transform: none;
+      box-shadow: none;
+    }
+  }
+}
+
 /* Thinking Orbs canvas hook: prevents an inline-canvas baseline gap. */
 [data-thinking-orb] {
   display: block;
@@ -435,9 +484,9 @@
 /*
  * Shimmer sweep for live status captions (e.g. "Checking security…").
  * A highlight band travels across the text — the same idea as a
- * thinking-shimmer, implemented dependency-free in CSS. Colors derive from
- * theme tokens so it reads in light and dark mode; reduced-motion users
- * get a solid status line instead.
+ * thinking-shimmer, implemented dependency-free in CSS. Light mode reads
+ * near-black (foreground-based sweep); dark mode keeps the grey sweep.
+ * Reduced-motion users get a solid status line instead.
  */
 @layer components {
   @keyframes orb-caption-sweep {
@@ -452,9 +501,9 @@
   .orb-caption-shimmer {
     background-image: linear-gradient(
       100deg,
-      var(--muted-foreground) 35%,
-      var(--foreground) 50%,
-      var(--muted-foreground) 65%
+      var(--foreground) 35%,
+      color-mix(in oklab, var(--foreground) 45%, transparent) 50%,
+      var(--foreground) 65%
     );
     background-size: 200% 100%;
     -webkit-background-clip: text;
@@ -464,12 +513,24 @@
     animation: orb-caption-sweep 2.2s linear infinite;
   }
 
+  .dark .orb-caption-shimmer {
+    background-image: linear-gradient(
+      100deg,
+      var(--muted-foreground) 35%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 65%
+    );
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .orb-caption-shimmer {
       animation: none;
       background-image: none;
-      color: var(--muted-foreground);
+      color: var(--foreground);
       -webkit-text-fill-color: currentcolor;
+    }
+    .dark .orb-caption-shimmer {
+      color: var(--muted-foreground);
     }
   }
 }

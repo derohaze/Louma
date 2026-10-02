@@ -1,5 +1,7 @@
+import { loadRedisConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { getCollections } from "../infrastructure/mongodb/collections.js";
+import { RedisHandle } from "../infrastructure/redis/client.js";
 import {
   isMiningSettingKey,
   MINING_SETTING_KEYS,
@@ -53,6 +55,11 @@ async function main(): Promise<void> {
   };
 
   const { client, db } = await connectMongo(config);
+  // API instances read mining settings through a Redis cache; an operator write must invalidate
+  // the entry or a disabled switch keeps being read as enabled until the TTL. With REDIS_URL
+  // unset this handle is disabled and invalidation is a no-op, exactly as in the API.
+  const redis = new RedisHandle(loadRedisConfig(process.env));
+  await redis.connect();
   try {
     const collections = getCollections(db);
     const updatedBy = process.env["USER"] ?? process.env["USERNAME"] ?? "unknown";
@@ -89,17 +96,18 @@ async function main(): Promise<void> {
       } catch {
         throw new Error("--value must be valid JSON");
       }
-      const stored = await setMiningSetting({ collections, key: setKey, value, updatedBy });
+      const stored = await setMiningSetting({ collections, key: setKey, value, updatedBy, redis });
       console.log(JSON.stringify({ ok: true, key: stored.key, value: stored.value }, null, 2));
       return;
     }
     if (resetKey) {
-      const removed = await resetMiningSetting({ collections, key: resetKey });
+      const removed = await resetMiningSetting({ collections, key: resetKey, redis });
       console.log(JSON.stringify({ ok: true, key: resetKey, reset: removed }));
       return;
     }
     throw new Error("Pass --list, --set <key> --value '<json>', or --reset <key>");
   } finally {
+    await redis.close();
     await client.close();
   }
 }

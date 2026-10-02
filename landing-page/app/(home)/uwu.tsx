@@ -20,18 +20,6 @@ export function UwuHero() {
         >
           Read the Blog
         </Link>
-        <a
-          href="/sponsors"
-          className={cn(
-            buttonVariants({
-              size: 'lg',
-              variant: 'outline',
-              className: 'rounded-full bg-fd-background',
-            }),
-          )}
-        >
-          Support Louma
-        </a>
       </div>
     </div>
   );

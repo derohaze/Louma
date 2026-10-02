@@ -220,7 +220,6 @@ export default async function Page(props: { params: Promise<{ slug: string }> })
           '@id': `${siteConfig.url}/#organization`,
           name: siteConfig.name,
           url: siteConfig.url,
-          logo: `${siteConfig.url}/whitelogo.svg`,
         },
         image: `${siteConfig.url}${siteConfig.socialImage}`,
       },

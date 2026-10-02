@@ -14,7 +14,6 @@ export async function GET(): Promise<Response> {
     `- Blog: ${siteConfig.url}/blog`,
     `- Blog RSS: ${siteConfig.url}/blog/rss.xml`,
     `- Pricing: ${siteConfig.url}/pricing`,
-    `- Integrations: ${siteConfig.url}/sponsors`,
     `- Sitemap: ${siteConfig.url}/sitemap.xml`,
     `- Terms: ${siteConfig.url}/terms`,
     `- Privacy: ${siteConfig.url}/privacy`,

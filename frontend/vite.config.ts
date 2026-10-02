@@ -25,6 +25,10 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Vercel (which sets VERCEL=1 at build time) needs the Nitro Vercel preset so the SSR
+  // server compiles to Vercel Functions. Everywhere else the wrapper's own default applies:
+  // the Lovable sandbox pins cloudflare-module regardless of this option.
+  ...(process.env["VERCEL"] ? { nitro: { preset: "vercel" } } : {}),
   vite: {
     build: {
       // No source maps in any build: a `.js.map` file next to the bundle would publish the
@@ -41,20 +45,14 @@ export default defineConfig({
       },
     },
     optimizeDeps: {
-      // The overview pulls recharts (plus its d3 chain) and every page pulls the Hugeicons
-      // barrel through the shell: left to per-module dev transforms, that graph is hundreds of
-      // files the browser requests one by one on first load, which is where the minutes-long
-      // first paint comes from. Pre-bundling collapses each package into one cached esbuild
-      // chunk (node_modules/.vite) instead. Only ESM packages with a single cheap entry belong
-      // here — never add a thousands-module barrel like lucide-react, it would make the
-      // optimization step itself slower and the chunk bigger.
-      include: [
-        "recharts",
-        "sonner",
-        "qrcode.react",
-        "@hugeicons/react",
-        "@hugeicons/core-free-icons",
-      ],
+      // Every page pulls the Hugeicons barrel through the shell: left to per-module dev
+      // transforms, that graph is hundreds of files the browser requests one by one on first
+      // load, which is where the minutes-long first paint comes from. Pre-bundling collapses
+      // each package into one cached esbuild chunk (node_modules/.vite) instead. Only ESM
+      // packages with a single cheap entry belong here — never add a thousands-module barrel
+      // like lucide-react, it would make the optimization step itself slower and the chunk
+      // bigger.
+      include: ["sonner", "qrcode.react", "@hugeicons/react", "@hugeicons/core-free-icons"],
     },
   },
 });

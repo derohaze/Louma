@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useWallet, type Transaction } from "@/shared/hooks";
 import { ApiError, api, messageForError, type ApiTransferPreview } from "@/shared/api";
 import { isTransferTarget, normalizeTransferTarget, parseAmount } from "@/shared/lib/platform";
@@ -17,31 +17,11 @@ import { moneyToMinorUnits, transferNet, transferTax } from "@/shared/lib/wallet
 export function useTransferFlow() {
   const { wallet, security, refresh, refreshNotifications, transactions, userId } = useWallet();
 
-  // The overview's Receive action links here with `#receive`; honour it on arrival instead of always
-  // opening on Send (the tab the deep link explicitly asked not to see).
-  const [tab, setTab] = useState<"send" | "receive">(() =>
-    typeof window !== "undefined" && window.location.hash === "#receive" ? "receive" : "send",
-  );
-  // Keep the address in step with the visible tab: without this the hash still said Receive after the
-  // user switched to Send, so refreshing (or re-opening the link) silently flipped them back to the
-  // tab they had just left.
-  useEffect(() => {
-    const desired = tab === "receive" ? "#receive" : "#send";
-    if (window.location.hash !== desired) {
-      window.history.replaceState(
-        window.history.state,
-        "",
-        `${window.location.pathname}${window.location.search}${desired}`,
-      );
-    }
-  }, [tab]);
-
   const [stage, setStage] = useState<1 | 2 | 3>(1);
   // A "Send" action from the address book stashes the recipient here; it is
   // consumed once so a later visit starts empty again.
   const [address, setAddress] = useState(() => consumeTransferPrefill());
   const [note, setNote] = useState("");
-  const [scannerOpen, setScannerOpen] = useState(false);
   /** Bumped when the address book changes, so the shortcut chips re-read it. */
   const [bookTick, setBookTick] = useState(0);
   const [recipient, setRecipient] = useState<ApiTransferPreview["recipient"] | null>(null);
@@ -97,7 +77,6 @@ export function useTransferFlow() {
     setStage(1);
     setAddress("");
     setNote("");
-    setScannerOpen(false);
     setRecipient(null);
     setQuote(null);
     setAuthorization(null);
@@ -269,9 +248,9 @@ export function useTransferFlow() {
   };
 
   /**
-   * Saved addresses first, then recent recipients the wallet already paid —
-   * one tap instead of retyping an irreversible address. Re-read whenever the
-   * book changes, so saving from this form shows up immediately.
+   * Saved addresses first — one tap instead of retyping an irreversible
+   * address. Re-read whenever the book changes, so saving from this form
+   * shows up immediately.
    */
   // `bookTick` is a manual invalidation signal, not a data input.
   const savedShortcuts = useMemo(
@@ -279,34 +258,17 @@ export function useTransferFlow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [userId, bookTick],
   );
-  const recentShortcuts = useMemo(() => {
-    const seen = new Set(savedShortcuts.map((entry) => entry.address.toLowerCase()));
-    const out: string[] = [];
-    for (const tx of transactions) {
-      if (tx.direction !== "sent") continue;
-      const key = tx.counterpartyAddress.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(tx.counterpartyAddress);
-      if (out.length >= 6) break;
-    }
-    return out;
-  }, [transactions, savedShortcuts]);
-  const hasShortcuts = savedShortcuts.length > 0 || recentShortcuts.length > 0;
+  const hasShortcuts = savedShortcuts.length > 0;
 
   return {
     wallet,
     userId,
     transactions,
-    tab,
-    setTab,
     stage,
     setStage,
     address,
     note,
     setNote,
-    scannerOpen,
-    setScannerOpen,
     setBookTick,
     recipient,
     quote,
@@ -336,7 +298,6 @@ export function useTransferFlow() {
     looksLikeOwnAddress,
     verifiedAddress,
     savedShortcuts,
-    recentShortcuts,
     hasShortcuts,
     changeAddress,
     startOver,

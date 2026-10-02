@@ -73,7 +73,11 @@ async function main(): Promise<void> {
           // Transfer headers name their parties; mining issuance headers carry `ownerUserId`
           // but no sender/receiver, and absent fields must not read as real participants.
           if (isTransferTransaction(tx)) {
-            return isRealId(tx.senderUserId) || isRealId(tx.receiverUserId) || tx.participants.some(isRealId);
+            // `participants` is not a required schema field: a transfer written by an older
+            // process after this process's backfill has none, and a bare `.some` would throw
+            // before any test account could be removed.
+            const participants = Array.isArray(tx.participants) ? tx.participants : [];
+            return isRealId(tx.senderUserId) || isRealId(tx.receiverUserId) || participants.some(isRealId);
           }
           return isRealId(tx.ownerUserId);
         })
@@ -105,11 +109,54 @@ async function main(): Promise<void> {
     const testAccountSet = new Set(accountIds);
     const sharedAccountSet = new Set(sharedAccounts.map((account) => account.publicId));
     const fundingRe = new RegExp(fundingPattern);
+
+    // A test account that owns a line of a shared transaction is kept whole: its kept line can
+    // never be deleted (the shared header and the counterparty line survive), and deleting its
+    // other lines alone — e.g. the test-funding credit behind a transfer the account made — would
+    // leave its projection below zero, which the ledger-account validator refuses. Keeping a line
+    // pins its whole transaction, which pins the other accounts on it, and so on: the entire
+    // connected component of accounts joined by test-only transactions is retained, whole
+    // transactions and all. Nothing in it loses a line or a projection, so no adjustment is needed
+    // and every retained account stays rediscoverable on a later run. Accounts and test-only
+    // transactions outside the component are removed exactly as before.
+    const retainedTestAccountIds = new Set(
+      fetched
+        .filter((entry) => testAccountSet.has(entry.ledgerAccountId) && sharedTxIds.has(entry.transactionId))
+        .map((entry) => entry.ledgerAccountId),
+    );
+    const retainedTestOnlyTxIds = new Set<string>();
+    const testAccountsByTx = new Map<string, Set<string>>();
+    const testOnlyTxIdsByAccount = new Map<string, Set<string>>();
+    for (const entry of fetched) {
+      if (!testAccountSet.has(entry.ledgerAccountId) || sharedTxIds.has(entry.transactionId)) continue;
+      const accounts = testAccountsByTx.get(entry.transactionId) ?? new Set<string>();
+      accounts.add(entry.ledgerAccountId);
+      testAccountsByTx.set(entry.transactionId, accounts);
+      const txIds = testOnlyTxIdsByAccount.get(entry.ledgerAccountId) ?? new Set<string>();
+      txIds.add(entry.transactionId);
+      testOnlyTxIdsByAccount.set(entry.ledgerAccountId, txIds);
+    }
+    const retainedQueue = [...retainedTestAccountIds];
+    while (retainedQueue.length > 0) {
+      const accountId = retainedQueue.pop() as string;
+      for (const txId of testOnlyTxIdsByAccount.get(accountId) ?? []) {
+        if (retainedTestOnlyTxIds.has(txId)) continue;
+        retainedTestOnlyTxIds.add(txId);
+        for (const memberId of testAccountsByTx.get(txId) ?? []) {
+          if (retainedTestAccountIds.has(memberId)) continue;
+          retainedTestAccountIds.add(memberId);
+          retainedQueue.push(memberId);
+        }
+      }
+    }
+    const testOnlyTxIdsToDelete = testOnlyTxIds.filter((id) => !retainedTestOnlyTxIds.has(id));
     const deletableSet = new Set(
       fetched
         .filter(
           (entry) =>
             !sharedTxIds.has(entry.transactionId) &&
+            !retainedTestOnlyTxIds.has(entry.transactionId) &&
+            !retainedTestAccountIds.has(entry.ledgerAccountId) &&
             (testAccountSet.has(entry.ledgerAccountId) ||
               sharedAccountSet.has(entry.ledgerAccountId) ||
               fundingRe.test(entry.correlationId ?? "")),
@@ -118,9 +165,6 @@ async function main(): Promise<void> {
     );
     const entries = fetched.filter((entry) => deletableSet.has(entry.publicId));
     const retainedEntries = fetched.filter((entry) => !deletableSet.has(entry.publicId));
-    const retainedTestAccountIds = new Set(
-      retainedEntries.filter((entry) => testAccountSet.has(entry.ledgerAccountId)).map((entry) => entry.ledgerAccountId),
-    );
 
     // The shared accounts lose exactly the lines being deleted, in one atomic decrement per account:
     // the projection is corrected by the same amount the entries contributed, so after the delete the
@@ -142,23 +186,24 @@ async function main(): Promise<void> {
       );
       deltas.push({ account, deltaMinor });
     }
-    // Test accounts whose shared-transaction lines are retained stay in the database (otherwise
-    // the kept lines would reference a missing account), with their projections corrected by
-    // exactly the deleted lines.
-    const retainedAdjustments: { account: LedgerAccountRecord; deltaMinor: number }[] = [];
-    for (const account of accounts) {
-      if (!retainedTestAccountIds.has(account.publicId)) continue;
-      const removed = entries.filter((entry) => entry.ledgerAccountId === account.publicId);
-      if (removed.length === 0) continue;
-      const deltaMinor = removed.reduce(
-        (total, entry) => total + signedContribution(account.accountType, entry.side, entry.amountMinor),
-        0,
-      );
-      retainedAdjustments.push({ account, deltaMinor });
-    }
+    // A retained ledger account keeps its lines untouched, so its projection still equals them and
+    // no adjustment is applied. It must also keep its wallet (and the wallet's owner): the next
+    // cleanup run rediscovers accounts through the user → wallet → account join, so deleting the
+    // wallet would strand the kept ledger account as unreachable test debris.
     const removableAccountIds = accounts
       .filter((account) => !retainedTestAccountIds.has(account.publicId))
       .map((account) => account.publicId);
+    const retainedWalletIds = new Set(
+      accounts
+        .filter((account) => retainedTestAccountIds.has(account.publicId))
+        .map((account) => account.walletId)
+        .filter((walletId): walletId is string => typeof walletId === "string"),
+    );
+    const walletsToDeleteIds = wallets.filter((wallet) => !retainedWalletIds.has(wallet.publicId)).map((wallet) => wallet.publicId);
+    const retainedUserIds = new Set(
+      wallets.filter((wallet) => retainedWalletIds.has(wallet.publicId)).map((wallet) => wallet.ownerUserId),
+    );
+    const usersToDelete = userIds.filter((userId) => !retainedUserIds.has(userId));
 
     const report = {
       apply,
@@ -170,6 +215,9 @@ async function main(): Promise<void> {
       sharedTransactionsRetained: sharedTxIds.size,
       sharedEntriesRetained: retainedEntries.length,
       testAccountsRetained: retainedTestAccountIds.size,
+      testOnlyTransactionsRetained: testOnlyTxIds.filter((id) => retainedTestOnlyTxIds.has(id)).length,
+      walletsRetained: retainedWalletIds.size,
+      usersRetained: retainedUserIds.size,
       sharedProjectionAdjustments: deltas.map((item) => ({ accountType: item.account.accountType, deltaMinor: item.deltaMinor })),
     };
     console.log(JSON.stringify(report, null, 2));
@@ -185,12 +233,12 @@ async function main(): Promise<void> {
         if (entries.length > 0) {
           await collections.ledgerEntries.deleteMany({ _id: { $in: entries.map((entry) => entry._id) } }, { session });
         }
-        for (const { account, deltaMinor } of [...deltas, ...retainedAdjustments]) {
+        for (const { account, deltaMinor } of deltas) {
           if (deltaMinor !== 0) await collections.ledgerAccounts.updateOne({ _id: account._id }, { $inc: { balanceMinor: -deltaMinor } }, { session });
         }
-        if (testOnlyTxIds.length > 0) await collections.transactions.deleteMany({ publicId: { $in: testOnlyTxIds } }, { session });
+        if (testOnlyTxIdsToDelete.length > 0) await collections.transactions.deleteMany({ publicId: { $in: testOnlyTxIdsToDelete } }, { session });
         if (removableAccountIds.length > 0) await collections.ledgerAccounts.deleteMany({ publicId: { $in: removableAccountIds } }, { session });
-        await collections.wallets.deleteMany({ publicId: { $in: walletIds } }, { session });
+        if (walletsToDeleteIds.length > 0) await collections.wallets.deleteMany({ publicId: { $in: walletsToDeleteIds } }, { session });
         await collections.transferAuthorizations.deleteMany({ ownerUserId: { $in: userIds } }, { session });
         await collections.twoFactorUses.deleteMany({ ownerUserId: { $in: userIds } }, { session });
         await collections.transferPasswordCredentials.deleteMany({ ownerUserId: { $in: userIds } }, { session });
@@ -201,12 +249,12 @@ async function main(): Promise<void> {
         await collections.miningSessions.deleteMany({ ownerUserId: { $in: userIds } }, { session });
         await collections.miningSettlements.deleteMany({ ownerUserId: { $in: userIds } }, { session });
         await collections.miningDeviceLeases.deleteMany({ ownerUserId: { $in: userIds } }, { session });
-        await collections.users.deleteMany({ publicId: { $in: userIds } }, { session });
+        if (usersToDelete.length > 0) await collections.users.deleteMany({ publicId: { $in: usersToDelete } }, { session });
       });
     } finally {
       await session.endSession();
     }
-    console.log(JSON.stringify({ applied: true, removedUsers: userIds.length }, null, 2));
+    console.log(JSON.stringify({ applied: true, removedUsers: usersToDelete.length, retainedUsers: retainedUserIds.size }, null, 2));
   } finally {
     await client.close();
   }

@@ -7,85 +7,26 @@ import {
   type ReactElement,
   type ReactNode,
   useEffect,
-  useRef,
   useState,
 } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { useIsVisible } from '@/lib/use-is-visible';
 import Image from 'next/image';
 import MainImg from './main.png';
 import OpenAPIImg from './openapi.png';
 import NotebookImg from './notebook.png';
 import { cva } from 'class-variance-authority';
-import { useTheme } from 'next-themes';
-import dynamic from 'next/dynamic';
-
-const GrainGradient = dynamic(
-  () => import('@paper-design/shaders-react').then((mod) => mod.GrainGradient),
-  {
-    ssr: false,
-  },
-);
-
-const Dithering = dynamic(
-  () => import('@paper-design/shaders-react').then((mod) => mod.Dithering),
-  {
-    ssr: false,
-  },
-);
 
 export function Hero() {
-  const { resolvedTheme } = useTheme();
-  const ref = useRef<HTMLDivElement | null>(null);
-  const visible = useIsVisible(ref);
-  const [showShaders, setShowShaders] = useState(false);
-
-  useEffect(() => {
-    // apply some delay, otherwise on slower devices, it errors with uniform images not being fully loaded.
-    setTimeout(() => {
-      setShowShaders(true);
-    }, 400);
-  }, []);
-
+  // Shader-free gradient hero. The previous WebGL shaders
+  // (@paper-design/shaders-react) crashed on some GPUs with
+  // "Cannot read properties of undefined (reading 'M_ID')",
+  // so this is a pure CSS replacement with zero runtime risk.
   return (
-    <>
-      <div ref={ref} className="absolute inset-0 pointer-events-none" />
-      {showShaders && (
-        <GrainGradient
-          className="absolute inset-0 animate-fd-fade-in duration-800"
-          colors={
-            resolvedTheme === 'dark'
-              ? ['#39BE1C', '#9c2f05', '#7A2A0000']
-              : ['#fcfc51', '#ffa057', '#7A2A0020']
-          }
-          colorBack="#00000000"
-          softness={1}
-          intensity={0.9}
-          noise={0.5}
-          speed={visible ? 1 : 0}
-          shape="corners"
-          minPixelRatio={1}
-          maxPixelCount={1920 * 1080}
-        />
-      )}
-      {showShaders && (
-        <Dithering
-          width={720}
-          height={720}
-          colorBack="#00000000"
-          colorFront={resolvedTheme === 'dark' ? '#DF3F00' : '#fa8023'}
-          shape="sphere"
-          type="4x4"
-          scale={0.5}
-          size={3}
-          speed={0}
-          frame={5000 * 120}
-          className="absolute animate-fd-fade-in duration-400 max-lg:bottom-[-50%] max-lg:left-[-200px] lg:top-[-5%] lg:right-0"
-          minPixelRatio={1}
-        />
-      )}
-    </>
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-0 animate-fd-fade-in bg-[radial-gradient(60%_50%_at_70%_20%,#fff38355_0%,transparent_70%),radial-gradient(50%_40%_at_20%_80%,#ffa05744_0%,transparent_70%)]"
+    />
   );
 }
 
@@ -305,24 +246,12 @@ export function Writing({
 }
 
 export function AgnosticBackground() {
-  const ref = useRef<HTMLDivElement>(null);
-  const visible = useIsVisible(ref);
-
+  // Kept for compatibility; now a pure CSS wash (no WebGL).
   return (
     <div
-      ref={ref}
-      className="absolute inset-0 -z-1 mask-[linear-gradient(to_top,white_30%,transparent_calc(100%-120px))]"
-    >
-      <Dithering
-        colorBack="#00000000"
-        colorFront="#c6bb58"
-        shape="warp"
-        type="4x4"
-        speed={visible ? 0.4 : 0}
-        className="size-full"
-        minPixelRatio={1}
-      />
-    </div>
+      aria-hidden
+      className="absolute inset-0 -z-1 bg-gradient-to-t from-[#fff383]/20 via-transparent to-transparent mask-[linear-gradient(to_top,white_30%,transparent_calc(100%-120px))]"
+    />
   );
 }
 

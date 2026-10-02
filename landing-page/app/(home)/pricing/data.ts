@@ -1,12 +1,21 @@
 export type BillingCycle = 'monthly' | 'yearly';
 
+export type PlanStatus = 'available' | 'coming-soon';
+
 export type PricingPlan = {
   name: string;
+  tagline: string;
   monthlyPrice: number;
   yearlyPrice: number;
-  intro: string;
+  status: PlanStatus;
   buttonLabel: string;
-  features: string[];
+  /** Elevated card that overlaps its neighbour. */
+  featured?: boolean;
+  badge?: string;
+  /** Only present on available plans. */
+  features?: string[];
+  /** Shown instead of the feature list when status is 'coming-soon'. */
+  note?: string;
 };
 
 export type FaqItem = {
@@ -14,127 +23,63 @@ export type FaqItem = {
   answer: string;
 };
 
+export const annualSavingsLabel = 'Save 20%';
+
 export const plans: PricingPlan[] = [
   {
     name: 'Basic',
+    tagline: 'Everything available today, free forever.',
     monthlyPrice: 0,
     yearlyPrice: 0,
-    intro: 'Includes:',
+    status: 'available',
     buttonLabel: 'Get Basic',
     features: [
-      '1 account',
-      '1 wallet',
-      '50 transfers / month',
+      'Send and receive LMA',
+      'Live balance overview',
+      'Receiving address with QR code',
+      'Transfer feed with filtering and contact labels',
+      'Settlement status and confirmation events',
+      'Mining rewards, tracked by cycle',
+      'Transaction history and search',
+      'Receipts and statements as PDF',
+      'Suspicious transfer review',
       'Connected services',
-      'Basic activity timeline',
-      'Manual address book',
-    ],
-  },
-  {
-    name: 'Starter',
-    monthlyPrice: 19,
-    yearlyPrice: 15,
-    intro: 'Everything in Basic, plus:',
-    buttonLabel: 'Get Starter',
-    features: [
-      '1 account',
-      '1 wallet',
-      '750 transfers / month',
-      'Transfer risk checks',
-      'Settlement tracking',
-      'Receipt templates',
-      'Transfer notifications',
-      'Basic activity reports',
+      'Security centre and active sessions',
     ],
   },
   {
     name: 'Pro',
-    monthlyPrice: 49,
-    yearlyPrice: 39,
-    intro: 'Everything in Starter, plus:',
-    buttonLabel: 'Get Pro',
-    features: [
-      '1 account',
-      '1 wallet',
-      '3,000 transfers / month',
-      'Bulk transfer queues',
-      'Recipient groups',
-      'Risk review tools',
-      'Custom address QR codes',
-      'Statement templates',
-      'Saved search queries',
-      'Full history export',
-    ],
-  },
-  {
-    name: 'Max',
-    monthlyPrice: 99,
-    yearlyPrice: 79,
-    intro: 'Everything in Pro, plus:',
-    buttonLabel: 'Get Max',
-    features: [
-      '1 account',
-      '3 wallets',
-      '10,000 transfers / month',
-      'Advanced risk screening',
-      'Advanced transaction search',
-      'Automated activity reports',
-      'Balance snapshots',
-      'Mining insights',
-      'Realtime wallet alerts',
-      'In-app support',
-    ],
-  },
-  {
-    name: 'Ultra',
-    monthlyPrice: 199,
-    yearlyPrice: 159,
-    intro: 'Everything in Max, plus:',
-    buttonLabel: 'Get Ultra',
-    features: [
-      '1 account',
-      '5 wallets',
-      '25,000 transfers / month',
-      'Priority risk review',
-      'Advanced activity insights',
-      'Statement download links',
-      'Receipt delivery tracking',
-      'Admin controls',
-      'Priority account support',
-    ],
+    tagline: 'For heavier use. Not available yet.',
+    monthlyPrice: 5,
+    yearlyPrice: 4,
+    status: 'coming-soon',
+    buttonLabel: 'Coming soon',
+    featured: true,
+    badge: 'Coming soon',
+    note: 'Pro is not available yet. Everything you can use today is included in the Free plan.',
   },
 ];
 
 export const faqItems: FaqItem[] = [
   {
-    question: 'What plan should I start with?',
+    question: 'Which plans are available right now?',
     answer:
-      'Start with Basic if you are testing one account and one wallet. Starter is for regular transfers, and Pro is the first serious wallet plan.',
+      'Only Basic. It is free, needs no payment details, and includes the full wallet feature set — transfers, balance, addresses, mining, history, and security.',
   },
   {
-    question: 'How do transfer limits work?',
+    question: 'What does Pro include?',
     answer:
-      'Transfer limits are per wallet per month. Every plan gets one account; paid plans increase wallet capacity and transfer volume instead of changing the core model.',
+      'Pro is priced at $5 per month. No Pro-only features have shipped yet, so there is nothing extra to use today and nothing to buy.',
+  },
+  {
+    question: 'Are transfers limited?',
+    answer:
+      'No. Sending and receiving LMA is not capped by the plan — the Free plan includes the full wallet feature set, with no monthly transfer limit.',
   },
   {
     question: 'Do all plans support connected services?',
     answer:
-      'Yes. Connected services are a normal wallet capability. Free/Basic does not include settlement, while paid plans add settlement workflows.',
-  },
-  {
-    question: 'Which plans include risk protection?',
-    answer:
-      'Starter includes basic risk checks. Pro adds review tooling. Max and Ultra include advanced risk screening and deeper review workflows.',
-  },
-  {
-    question: 'Where does transaction search fit?',
-    answer:
-      'Saved search queries start in Pro. Max adds the full history search set for accounts that need deeper transaction discovery.',
-  },
-  {
-    question: 'Do reports and receipts run automatically?',
-    answer:
-      'Max adds automated activity reports and statement templates. Ultra adds receipt delivery tracking and statement download links for more control.',
+      'Yes. Connected services are a normal wallet capability and are included on Basic, the plan available today.',
   },
   {
     question: 'Can these packages change later?',

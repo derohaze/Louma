@@ -1,26 +1,33 @@
 import { Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import NumberFlow from "@number-flow/react";
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
-  ArrowUpRight01Icon,
+  Add01Icon,
   ArrowDownLeft01Icon,
-  TransactionHistoryIcon,
   ArrowRight01Icon,
-  ViewIcon,
-  ViewOffIcon,
+  ArrowUpRight01Icon,
 } from "@hugeicons/core-free-icons";
-import { Button } from "@/shared/ui/button";
-import { useWallet } from "@/shared/hooks";
-import { currency, dateText, moneyChartValue, sumMoney } from "@/shared/lib/wallet";
-import { CopyButton, EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { useWallet, type Transaction } from "@/shared/hooks";
+import type { ApiMiningState } from "@/shared/api";
+import {
+  moneyChartValue,
+  moneyFromMinorUnits,
+  prefillTransfer,
+  shortAddress,
+  sumMoney,
+} from "@/shared/lib/wallet";
+import {
+  accountFetchers,
+  hasBrowserSession,
+  serverStateFreshness,
+  serverStateKeys,
+  type TransactionPage,
+} from "@/shared/lib/platform";
+import { Icon, CopyButton } from "@/shared/ui/page";
+import { Switch } from "@/shared/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
+import { countdown, liveSnapshot } from "@/features/mining/cycle/mining-format";
 
 /**
  * Local-only preference: whether the balance amounts are masked on this device.
@@ -37,51 +44,295 @@ function readBalanceHidden(): boolean {
   }
 }
 
-function Count({ value, suffix = "" }: { value: number; suffix?: string }) {
-  const formatted = new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: suffix ? 2 : 0,
-    maximumFractionDigits: suffix ? 2 : 0,
-  }).format(value);
-  const chars = formatted.split("");
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How many pages of transactions the overview is allowed to pull in on top of the first one the
+ * provider loads. Every card here describes a window of days, and a wallet with a long history keeps
+ * its earlier transfers on later pages, so one page is not enough to answer that — but paging to the
+ * very end would turn a dashboard into an unbounded request loop, so the walk is capped.
+ */
+const HISTORY_PAGE_CAP = 25;
+
+/** How many bars the statistics card draws across the window. */
+const BAR_COUNT = 10;
+
+/** How many rows the activity feed shows, and how many counterparties the quick-send card offers. */
+const FEED_ROWS = 4;
+const COUNTERPARTY_LIMIT = 5;
+
+/** The window every figure on the board describes, chosen once from the statistics card. */
+const PERIODS: readonly { id: string; label: string; days: number }[] = [
+  { id: "7", label: "Last 7 days", days: 7 },
+  { id: "30", label: "Last 30 days", days: 30 },
+  { id: "90", label: "Last 90 days", days: 90 },
+];
+
+/** One slice of the window: what came in and what went out inside it. */
+type Slice = { income: number; expense: number };
+
+/**
+ * The board's three card surfaces, in the same shapes the mining screens use: a bordered white card,
+ * the filled brand surface behind the live figure, and the inverted one the board closes on.
+ */
+const CARD = "card-enter card-enter-hover rounded-[22px] border bg-card shadow-sm";
+const FILLED =
+  "card-enter card-enter-hover rounded-[22px] bg-primary text-primary-foreground shadow-sm";
+const INK = "card-enter card-enter-hover rounded-[22px] bg-foreground text-background shadow-sm";
+
+/**
+ * The figure inside a card, grouped the way the board prints one: `currency` is the right formatter
+ * everywhere an amount stands alone, but a card has neither the room for four decimals nor the need
+ * for the ticker — the label above it already says what is being measured. Trailing zeros go and the
+ * rest stays, so the figure is short without ever rounding money away.
+ */
+function amount(value: string | number): string {
+  const [whole = "0", fraction = ""] = String(value).split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const trimmed = fraction.replace(/0+$/, "");
+  return trimmed ? `${grouped}.${trimmed}` : grouped;
+}
+
+/** Two letters to put on a counterparty's avatar, from whichever spelling of the address there is. */
+function initials(address: string): string {
+  return address.replace(/^LMA-/i, "").slice(0, 2).toUpperCase() || "?";
+}
+
+/** How long ago a transfer happened, in the words the board prints under its title. */
+function relativeTime(iso: string): string {
+  const at = new Date(iso).getTime();
+  const days = Math.floor((Date.now() - at) / DAY_MS);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date(at));
+}
+
+/** A period dropdown, kept as the pill the header uses. */
+function PillSelect({
+  value,
+  label,
+  options,
+  onChange,
+}: {
+  value: string;
+  label: string;
+  options: readonly { id: string; label: string }[];
+  onChange: (next: string) => void;
+}) {
   return (
-    <>
-      {/*
-       * Number pop-in transition (transitions.dev "Number pop-in"):
-       * every character rises with blur and the last two ride in with
-       * stagger. `key` remounts the group whenever the value changes, which
-       * replays the enter animation — the declarative equivalent of the
-       * snippet's remove-class → swap digits → reflow → re-add-class replay.
-       * The suffix (" LMA") stays static outside the digit group.
-       */}
-      <span key={formatted} className="t-digit-group is-animating">
-        {chars.map((ch, i) => (
-          <span
-            key={i}
-            className="t-digit"
-            data-stagger={i === chars.length - 2 ? "1" : i === chars.length - 1 ? "2" : undefined}
-          >
-            {ch}
-          </span>
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger
+        aria-label={label}
+        className="h-8 w-auto gap-1 rounded-full px-3 text-[12px] font-semibold"
+      >
+        <SelectValue placeholder={label} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.id} value={option.id}>
+            {option.label}
+          </SelectItem>
         ))}
-      </span>
-      {suffix}
-    </>
+      </SelectContent>
+    </Select>
   );
 }
 
-type OverviewMetric = {
-  icon: Parameters<typeof Icon>[0]["icon"];
-  label: string;
-  /** Money is already a formatted decimal string; counts stay numbers for the digit animation. */
-  money?: string;
-  count?: number;
-  hint: string;
-  href: "/wallet" | "/transactions";
-};
+/**
+ * The statistics bars: one column per slice of the window, income stacked over expense.
+ *
+ * The parent already clips to its own rounded box, so the fills need no rounding of their own and
+ * the empty track above each bar reads as the scale the tallest bar sets.
+ */
+function BarChart({ slices }: { slices: readonly Slice[] }) {
+  const peak = Math.max(...slices.map((slice) => slice.income + slice.expense), 1);
+  return (
+    <div
+      role="img"
+      aria-label="Money in and out across the period"
+      className="flex h-[116px] items-end gap-[9px]"
+    >
+      {slices.map((slice, index) => (
+        <div
+          key={index}
+          className="flex h-full flex-1 flex-col justify-end overflow-hidden rounded-[5px] bg-secondary"
+        >
+          {slice.expense > 0 && (
+            <div
+              className="w-full bg-chart-2"
+              style={{ height: `${(slice.expense / peak) * 100}%` }}
+            />
+          )}
+          {slice.income > 0 && (
+            <div
+              className="w-full bg-primary"
+              style={{ height: `${(slice.income / peak) * 100}%` }}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The trend line: this window against the window of the same length immediately before it. */
+function Change({ current, previous }: { current: number; previous: number }) {
+  if (previous <= 0) return null;
+  const percent = Math.round(((current - previous) / previous) * 100);
+  const up = percent >= 0;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[13px] font-bold tabular-nums ${
+        up ? "text-success" : "text-destructive"
+      }`}
+    >
+      {up ? "↗" : "↘"} {up ? "+" : ""}
+      {percent}%
+    </span>
+  );
+}
+
+/**
+ * The currency mark, printed bare: no disc and no frame around it.
+ *
+ * `-m-2` is what lets the mark print at 48px inside the 32px it used to occupy, so a bigger logo
+ * never nudges the card it sits in: the negative margin hands back exactly the 16px the image
+ * gained, and the layout box stays the size it was.
+ */
+function WalletLogo() {
+  return (
+    <img
+      src="/Louma_Brand_logos/png/louma-logo-256x256.png"
+      alt=""
+      width={48}
+      height={48}
+      draggable={false}
+      className="-m-2 size-12 shrink-0 border-0 bg-transparent object-contain shadow-none outline-none"
+    />
+  );
+}
+
+/** The balance mask. One switch on the board drives every figure it hides. */
+function MaskSwitch({ hidden, onToggle }: { hidden: boolean; onToggle: () => void }) {
+  return (
+    <Switch
+      checked={hidden}
+      onCheckedChange={onToggle}
+      aria-label={hidden ? "Show balance" : "Hide balance"}
+      className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-background/20"
+    />
+  );
+}
+
+/**
+ * The live cycle card.
+ *
+ * It runs its own one-second tick instead of taking the whole cycle state machine from
+ * `useMiningCycle`, because a tick owned by this component is what keeps the rest of the board from
+ * re-rendering every second. The arithmetic is `liveSnapshot` — the same function the mining page
+ * runs, so the two can never disagree — and it is a renderer, not a source of truth: the session
+ * comes from the shared query, and only the server decides what is credited.
+ *
+ * Nothing here polls. The cycle advances locally between reads, so the one request this board makes
+ * about mining is the re-read on the tab returning to the foreground, exactly as the mining page
+ * triggers it.
+ *
+ * The earned figure rolls through NumberFlow — the same component the mining page counts with — so
+ * the accrual is legible as it moves instead of a digit silently changing once a second.
+ */
+function MiningCycleCard({
+  state,
+  className,
+}: {
+  state: ApiMiningState | undefined;
+  className?: string;
+}) {
+  const session = state?.session ?? null;
+  const [tick, setTick] = useState(() => Date.now());
+  // The server's clock is the reference: this tab's own clock may be wrong, and the offset is what
+  // keeps the countdown in step with the accrual the server last reported.
+  const offsetMs = state?.serverNow ? new Date(state.serverNow).getTime() - Date.now() : 0;
+  useEffect(() => {
+    if (!session) return;
+    const id = window.setInterval(() => setTick(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [session]);
+  const live = useMemo(
+    () => (session ? liveSnapshot(session, tick + offsetMs) : null),
+    [session, tick, offsetMs],
+  );
+
+  const earned = live ? moneyFromMinorUnits(live.accruedMinor) : "0";
+  const maximum = session ? session.totalAccrued : "0";
+  const percent = (() => {
+    const max = moneyChartValue(maximum);
+    if (max <= 0) return 0;
+    return Math.min(100, Math.round((moneyChartValue(earned) / max) * 100));
+  })();
+
+  return (
+    <Link
+      to="/mining"
+      className={className ? `${FILLED} ${className}` : FILLED}
+      aria-label="Mining cycle"
+    >
+      <div className="flex h-full flex-col p-5">
+        <p className="font-display text-[22px] leading-none font-bold">
+          {session ? (
+            <NumberFlow
+              value={moneyChartValue(earned)}
+              format={{ minimumFractionDigits: 4, maximumFractionDigits: 4 }}
+              trend={1}
+            />
+          ) : (
+            "—"
+          )}
+          <span className="text-[15px] opacity-70"> / {session ? amount(maximum) : "—"}</span>
+        </p>
+        <p className="mt-1.5 text-[12px] opacity-70">
+          {session
+            ? `Mining cycle #${session.cycleNumber} · ${session.rate} LMA/h`
+            : "No active cycle · start one to earn"}
+        </p>
+        <div className="mt-auto pt-6">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-[12px] font-semibold opacity-70">{percent}% Completed</p>
+            {live && (
+              <p className="text-[12px] font-semibold tabular-nums opacity-70">
+                {countdown(live.remainingSeconds)} left
+              </p>
+            )}
+          </div>
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-primary-foreground/25">
+            <div
+              className="h-full rounded-full bg-primary-foreground transition-[width] duration-1000 ease-linear"
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
 
 export function OverviewContent() {
-  const { wallet, transactions } = useWallet();
+  const { wallet, transactions, nextCursor, security } = useWallet();
+  const queryClient = useQueryClient();
+  const mining = useQuery({
+    queryKey: serverStateKeys.mining,
+    queryFn: accountFetchers.mining,
+    staleTime: serverStateFreshness.miningMs,
+    enabled: hasBrowserSession,
+  });
+  const history = useQuery({
+    queryKey: serverStateKeys.miningHistory,
+    queryFn: () => accountFetchers.miningHistory(null),
+    staleTime: serverStateFreshness.miningHistoryMs,
+    enabled: hasBrowserSession,
+  });
   const [balanceHidden, setBalanceHidden] = useState(readBalanceHidden);
+  const [period, setPeriod] = useState(PERIODS[1]!);
   const toggleBalanceHidden = () => {
     setBalanceHidden((current) => {
       const next = !current;
@@ -94,291 +345,400 @@ export function OverviewContent() {
     });
   };
 
-  const received = transactions.filter((t) => t.direction === "received");
-  const sent = transactions.filter((t) => t.direction === "sent");
   /**
-   * Each side totals what actually moved for this wallet: the sender is debited the full amount,
-   * while a received transfer credits the net amount (the network tax is taken out of it). Summing
-   * `amount` on both sides would report a balance that never existed.
+   * Walks the shared transactions query to the end of its history, one page at a time.
+   *
+   * Every card describes a window of days, and the API pages newest-first, so a wallet whose window
+   * started before its twentieth transfer keeps part of it on later pages. The pages are appended to
+   * the same cache entry every screen reads, so this is not a private copy. The walk is bounded and
+   * only starts once the session is confirmed, and a failure leaves the pages already loaded on
+   * screen rather than blanking them.
    */
-  const totalIn = sumMoney(received.map((t) => t.netAmount));
-  const totalOut = sumMoney(sent.map((t) => t.amount));
-  const chart = useMemo(() => {
-    const days = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date();
-      date.setHours(0, 0, 0, 0);
-      date.setDate(date.getDate() - (6 - i));
-      return date;
-    });
-    return days.map((date) => {
-      const daily = transactions.filter(
-        (t) => new Date(t.createdAt).toDateString() === date.toDateString(),
+  const paging = useRef(false);
+  useEffect(() => {
+    if (!wallet || !nextCursor || paging.current) return;
+    paging.current = true;
+    const read = () =>
+      queryClient.getQueryData<InfiniteData<TransactionPage, string | null>>(
+        serverStateKeys.transactions,
+      );
+    void (async () => {
+      try {
+        while (paging.current) {
+          const cached = read();
+          const pages = cached?.pages.length ?? 0;
+          if (!cached?.pages.at(-1)?.nextCursor || pages >= HISTORY_PAGE_CAP) break;
+          await queryClient.fetchInfiniteQuery({
+            queryKey: serverStateKeys.transactions,
+            queryFn: ({ pageParam }: { pageParam: string | null }) =>
+              accountFetchers.transactions(pageParam),
+            // The annotation widens the cursor type: inferred from a bare `null` it would infer the page
+            // param as null alone and reject the string cursors the API hands back.
+            initialPageParam: null as string | null,
+            getNextPageParam: (lastPage: TransactionPage) => lastPage.nextCursor,
+            staleTime: serverStateFreshness.transactionsMs,
+          });
+          // A cursor the API keeps answering with would append nothing; stop rather than spin.
+          if ((read()?.pages.length ?? 0) <= pages) break;
+        }
+      } catch {
+        // The pages already in the cache still describe this wallet.
+      } finally {
+        paging.current = false;
+      }
+    })();
+  }, [nextCursor, queryClient, wallet]);
+
+  /**
+   * The one request this board makes about mining: a re-read when the tab comes back to the
+   * foreground, the same trigger the mining page uses. Between reads the cycle card advances on its
+   * own clock, so there is nothing to poll and the database is never asked for a clock it has
+   * already given us.
+   */
+  const refetchMining = mining.refetch;
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refetchMining();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refetchMining]);
+
+  /** The window the period-scoped cards describe. Rolling, not calendar months. */
+  const range = useMemo(() => {
+    const to = Date.now();
+    return { from: to - period.days * DAY_MS, to, days: period.days };
+  }, [period]);
+
+  /**
+   * Each side totals what actually moved: the sender is debited the full amount, while a received
+   * transfer credits the net amount (the network tax comes out of it). Summing `amount` on both sides
+   * would report a balance that never existed. The counts are here too, because the activity card
+   * reports how much happened rather than a second time the same two totals.
+   */
+  const flow = useMemo(() => {
+    const at = (t: Transaction) => new Date(t.createdAt).getTime();
+    const side = (from: number, to: number) => {
+      const income = transactions.filter(
+        (t) => t.direction === "received" && at(t) >= from && at(t) < to,
+      );
+      const expense = transactions.filter(
+        (t) => t.direction === "sent" && at(t) >= from && at(t) < to,
       );
       return {
-        day: date.toLocaleDateString("en-US", { weekday: "short" }),
-        // Summed in integer minor units, then converted once for the chart coordinate.
-        received: moneyChartValue(
-          sumMoney(daily.filter((t) => t.direction === "received").map((t) => t.netAmount)),
-        ),
-        sent: moneyChartValue(
-          sumMoney(daily.filter((t) => t.direction === "sent").map((t) => t.amount)),
-        ),
+        income: sumMoney(income.map((t) => t.netAmount)),
+        expense: sumMoney(expense.map((t) => t.amount)),
+        count: income.length + expense.length,
       };
-    });
-  }, [transactions]);
-  const mask = (value: string) => (balanceHidden ? "••••••" : value);
-  const metrics: OverviewMetric[] = [
-    {
-      icon: ArrowDownLeft01Icon,
-      label: "Total Received",
-      money: mask(currency(totalIn)),
-      hint: "Net of the network tax, in the loaded history",
-      href: "/transactions",
-    },
-    {
-      icon: ArrowUpRight01Icon,
-      label: "Total Sent",
-      money: mask(currency(totalOut)),
-      hint: "Outgoing transfers in the loaded history",
-      href: "/transactions",
-    },
-    {
-      icon: TransactionHistoryIcon,
-      label: "Transactions",
-      count: transactions.length,
-      hint: "Search and filter transactions",
-      href: "/transactions",
-    },
-  ];
-  const frozen = wallet?.status === "frozen";
+    };
+    const now = side(range.from, range.to);
+    const before = side(range.from - range.days * DAY_MS, range.from);
+    return { ...now, countBefore: before.count };
+  }, [transactions, range]);
+
+  /** The bars behind the statistics card: the window split into equal slices, newest at the right. */
+  const slices = useMemo<Slice[]>(() => {
+    const span = range.to - range.from;
+    const buckets = Array.from({ length: BAR_COUNT }, (): Slice => ({ income: 0, expense: 0 }));
+    for (const transaction of transactions) {
+      const at = new Date(transaction.createdAt).getTime();
+      if (at < range.from || at >= range.to) continue;
+      const index = Math.min(BAR_COUNT - 1, Math.floor(((at - range.from) / span) * BAR_COUNT));
+      const bucket = buckets[index];
+      if (!bucket) continue;
+      if (transaction.direction === "received")
+        bucket.income += moneyChartValue(transaction.netAmount);
+      else bucket.expense += moneyChartValue(transaction.amount);
+    }
+    return buckets;
+  }, [transactions, range]);
+
+  /** The activity feed: the newest transfers, which is a different cut than the period totals. */
+  const recent = useMemo(
+    () => [...transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [transactions],
+  );
+
+  /** Who this wallet actually moves money with, newest contact first, for a one-tap resend. */
+  const counterparties = useMemo(() => {
+    const seen = new Map<string, Transaction>();
+    for (const transaction of recent) {
+      if (!seen.has(transaction.counterpartyAddress))
+        seen.set(transaction.counterpartyAddress, transaction);
+    }
+    return [...seen.values()].slice(0, COUNTERPARTY_LIMIT);
+  }, [recent]);
+
+  /**
+   * The balance is printed once on this board, and nowhere else: a figure repeated across cards
+   * reads as three different accounts, and a stale copy is worse than no copy at all.
+   */
+  const balance = wallet?.balance ?? "0";
+  const show = (value: string | number) => (balanceHidden ? "••••••" : amount(value));
+
+  /** Everything mining has already paid out, which is a total and not a live figure. */
+  const cycles = history.data?.sessions ?? [];
+  const settledCycles = cycles.filter((cycle) => cycle.status === "settled");
+  const mined = sumMoney(settledCycles.map((cycle) => cycle.settled));
+  const lastSettled = settledCycles[0]?.lastSettledAt ?? null;
+
   return (
-    <>
-      <PageHeader
-        title="Overview"
-        subtitle="Balance and activity at a glance, with a link into every section."
-        action={
-          <Link to="/transfer">
-            <Button>
-              <Icon icon={ArrowUpRight01Icon} size={17} />
-              Transfer funds
-            </Button>
-          </Link>
-        }
-      />
-      {/* Hero balance card: deep aurora surface in both themes, coin mark, quick actions. */}
-      <section className="relative animate-fade-in overflow-hidden rounded-[28px] bg-[linear-gradient(135deg,#0B1526_0%,#1B2A52_55%,#120D22_100%)] p-6 shadow-lg sm:p-8 dark:bg-[linear-gradient(135deg,#000000_0%,#1A1033_60%,#0B1526_100%)]">
-        <div
-          aria-hidden
-          className="absolute -top-24 end-[10%] size-[300px] rounded-full bg-[#7C5CFF]/30 blur-[100px]"
-        />
-        <div
-          aria-hidden
-          className="absolute bottom-[-40%] start-[30%] size-[280px] rounded-full bg-[#2DD4BF]/20 blur-[100px]"
-        />
-        <div
-          aria-hidden
-          className="absolute inset-0 opacity-50 [background-image:radial-gradient(rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:12px_12px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_80%)]"
-        />
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] font-semibold tracking-wide text-white/70 uppercase">
-                Available Balance
-              </span>
-              <button
-                type="button"
-                onClick={toggleBalanceHidden}
-                aria-pressed={balanceHidden}
-                aria-label={balanceHidden ? "Show balance" : "Hide balance"}
-                title={balanceHidden ? "Show balance" : "Hide balance"}
-                className="grid size-8 cursor-pointer place-items-center rounded-full border border-white/15 bg-white/5 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-              >
-                <Icon icon={balanceHidden ? ViewOffIcon : ViewIcon} size={16} />
-              </button>
-            </div>
-            <p className="mt-3 font-display text-4xl font-bold tabular-nums text-white sm:text-5xl">
-              {mask(currency(wallet?.balance ?? "0"))}
-            </p>
-            <p className="mt-2 text-sm text-white/60">
-              {transactions.length} recorded transactions
-            </p>
-            {wallet?.address && (
-              <div className="mt-4 flex w-full max-w-[300px] items-center gap-2 rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-white">
-                <code className="min-w-0 flex-1 truncate text-xs text-white/80">
-                  {wallet.address}
-                </code>
-                <CopyButton text={wallet.address} />
-                {frozen && (
-                  <span className="shrink-0 rounded-full bg-warning/20 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
-                    Frozen
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          <div aria-hidden className="relative hidden shrink-0 sm:block">
-            <div className="absolute inset-0 scale-125 rounded-full bg-[radial-gradient(circle,rgba(124,92,255,0.45)_0%,transparent_70%)] blur-2xl" />
-            <img
-              src="/Louma_Brand_logos/png/louma-logo-256x256.png"
-              alt=""
-              width={160}
-              height={160}
-              draggable={false}
-              className="relative size-36 border-0 bg-transparent object-contain shadow-none drop-shadow-[0_18px_50px_rgba(0,0,0,0.55)] lg:size-40"
+    <div className="grid gap-4 lg:grid-cols-[1.04fr_1fr] lg:grid-rows-[auto_auto_auto]">
+      {/* What moved in the period. The only card that reports the two totals themselves. */}
+      <section
+        className={`${CARD} order-2 flex flex-col gap-6 p-6 sm:flex-row sm:items-end lg:order-none`}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-display text-[22px] font-semibold">Statistics</h2>
+            <PillSelect
+              value={period.id}
+              label="Period"
+              options={PERIODS.map((entry) => ({ id: entry.id, label: entry.label }))}
+              onChange={(next) =>
+                setPeriod(PERIODS.find((entry) => entry.id === next) ?? PERIODS[1]!)
+              }
             />
           </div>
-        </div>
-        <div className="relative mt-6 flex flex-wrap gap-2 border-t border-white/10 pt-5">
-          <Link to="/transfer">
-            <Button className="rounded-full">
-              <Icon icon={ArrowUpRight01Icon} size={17} />
-              Send
-            </Button>
-          </Link>
-          {/* `hash` selects the Receive tab on arrival: the transfer page opens on Send, so a link
-              to its bare path would show the send form after the user asked for their address. */}
-          <Link to="/transfer" hash="receive">
-            <Button
-              variant="outline"
-              className="rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-            >
-              <Icon icon={ArrowDownLeft01Icon} size={17} />
-              Receive
-            </Button>
-          </Link>
-          <Link to="/wallet">
-            <Button
-              variant="outline"
-              className="rounded-full border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-            >
-              Wallet details
-            </Button>
-          </Link>
-        </div>
-      </section>
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
-        {/*
-         * Summary only: each card links to the page that owns the detail, so these figures
-         * never drift from the wallet or history screens.
-         */}
-        {metrics.map((metric, index) => (
-          <Link
-            key={metric.label}
-            to={metric.href}
-            className="min-h-28 rounded-2xl border bg-card p-4 shadow-sm transition-colors animate-fade-in hover:bg-secondary/50"
-            style={{ animationDelay: `${index * 75}ms`, animationFillMode: "both" }}
-          >
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Icon icon={metric.icon} size={18} className="text-muted-foreground" />
-              <span>{metric.label}</span>
-              <Icon icon={ArrowRight01Icon} size={15} className="ms-auto text-muted-foreground" />
+          <div className="mt-7 flex flex-wrap gap-x-10 gap-y-4">
+            <div>
+              <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
+                <span aria-hidden className="size-2 rounded-full bg-chart-2" />
+                Expenses
+              </p>
+              <p className="mt-1.5 font-display text-[24px] leading-none font-bold tabular-nums">
+                {show(flow.expense)}
+              </p>
             </div>
-            <strong className="mt-5 block font-display text-2xl">
-              {metric.money ?? <Count value={metric.count ?? 0} />}
-            </strong>
-            <p className="mt-1 text-xs text-muted-foreground">{metric.hint}</p>
-          </Link>
-        ))}
-      </div>
-      <section className="mt-4 rounded-[22px] border bg-card shadow-sm">
-        <div className="border-b px-5 py-4">
-          <h2 className="font-display text-base font-semibold">Transaction activity</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Last 7 days</p>
-        </div>
-        {transactions.length ? (
-          <div className="h-64 p-5">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chart}>
-                <defs>
-                  <linearGradient id="receivedFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--success)" stopOpacity={0.32} />
-                    <stop offset="100%" stopColor="var(--success)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="sentFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} stroke="var(--border)" />
-                <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} />
-                <YAxis tickLine={false} axisLine={false} fontSize={12} width={38} />
-                {/* The hidden-balance preference masks every amount on the overview, tooltips
-                    included: hovering the chart must not reveal what the toggle hid. */}
-                <Tooltip formatter={(value) => mask(currency(Number(value).toFixed(4)))} />
-                <Area
-                  type="monotone"
-                  dataKey="received"
-                  stroke="var(--success)"
-                  fill="url(#receivedFill)"
-                  strokeWidth={2}
-                  isAnimationActive
-                  animationDuration={1100}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="sent"
-                  stroke="var(--primary)"
-                  fill="url(#sentFill)"
-                  strokeWidth={2}
-                  isAnimationActive
-                  animationDuration={1100}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            <div>
+              <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
+                <span aria-hidden className="size-2 rounded-full bg-primary" />
+                Incomes
+              </p>
+              <p className="mt-1.5 font-display text-[24px] leading-none font-bold tabular-nums">
+                {show(flow.income)}
+              </p>
+            </div>
           </div>
-        ) : (
-          <EmptyState
-            title="No activity yet"
-            detail="Your transfers will appear here once you send or receive funds."
-            action={
-              <Link to="/transfer">
-                <Button variant="outline">Go to transfer</Button>
-              </Link>
-            }
-          />
-        )}
+        </div>
+        <div className="w-full shrink-0 sm:w-[46%]">
+          <BarChart slices={slices} />
+        </div>
       </section>
-      <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
-        <div className="flex items-center justify-between border-b px-5 py-4">
-          <h2 className="font-display text-base font-semibold">Recent transactions</h2>
-          <Link to="/transactions" className="text-sm font-semibold text-primary-soft">
-            View all
+
+      {/* How much happened, and what happened: the count, then the transfers themselves. */}
+      <section className={`${CARD} order-4 overflow-hidden lg:order-none lg:row-span-2`}>
+        <div className="bg-secondary p-5">
+          <div className="flex justify-end">
+            <WalletLogo />
+          </div>
+          <div className="mt-6 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[13px] font-semibold text-muted-foreground">
+                Transfers · {period.label.toLowerCase()}
+              </p>
+              <p className="mt-1 font-display text-[30px] leading-none font-bold tabular-nums">
+                {flow.count}
+              </p>
+            </div>
+            <Change current={flow.count} previous={flow.countBefore} />
+          </div>
+        </div>
+        <ul>
+          {recent.slice(0, FEED_ROWS).map((transaction) => {
+            const received = transaction.direction === "received";
+            return (
+              <li key={transaction.id} className="border-b last:border-b-0">
+                <Link
+                  to="/transactions/$transferId"
+                  params={{ transferId: transaction.transferId }}
+                  className="flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/60"
+                >
+                  <span
+                    className={`grid size-9 shrink-0 place-items-center rounded-[12px] ${
+                      received ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    <Icon icon={received ? ArrowDownLeft01Icon : ArrowUpRight01Icon} size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-bold">
+                      {transaction.note || shortAddress(transaction.counterpartyAddress)}
+                    </span>
+                    <span className="block truncate text-[11px] text-muted-foreground">
+                      {received ? "Received · " : "Sent · "}
+                      {relativeTime(transaction.createdAt)}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-[13px] font-bold tabular-nums">
+                    {show(received ? transaction.netAmount : transaction.amount)}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+          {recent.length === 0 && (
+            <li className="px-5 py-8 text-center text-[13px] text-muted-foreground">
+              Nothing moved in this period yet.
+            </li>
+          )}
+        </ul>
+      </section>
+
+      {/* The balance — the board's one dark card, and the number the eye lands on first.
+          On a phone it comes first (see the order utilities): the bento pairs only exist to arrange
+          the desktop grid, and the mobile column should open on the money, not on the charts. */}
+      <div className="contents gap-4 sm:grid sm:grid-cols-2">
+        <section className={`${INK} order-1 sm:order-none`}>
+          <div className="flex h-full flex-col justify-between p-5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-3">
+                <WalletLogo />
+                <span className="text-[12px] font-semibold tracking-wide opacity-70">
+                  Available balance
+                </span>
+              </span>
+              <MaskSwitch hidden={balanceHidden} onToggle={toggleBalanceHidden} />
+            </div>
+            <div className="mt-6 sm:mt-8">
+              <p className="font-display text-[26px] leading-none font-bold tabular-nums sm:text-[30px]">
+                {show(balance)}
+              </p>
+              <p className="mt-2.5 text-[11px] tracking-wide opacity-70">
+                LMA ·{" "}
+                {security?.wallet.status === "frozen"
+                  ? "Frozen · transfers are refused"
+                  : "Ready to transfer"}
+              </p>
+              {/* The address lives here and nowhere else: once, with the copy that makes it usable. */}
+              <div className="mt-2 flex min-w-0 items-center gap-1">
+                <code className="truncate text-[11px] opacity-70">
+                  {wallet?.address ? shortAddress(wallet.address) : "—"}
+                </code>
+                {wallet?.address && (
+                  <div className="[&>button]:size-6 [&>button]:shrink-0 [&>button]:text-background/70 [&>button:hover]:bg-background/10 [&>button:hover]:text-background">
+                    <CopyButton text={wallet.address} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* The live cycle, and how much of its window is still left to earn. */}
+        <MiningCycleCard state={mining.data} className="order-3 sm:order-none" />
+      </div>
+
+      {/* The people this wallet moves money with, and the two ways to move it. */}
+      <section
+        className={`${CARD} order-5 flex flex-wrap items-center justify-between gap-5 p-5 lg:order-none`}
+      >
+        <div className="min-w-0">
+          <p className="text-[12px] font-semibold text-muted-foreground">Send money to</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Link
+              to="/transfer"
+              aria-label="New transfer"
+              className="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105"
+            >
+              <Icon icon={Add01Icon} size={18} />
+            </Link>
+            {counterparties.length ? (
+              counterparties.map((transaction) => (
+                <Link
+                  key={transaction.counterpartyAddress}
+                  to="/transfer"
+                  onClick={() => prefillTransfer(transaction.counterpartyAddress)}
+                  title={transaction.counterpartyAddress}
+                  className="grid size-10 shrink-0 place-items-center rounded-full bg-secondary text-[12px] font-bold transition-transform hover:scale-105"
+                >
+                  {initials(transaction.counterpartyAddress)}
+                </Link>
+              ))
+            ) : (
+              <p className="text-[13px] text-muted-foreground">No counterparties yet.</p>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-col gap-3">
+          <Link
+            to="/wallet"
+            className="flex items-center gap-2 rounded-2xl bg-secondary px-5 py-3.5 text-[13px] font-bold tracking-wide text-secondary-foreground transition-colors hover:bg-secondary/80"
+          >
+            [ RECEIVE ]
+            <Icon icon={ArrowDownLeft01Icon} size={16} />
+          </Link>
+          <Link
+            to="/transfer"
+            className="flex items-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-[13px] font-bold tracking-wide text-primary-foreground transition-transform hover:scale-[1.02]"
+          >
+            [ TRANSFER ]
+            <Icon icon={ArrowUpRight01Icon} size={16} />
           </Link>
         </div>
-        {transactions.length ? (
-          transactions.slice(0, 4).map((t) => (
-            <Link
-              key={t.id}
-              to="/transactions/$transferId"
-              params={{ transferId: t.transferId }}
-              className="flex items-center gap-3 border-b px-5 py-4 transition-colors last:border-0 hover:bg-secondary/40"
-            >
-              <Icon
-                icon={t.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
-                className={t.direction === "sent" ? "text-primary-soft" : "text-success"}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{t.counterpartyAddress}</p>
-                <p className="text-xs text-muted-foreground">{dateText(t.createdAt)}</p>
-              </div>
-              <strong className="text-sm">
-                {t.direction === "sent" ? "-" : "+"}
-                {mask(currency(t.direction === "sent" ? t.amount : t.netAmount))}
-              </strong>
-            </Link>
-          ))
-        ) : (
-          <EmptyState
-            title="No transactions"
-            detail="Send funds to another wallet address to start a transaction history."
-            action={
-              <Link to="/transfer">
-                <Button variant="outline">New transfer</Button>
-              </Link>
-            }
-          />
-        )}
       </section>
-    </>
+
+      {/* What mining has already paid, and what protects the account holding it. */}
+      <div className="contents gap-4 sm:grid sm:grid-cols-2">
+        <section className={`${CARD} order-6 flex flex-col justify-between p-5 sm:order-none`}>
+          <div className="flex justify-end">
+            <WalletLogo />
+          </div>
+          <div className="mt-8">
+            <p className="text-[12px] font-semibold text-muted-foreground">
+              Mined · {settledCycles.length} {settledCycles.length === 1 ? "cycle" : "cycles"}
+            </p>
+            <p className="mt-1 font-display text-[26px] leading-none font-bold tabular-nums">
+              {show(mined)}
+            </p>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              {lastSettled
+                ? `Last collected ${relativeTime(lastSettled)}`
+                : "Nothing collected yet"}
+            </p>
+          </div>
+        </section>
+
+        {/* The account itself: what protects it and how many devices hold a session on it. */}
+        <section className={`${CARD} order-7 flex flex-col p-5 sm:order-none`}>
+          <p className="text-[12px] font-semibold text-muted-foreground">Account</p>
+          <dl className="mt-3 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-[12px] text-muted-foreground">Two-factor</dt>
+              <dd
+                className={`text-[13px] font-semibold ${
+                  security?.twoFactor.enabled ? "text-success" : "text-destructive"
+                }`}
+              >
+                {security?.twoFactor.enabled ? "On" : "Off"}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-[12px] text-muted-foreground">Sessions</dt>
+              <dd className="text-[13px] font-semibold tabular-nums">
+                {security?.activeSessions ?? "—"}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-[12px] text-muted-foreground">Wallet</dt>
+              <dd
+                className={`text-[13px] font-semibold ${
+                  security?.wallet.status === "frozen" ? "text-destructive" : "text-success"
+                }`}
+              >
+                {security?.wallet.status === "frozen" ? "Frozen" : "Active"}
+              </dd>
+            </div>
+          </dl>
+          <Link
+            to="/security"
+            className="mt-auto inline-flex items-center gap-1.5 pt-4 text-[13px] font-semibold text-primary-soft"
+          >
+            Security center
+            <Icon icon={ArrowRight01Icon} size={14} />
+          </Link>
+        </section>
+      </div>
+    </div>
   );
 }

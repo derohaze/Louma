@@ -13,6 +13,11 @@ const nextConfig = {
         hostname: 'avatars.githubusercontent.com',
         port: '',
       },
+      {
+        protocol: 'https',
+        hostname: 'tapback.co',
+        port: '',
+      },
     ],
   },
   async headers() {

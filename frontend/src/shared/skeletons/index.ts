@@ -15,11 +15,11 @@
  */
 export { GenericPageSkeleton, HeaderSkeleton, Shell } from "./shell/skeleton-shell";
 export { OverviewSkeleton } from "./account/skeleton-overview";
+export { AnalyticsSkeleton } from "./analytics/skeleton-analytics";
 export { MiningSkeleton } from "./mining/skeleton-mining";
 export { TransferSkeleton } from "./transfer/skeleton-transfer";
 export { WalletSkeleton } from "./wallet/skeleton-wallet";
 export { HistorySkeleton } from "./transactions/skeleton-transactions";
-export { AddressBookSkeleton } from "./wallet/skeleton-address-book";
 export { MiningHistorySkeleton } from "./mining/skeleton-mining-history";
 export { RecipientsSkeleton } from "./transfer/skeleton-recipients";
 export { TransactionDetailSkeleton } from "./transactions/skeleton-transaction-detail";
@@ -30,11 +30,11 @@ export { SecurityCenterSkeleton, SecurityDetailSkeleton } from "./account/skelet
 
 import { GenericPageSkeleton } from "./shell/skeleton-shell";
 import { OverviewSkeleton } from "./account/skeleton-overview";
+import { AnalyticsSkeleton } from "./analytics/skeleton-analytics";
 import { MiningSkeleton } from "./mining/skeleton-mining";
 import { TransferSkeleton } from "./transfer/skeleton-transfer";
 import { WalletSkeleton } from "./wallet/skeleton-wallet";
 import { HistorySkeleton } from "./transactions/skeleton-transactions";
-import { AddressBookSkeleton } from "./wallet/skeleton-address-book";
 import { MiningHistorySkeleton } from "./mining/skeleton-mining-history";
 import { RecipientsSkeleton } from "./transfer/skeleton-recipients";
 import { TransactionDetailSkeleton } from "./transactions/skeleton-transaction-detail";
@@ -63,8 +63,8 @@ import { SecurityCenterSkeleton, SecurityDetailSkeleton } from "./account/skelet
  */
 const skeletonsByPath: Record<string, (props: { title: string }) => React.ReactNode> = {
   "/": OverviewSkeleton,
+  "/analytics": AnalyticsSkeleton,
   "/wallet": WalletSkeleton,
-  "/wallet/address-book": AddressBookSkeleton,
   "/custom-address": CustomAddressSkeleton,
   "/transfer": TransferSkeleton,
   "/transfer/recipients": RecipientsSkeleton,
@@ -93,14 +93,15 @@ const skeletonPrefixes: Array<{
 ];
 
 const skeletonsByTitle: Record<string, (props: { title: string }) => React.ReactNode> = {
+  home: OverviewSkeleton,
   overview: OverviewSkeleton,
+  analytics: AnalyticsSkeleton,
   mining: MiningSkeleton,
   "mining pools": MiningHistorySkeleton,
   "mining history": MiningHistorySkeleton,
   transfer: TransferSkeleton,
   recipients: RecipientsSkeleton,
   wallet: WalletSkeleton,
-  "address book": AddressBookSkeleton,
   transactions: HistorySkeleton,
   transaction: TransactionDetailSkeleton,
   "custom address": CustomAddressSkeleton,

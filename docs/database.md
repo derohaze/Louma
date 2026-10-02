@@ -33,7 +33,11 @@ Strict + error on all collections. Money bounded by LEDGER_AMOUNT_MAX_MINOR
 (single movement) and LEDGER_BALANCE_MAX_MINOR (cumulative projection), both
 inside the JS safe-integer range, minor units only. transfers require their
 full triple; mining headers require owner/wallet/session/sequence/amounts/
-treasury/walletAccount/idempotencyKey. Bounded arrays: participants exactly 2,
+treasury/idempotencyKey. `walletAccountId` is written by current code and
+backfilled for legacy headers, but is not validator-required: during a
+mixed-version rollout an older process still writes headers without it, and
+requiring it would reject that process's settlement transactions. Bounded
+arrays: participants exactly 2,
 recoveryCodeHashes <= 16, notification title/body lengths, security metadata
 <= 16 properties, device featureProfile <= 64 keys x <= 5 digests.
 

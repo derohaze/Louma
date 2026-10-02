@@ -99,7 +99,12 @@ export const schemas: Record<string, Document> = {
               properties: { type: { enum: ["transfer"] }, senderUserId: { bsonType: "string" }, receiverUserId: { bsonType: "string" }, senderWalletId: { bsonType: "string" }, receiverWalletId: { bsonType: "string" }, senderAddress: { bsonType: "string" }, receiverAddress: { bsonType: "string" }, note: { bsonType: "string", maxLength: 240 } },
             },
             {
-              required: ["ownerUserId", "walletId", "miningSessionId", "sequenceNumber", "amountMinor", "treasuryAccountId", "walletAccountId", "idempotencyKey"],
+              // `walletAccountId` is deliberately NOT required: during a mixed-version rollout an
+              // older API process still writes mining headers without it, and requiring it here
+              // would reject that instance's whole settlement transaction, so the customers it
+              // serves could not collect rewards. Current code always writes it, and startup
+              // backfills legacy headers; this can be tightened once no pre-backfill writer runs.
+              required: ["ownerUserId", "walletId", "miningSessionId", "sequenceNumber", "amountMinor", "treasuryAccountId", "idempotencyKey"],
               properties: { type: { enum: ["mining"] }, ownerUserId: { bsonType: "string" }, walletId: { bsonType: "string" }, miningSessionId: { bsonType: "string" }, sequenceNumber: { bsonType: "int", minimum: 1 }, treasuryAccountId: { bsonType: "string" }, walletAccountId: { bsonType: "string" } },
             },
           ],

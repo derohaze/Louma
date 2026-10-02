@@ -45,7 +45,7 @@
     "react": "^19.2.0",
     "react-aria-components": "^1.21.1",
     "react-dom": "^19.2.0",
-    "recharts": "^2.15.4",
+    "recharts": "^3.10.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",

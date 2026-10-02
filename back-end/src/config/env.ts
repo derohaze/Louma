@@ -191,7 +191,12 @@ export interface RedisConfig {
   loginMaxPerMinute: number;
 }
 
-function loadRedisConfig(values: NodeJS.ProcessEnv): RedisConfig {
+/**
+ * Reads the Redis settings alone, so an operational script (mining-settings) can construct the
+ * same handle the API uses for cache invalidation without requiring the API's secrets
+ * (ACCESS_TOKEN_SECRET, APP_ENCRYPTION_KEY, FRONTEND_ORIGINS) on the host.
+ */
+export function loadRedisConfig(values: NodeJS.ProcessEnv): RedisConfig {
   const url = optionalString("REDIS_URL", values);
   if (url !== null && !url.startsWith("redis://") && !url.startsWith("rediss://")) {
     throw new Error("REDIS_URL must use the redis or rediss scheme");
@@ -517,7 +522,9 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
 
   return {
     environment: environment as RuntimeEnvironment,
-    host: values["HOST"] ?? "127.0.0.1",
+    // Production defaults to all interfaces: inside a container (Coolify/Docker)
+    // 127.0.0.1 is unreachable from the platform's reverse proxy.
+    host: values["HOST"] ?? (isProduction ? "0.0.0.0" : "127.0.0.1"),
     // Not `PORT`: that name is commonly exported by unrelated tools in the same shell, and
     // `node --env-file` never overrides an inherited variable, so a stray value would win over
     // this component's own configuration file. The fallback matches the frontend dev proxy default

@@ -364,12 +364,25 @@ export async function migrateMiningSettlementsToTransactions(db: Db, options: Se
 
   // Headers written by the previous release predate `walletAccountId`: backfill them from the
   // wallet's ledger account. Bounded and idempotent; rows with no resolvable account are reported.
+  //
+  // `_id`-ordered paging rather than re-querying the top of the collection: an updated header
+  // leaves the query (the field is now set), but an unresolvable one stays in it, and dry-run sets
+  // nothing at all — without a cursor a full batch would be fetched again forever, so startup (or a
+  // preflight dry run) would never finish.
+  let lastHeaderId: unknown = null;
   for (;;) {
+    const filter: Record<string, unknown> = {
+      type: "mining",
+      walletAccountId: { $exists: false },
+      ...(lastHeaderId === null ? {} : { _id: { $gt: lastHeaderId } }),
+    };
     const batch = await transactions
-      .find({ type: "mining", walletAccountId: { $exists: false } }, { projection: { publicId: 1, walletId: 1 } })
+      .find(filter, { projection: { publicId: 1, walletId: 1 } })
+      .sort({ _id: 1 })
       .limit(SETTLEMENT_MIGRATION_BATCH_SIZE)
       .toArray();
     if (batch.length === 0) break;
+    lastHeaderId = batch[batch.length - 1]?.["_id"] ?? null;
     for (const header of batch) {
       const walletId = header["walletId"];
       const account = typeof walletId === "string"
