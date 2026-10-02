@@ -1,10 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "tanstack-start",
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://REPLACE-WITH-COOLIFY-BACKEND-URL/api/:path*"
-    }
-  ]
+  "framework": "tanstack-start"
 }
