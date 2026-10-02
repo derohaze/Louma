@@ -18,6 +18,19 @@ function writeSessionHint(): void {
 
 export { writeSessionHint };
 
+/**
+ * Whether this browser has ever held a session. Read (not an auth decision) so a first-time visitor
+ * who is not signed in can be sent to create an account while a returning visitor whose session
+ * expired is sent to log in. The server stays authoritative either way.
+ */
+export function hasSessionHint(): boolean {
+  try {
+    return window.localStorage?.getItem(SESSION_HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function clearSessionHint(): void {
   try {
     window.localStorage?.removeItem(SESSION_HINT_KEY);

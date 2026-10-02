@@ -17,6 +17,6 @@ export type {
 } from "./client/types";
 export { ApiError } from "./client/types";
 export { clearAccessToken } from "./session/session";
-export { clearSessionHint } from "./session/session-hint";
+export { clearSessionHint, hasSessionHint } from "./session/session-hint";
 export { api, openNotificationStream, messageForError } from "./client/transport";
 export { login, register, completeTwoFactor, logout } from "./auth/auth";

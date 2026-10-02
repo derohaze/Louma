@@ -1,4 +1,4 @@
-import type { ObjectId } from "mongodb";
+import { ObjectId } from "mongodb";
 import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import { invalidate, poolMembershipKey, type CacheContext } from "../../infrastructure/redis/cache.js";
@@ -80,6 +80,102 @@ export function getPoolById(config: PoolsConfig, poolId: string): MiningPoolDefi
   const pool = poolDefinitions(config).find((entry) => entry.id === poolId);
   if (!pool) throw badRequest("invalid_pool", "Unknown mining pool.");
   return pool;
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === 11000
+  );
+}
+
+/**
+ * Puts a switcher back into its previous room after a join to another room did not stick.
+ *
+ * Both restore paths race with other joins, so this never clobbers a membership another join has
+ * already made this account's own. The move is guarded on the row still being the destination room's:
+ * if a concurrent join moved it elsewhere, nothing matches and that membership is left alone. When
+ * no row exists at all the write is an insert against the unique `ownerUserId` index, whose
+ * duplicate-key rejection means another join won the account's membership in the meantime.
+ *
+ * The previous room's cap is then re-enforced, so a switcher returning to a room that filled while
+ * it was away is removed again rather than pushing that room over `maxMembers`. Returns whether the
+ * account ended up (and stayed) in its previous room.
+ */
+async function restorePreviousMembership(input: {
+  collections: Collections;
+  config: PoolsConfig;
+  ownerUserId: string;
+  prevPoolId: MiningPoolId;
+  fromPoolId: MiningPoolId;
+}): Promise<boolean> {
+  const moved = await input.collections.miningPoolMembers.updateOne(
+    { ownerUserId: input.ownerUserId, poolId: input.fromPoolId },
+    { $set: { poolId: input.prevPoolId, updatedAt: new Date() } },
+  );
+  if (moved.modifiedCount !== 1) {
+    const now = new Date();
+    try {
+      await input.collections.miningPoolMembers.insertOne({
+        _id: new ObjectId(),
+        ownerUserId: input.ownerUserId,
+        poolId: input.prevPoolId,
+        joinedAt: now,
+        updatedAt: now,
+      });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+  return enforceMembershipCap({
+    collections: input.collections,
+    config: input.config,
+    ownerUserId: input.ownerUserId,
+    poolId: input.prevPoolId,
+  });
+}
+
+/**
+ * Keeps one room at or below its cap after a membership was written outside the join path. Rows are
+ * trimmed newest-first, so a just-restored switcher is the first removed when the room filled up
+ * while it was away — it then stays pool-less, exactly like a new joiner that could not get a seat,
+ * rather than leaving the room above `maxMembers`. Returns whether the account is still a member.
+ */
+async function enforceMembershipCap(input: {
+  collections: Collections;
+  config: PoolsConfig;
+  ownerUserId: string;
+  poolId: MiningPoolId;
+}): Promise<boolean> {
+  const pool = getPoolById(input.config, input.poolId);
+  for (;;) {
+    const total = await input.collections.miningPoolMembers.countDocuments({ poolId: pool.id });
+    if (total <= pool.maxMembers) return true;
+    const window = await input.collections.miningPoolMembers
+      .find({ poolId: pool.id }, { projection: { ownerUserId: 1, updatedAt: 1 } })
+      .sort({ updatedAt: 1, _id: 1 })
+      .limit(pool.maxMembers + 1)
+      .toArray();
+    if (window.length <= pool.maxMembers) return true;
+    const newestAt = window[window.length - 1]!.updatedAt?.getTime();
+    const tiedLatest = window.filter((row) => row.updatedAt?.getTime() === newestAt);
+    const victim = tiedLatest[0] ?? window[window.length - 1]!;
+    await input.collections.miningPoolMembers.deleteOne({ ownerUserId: victim.ownerUserId, poolId: pool.id });
+    if (victim.ownerUserId === input.ownerUserId) return false;
+  }
+}
+
+/** Drops this account's cached membership after the recovery paths changed it below. */
+async function invalidateMembership(input: {
+  cache?: CacheContext | undefined;
+  membershipCache?: CacheContext | undefined;
+  ownerUserId: string;
+}): Promise<void> {
+  const handle = input.membershipCache?.redis ?? input.cache?.redis;
+  if (handle) await invalidate(handle, poolMembershipKey(handle, input.ownerUserId));
 }
 
 /** One bounded draw from the member's pool (average 1.0x for both pools). */
@@ -226,13 +322,19 @@ export async function joinMiningPool(input: {
     // This join lost the race. A switcher goes back to its previous room instead of being
     // left pool-less (and unable to mine until it joins again); a new joiner is removed.
     if (prevPoolId !== null && prevPoolId !== pool.id) {
-      await input.collections.miningPoolMembers.updateOne(
-        { ownerUserId: input.ownerUserId },
-        { $set: { poolId: prevPoolId, updatedAt: new Date() } },
-      );
+      await restorePreviousMembership({
+        collections: input.collections,
+        config: input.config,
+        ownerUserId: input.ownerUserId,
+        prevPoolId,
+        fromPoolId: pool.id,
+      });
     } else {
       await input.collections.miningPoolMembers.deleteOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
     }
+    // MongoDB moved above, so the cached membership may now be wrong: invalidate before the
+    // rejection leaves, exactly as the success path does.
+    await invalidateMembership(input);
     throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
   }
   // A racing trim may have evicted this membership after it was counted above: confirm it is
@@ -243,21 +345,23 @@ export async function joinMiningPool(input: {
   const mine = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
   if (!mine) {
     if (prevPoolId !== null && prevPoolId !== pool.id) {
-      const present = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
-      if (!present) {
-        await input.collections.miningPoolMembers.updateOne(
-          { ownerUserId: input.ownerUserId },
-          { $set: { poolId: prevPoolId, joinedAt: new Date(), updatedAt: new Date() } },
-          { upsert: true },
-        );
-      }
+      // A racing trim removed the membership after it was counted. Put the switcher back, atomically
+      // and within its old room's cap, then invalidate the cached membership it changed — a cached
+      // "no pool" would otherwise outlive this write until its TTL.
+      await restorePreviousMembership({
+        collections: input.collections,
+        config: input.config,
+        ownerUserId: input.ownerUserId,
+        prevPoolId,
+        fromPoolId: pool.id,
+      });
+      await invalidateMembership(input);
     }
     throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
   }
   // The membership changed: invalidate eagerly so the next read is authoritative. MongoDB first,
   // cache second — a lost invalidation only serves the previous room until the TTL.
-  const handle = input.membershipCache?.redis ?? input.cache?.redis;
-  if (handle) await invalidate(handle, poolMembershipKey(handle, input.ownerUserId));
+  await invalidateMembership(input);
   return getMiningPoolsState({ collections: input.collections, config: live, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
 }
 

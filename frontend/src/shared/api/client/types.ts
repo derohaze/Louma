@@ -47,6 +47,8 @@ export interface ApiMiningSession {
   progress: number;
   canSettle: boolean;
   lastSettledAt: string | null;
+  /** Each posted payout of the cycle, oldest first. Present on mining history; may be absent on older payloads. */
+  settlements?: { amount: string; at: string }[];
 }
 
 export interface ApiMiningState {

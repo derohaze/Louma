@@ -7,6 +7,54 @@ type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
 };
 
+/**
+ * Same-origin API proxy.
+ *
+ * The customer app talks to the API at `/api/v1/...` on its own origin, which is what keeps the
+ * refresh cookie first-party and needs no CORS. In development Vite's proxy supplies that origin,
+ * but a deployed build (Vercel Function or a plain Node server) does not have a proxy of its own:
+ * without one, `/api/*` falls through to this app's router and answers the 404 page — exactly the
+ * failure that made `/auth/csrf` and `/auth/refresh` return 404 in production. When `BACKEND_URL` is
+ * set, this entry forwards those requests to the API instead, so the routing works on any host and
+ * the backend URL never has to be baked into the browser bundle.
+ *
+ * The response is rebuilt rather than returned as-is: `fetch` transparently decodes the body, so the
+ * backend's `content-encoding`/`content-length` no longer describe what is being sent, and every
+ * `Set-Cookie` header has to survive for the session cookies to work.
+ */
+const API_PREFIX = "/api/";
+
+function backendBaseUrl(): string | null {
+  const raw = typeof process === "undefined" ? undefined : process.env["BACKEND_URL"];
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed.replace(/\/+$/, "") : null;
+}
+
+async function proxyApiRequest(request: Request, backend: string): Promise<Response> {
+  const incoming = new URL(request.url);
+  const target = new URL(`${incoming.pathname}${incoming.search}`, backend);
+  const headers = new Headers(request.headers);
+  // `Host` and `Content-Length` describe this origin/the original body; `fetch` sets them for the
+  // backend itself, and forwarding the originals would make the backend see the wrong host.
+  headers.delete("host");
+  headers.delete("content-length");
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const response = await fetch(target, {
+    method: request.method,
+    headers,
+    ...(hasBody ? ({ body: request.body, duplex: "half" } as RequestInit) : {}),
+    redirect: "manual",
+  });
+  const responseHeaders = new Headers(response.headers);
+  responseHeaders.delete("content-encoding");
+  responseHeaders.delete("content-length");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: responseHeaders,
+  });
+}
+
 let serverEntryPromise: Promise<ServerEntry> | undefined;
 
 async function getServerEntry(): Promise<ServerEntry> {
@@ -47,6 +95,10 @@ function isH3SwallowedErrorBody(body: string): boolean {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      const backend = backendBaseUrl();
+      if (backend && new URL(request.url).pathname.startsWith(API_PREFIX)) {
+        return await proxyApiRequest(request, backend);
+      }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);

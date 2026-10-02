@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   useInfiniteQuery,
@@ -10,6 +10,7 @@ import {
   ApiError,
   clearAccessToken,
   clearSessionHint,
+  hasSessionHint,
   logout as endSession,
   messageForError,
   type ApiSecurityOverview,
@@ -51,6 +52,12 @@ import { startNotificationStream, stopNotificationStream } from "@/shared/lib/pl
 export function WalletProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  /**
+   * Captured once, before any request can clear it: a visitor whose session the API rejects is sent
+   * to log in when this browser has held a session before, and to create an account when it never
+   * has. The hint is read at mount because the rejected refresh clears it before the redirect runs.
+   */
+  const [hadSession] = useState(hasSessionHint);
 
   const profile = useQuery<AccountProfile>({
     queryKey: serverStateKeys.profile,
@@ -253,14 +260,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       stopNotificationStream();
       await queryClient.cancelQueries();
       try {
-        await navigate({ to: "/login", replace: true });
+        await navigate({ to: hadSession ? "/login" : "/signup", replace: true });
       } finally {
         clearWalletSnapshot();
         clearTransferPrefill();
         clearAccountCache(queryClient);
       }
     })();
-  }, [profile.error, navigate, queryClient]);
+  }, [profile.error, navigate, queryClient, hadSession]);
 
   /**
    * The realtime channel belongs to the session: it opens once the account is known — from the cache

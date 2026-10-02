@@ -4,4 +4,4 @@
  * Import from `@/shared/api` — never deep from this folder.
  */
 export { clearAccessToken } from "./session";
-export { clearSessionHint } from "./session-hint";
+export { clearSessionHint, hasSessionHint } from "./session-hint";

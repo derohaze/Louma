@@ -22,7 +22,7 @@ const BLOCKS = [0, 1, 2, 3, 4, 5] as const;
 
 const FACTS = [
   { id: 'direct', term: 'Direct', detail: 'Rewards land in your wallet' },
-  { id: 'cycle', term: 'Every cycle', detail: 'No claim or withdrawal step' },
+  { id: 'cycle', term: 'Every cycle', detail: 'Collect it with one tap' },
   { id: 'receipt', term: 'Receipted', detail: 'Every credit stays auditable' },
 ] as const;
 
