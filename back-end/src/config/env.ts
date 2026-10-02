@@ -156,9 +156,62 @@ export interface AppConfig {
    * and rate-limits by.
    */
   trustProxy: boolean | string[];
+  redis: RedisConfig;
   mining: MiningConfig;
   miningPools: MiningPoolsConfig;
   lmdg: LmdgConfig;
+}
+
+/**
+ * Redis-backed ephemeral infrastructure: cache-aside reads, distributed rate limits, and
+ * short-lived coordination. Every field degrades, never governs: Redis is absent by default
+ * (`REDIS_URL` unset) and the application stays financially correct without it — MongoDB alone
+ * remains the authority for money, and every Redis consumer treats an outage as a cache miss
+ * (see docs/redis.md and ADR-002). No secrets, credentials, or plaintext key material may ever
+ * be cached; only derived, rebuildable read models.
+ */
+export interface RedisConfig {
+  /** Null disables Redis: the application runs MongoDB-only with in-process fallbacks. */
+  url: string | null;
+  /** Key namespace prefix; every key the application writes starts with it. */
+  keyPrefix: string;
+  connectTimeoutMs: number;
+  commandTimeoutMs: number;
+  /** Mining-settings cache TTL: operator changes propagate within this window at most. */
+  miningSettingsCacheTtlSeconds: number;
+  /** Pool-membership cache TTL: join/leave invalidates eagerly, this bounds staleness. */
+  poolMembershipCacheTtlSeconds: number;
+  /** Recipient display-name cache TTL for the transfer preview masking. */
+  displayNameCacheTtlSeconds: number;
+  /** Distributed per-account limit: transfer previews per minute (fail-open). */
+  transferPreviewMaxPerMinute: number;
+  /** Distributed per-account limit: mining starts per minute (fail-open). */
+  miningStartMaxPerMinute: number;
+  /** Distributed per-IP limit: login attempts per minute (fail-open with local fallback). */
+  loginMaxPerMinute: number;
+}
+
+function loadRedisConfig(values: NodeJS.ProcessEnv): RedisConfig {
+  const url = optionalString("REDIS_URL", values);
+  if (url !== null && !url.startsWith("redis://") && !url.startsWith("rediss://")) {
+    throw new Error("REDIS_URL must use the redis or rediss scheme");
+  }
+  const keyPrefix = (values["REDIS_KEY_PREFIX"] ?? "louma").trim() || "louma";
+  if (!/^[a-z0-9_-]{1,32}$/.test(keyPrefix)) {
+    throw new Error("REDIS_KEY_PREFIX must be 1..32 lowercase letters, digits, '-' or '_'");
+  }
+  return {
+    url,
+    keyPrefix,
+    connectTimeoutMs: positiveInteger("REDIS_CONNECT_TIMEOUT_MS", values["REDIS_CONNECT_TIMEOUT_MS"] ?? "2000"),
+    commandTimeoutMs: positiveInteger("REDIS_COMMAND_TIMEOUT_MS", values["REDIS_COMMAND_TIMEOUT_MS"] ?? "1000"),
+    miningSettingsCacheTtlSeconds: positiveInteger("REDIS_MINING_SETTINGS_TTL_SECONDS", values["REDIS_MINING_SETTINGS_TTL_SECONDS"] ?? "30"),
+    poolMembershipCacheTtlSeconds: positiveInteger("REDIS_POOL_MEMBERSHIP_TTL_SECONDS", values["REDIS_POOL_MEMBERSHIP_TTL_SECONDS"] ?? "60"),
+    displayNameCacheTtlSeconds: positiveInteger("REDIS_DISPLAY_NAME_TTL_SECONDS", values["REDIS_DISPLAY_NAME_TTL_SECONDS"] ?? "300"),
+    transferPreviewMaxPerMinute: positiveInteger("REDIS_LIMIT_TRANSFER_PREVIEW_PER_MINUTE", values["REDIS_LIMIT_TRANSFER_PREVIEW_PER_MINUTE"] ?? "30"),
+    miningStartMaxPerMinute: positiveInteger("REDIS_LIMIT_MINING_START_PER_MINUTE", values["REDIS_LIMIT_MINING_START_PER_MINUTE"] ?? "10"),
+    loginMaxPerMinute: positiveInteger("REDIS_LIMIT_LOGIN_PER_MINUTE", values["REDIS_LIMIT_LOGIN_PER_MINUTE"] ?? "10"),
+  };
 }
 
 function required(name: string, values: NodeJS.ProcessEnv): string {
@@ -490,6 +543,7 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     proxycheckTimeoutMs: positiveInteger("PROXYCHECK_TIMEOUT_MS", values["PROXYCHECK_TIMEOUT_MS"] ?? "2500"),
     proxycheckHmacKey: optionalString("PROXYCHECK_HMAC_KEY", values),
     trustProxy: parseTrustedProxies("TRUST_PROXY", values),
+    redis: loadRedisConfig(values),
     mining: loadMiningConfig(values),
     miningPools: loadMiningPoolsConfig(values),
     lmdg: loadLmdgConfig(values),

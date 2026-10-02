@@ -80,6 +80,18 @@ export async function reconcileAccountProjections(input: { collections: Collecti
 }
 
 /**
+ * The one canonical list of test-funding correlation prefixes.
+ *
+ * Each integration suite mints funding through a direct, deliberately unrecorded ledger line so the
+ * debit has no journal header by construction. A suite killed before its teardown leaves those lines
+ * (and any other suite's) behind, and reporting them as orphaned entries reads like a financial
+ * defect when it is really abandoned test data. Every suite, the cleanup script, and any reconciliation
+ * they run must exclude the SAME prefixes — a suite that listed only its own left the others' debris
+ * visible. Keeping the list here is what makes production strict: nothing in production passes it.
+ */
+export const TEST_FUNDING_CORRELATION_PREFIXES: readonly string[] = ["smoke-funding-", "adversarial-funding-", "benchmark-"];
+
+/**
  * Options for a reconciliation run.
  *
  * `excludeCorrelationIdPrefixes` exists for test infrastructure only: the integration suite mints
@@ -87,10 +99,10 @@ export async function reconcileAccountProjections(input: { collections: Collecti
  * reported as orphaned entries. Production runs pass nothing, and every entry is checked strictly.
  */
 export interface ReconcileOptions {
-  excludeCorrelationIdPrefixes?: string[];
+  excludeCorrelationIdPrefixes?: readonly string[];
 }
 
-function isExcludedEntry(entry: { correlationId: string }, prefixes: string[] | undefined): boolean {
+function isExcludedEntry(entry: { correlationId: string }, prefixes: readonly string[] | undefined): boolean {
   return prefixes !== undefined && prefixes.some((prefix) => entry.correlationId.startsWith(prefix));
 }
 

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { CustomAddressContent } from "@/components/wallet-pages";
+import { WalletPage } from "@/app/shell";
+import { CustomAddressPage } from "@/features/wallet";
 export const Route = createFileRoute("/custom-address")({
   head: () => ({
     meta: [
@@ -14,7 +14,7 @@ export const Route = createFileRoute("/custom-address")({
   }),
   component: () => (
     <WalletPage title="Custom Address">
-      <CustomAddressContent />
+      <CustomAddressPage />
     </WalletPage>
   ),
 });

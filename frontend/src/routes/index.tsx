@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { OverviewContent } from "@/components/wallet-overview";
+import { WalletPage } from "@/app/shell";
+import { OverviewContent } from "@/features/overview";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [

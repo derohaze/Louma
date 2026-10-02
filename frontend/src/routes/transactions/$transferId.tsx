@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { TransactionDetailContent } from "@/components/transaction-detail";
-import { pageHead } from "@/lib/page-head";
+import { WalletPage } from "@/app/shell";
+import { TransactionDetailContent } from "@/features/transactions";
+import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/transactions/$transferId")({
   head: () => pageHead("Transaction", "One transfer with its amount, tax, status, and receipt."),

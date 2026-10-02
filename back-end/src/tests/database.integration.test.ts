@@ -11,9 +11,10 @@ import { connectMongo } from "../infrastructure/mongodb/client.js";
 import type { Db } from "mongodb";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
+import { disabledRedis } from "../infrastructure/redis/client.js";
 import { formatMoney, parseMoneyToMinorUnits } from "../modules/ledger/money.js";
-import { reconcileLedger } from "../modules/ledger/reconciliation.js";
-import { PENDING_2FA_TTL_MS } from "../shared/types.js";
+import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
+import { isTransferTransaction, PENDING_2FA_TTL_MS } from "../shared/types.js";
 import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
 
 /**
@@ -274,7 +275,7 @@ before(async () => {
   db = connection.db;
   collections = getCollections(connection.db);
   await ensureDatabaseIndexes(connection.db);
-  app = await buildApp({ config, collections, mongoClient: client, logger: false });
+  app = await buildApp({ config, collections, mongoClient: client, redis: disabledRedis(), logger: false });
   // The token a first-time visitor is handed, before any session exists.
   const csrf = await call("GET", "/api/v1/auth/csrf");
   assert.equal(csrf.status, 200, JSON.stringify(csrf.body));
@@ -291,13 +292,8 @@ after(async () => {
     const runTransactions = await collections.transactions
       .find({ $or: [{ senderUserId: { $in: createdUserIds } }, { receiverUserId: { $in: createdUserIds } }] })
       .toArray();
-    const runTransactionIds = [
-      ...new Set([
-        ...createdTransactionIds,
-        ...runTransactions.map((transaction) => transaction.publicId),
-        ...runTransactions.map((transaction) => transaction.transferId),
-      ]),
-    ];
+    const runTransferIds = runTransactions.filter(isTransferTransaction).map((transaction) => transaction.transferId);
+    const runTransactionIds = [...new Set([...createdTransactionIds, ...runTransactions.map((transaction) => transaction.publicId), ...runTransferIds])];
     for (const userId of createdUserIds) {
       await collections.sessions.deleteMany({ ownerUserId: userId });
       await collections.securityEvents.deleteMany({ ownerUserId: userId });
@@ -306,8 +302,10 @@ after(async () => {
       await collections.transferAuthorizations.deleteMany({ ownerUserId: userId });
       await collections.twoFactorUses.deleteMany({ ownerUserId: userId });
       await collections.notifications.deleteMany({ ownerUserId: userId });
-      await collections.wallets.deleteMany({ ownerUserId: userId });
-      await collections.users.deleteMany({ publicId: userId });
+      // Wallets and their owners are deleted last, after the ledger accounts (below): an interrupted
+      // run must not leave a wallet account whose wallet is already gone. That orphan is unreachable
+      // to `cleanup:test-accounts` — which resolves accounts from wallets — and the next suite's
+      // reconciliation then reports it as a projection mismatch.
     }
     // The fee and treasury balances are adjusted by exactly what this run contributed, computed
     // before the lines are deleted. Replacing a live projection from a scan would erase a fee (or a
@@ -335,6 +333,11 @@ after(async () => {
     // Only treasuries this run created are removed. One that was already in the database keeps its
     // account and its own ledger history, with the funding it received just taken back.
     await collections.ledgerAccounts.deleteMany({ publicId: { $in: createdTreasuryAccountIds } });
+    // Last, once every ledger account is gone: wallets and their owners.
+    for (const userId of createdUserIds) {
+      await collections.wallets.deleteMany({ ownerUserId: userId });
+      await collections.users.deleteMany({ publicId: userId });
+    }
     await app?.close();
     await client?.close();
   }
@@ -477,8 +480,9 @@ test("startup backfills legacy transactions across batches and keeps them visibl
       0,
       "every legacy row was backfilled, including the rows past the first batch",
     );
-    const sample = await collections.transactions.findOne({ senderUserId: sender.userId });
-    assert.deepEqual(sample?.participants, [sender.userId, receiver.userId]);
+    const sample = await collections.transactions.findOne({ type: "transfer", senderUserId: sender.userId });
+    assert.ok(sample && isTransferTransaction(sample));
+    assert.deepEqual(sample.participants, [sender.userId, receiver.userId]);
 
     // The combined history serves both representations through one merged page order.
     const seen: string[] = [];
@@ -1278,7 +1282,7 @@ async function assertFullReconciliation(): Promise<void> {
   const result = await reconcileLedger({
     collections,
     mongoClient: client,
-    options: { excludeCorrelationIdPrefixes: ["smoke-funding-", "adversarial-funding-", "benchmark-"] },
+    options: { excludeCorrelationIdPrefixes: TEST_FUNDING_CORRELATION_PREFIXES },
   });
   assert.ok(result.ok, `ledger reconciliation must pass: ${JSON.stringify(result.issues)}`);
 }

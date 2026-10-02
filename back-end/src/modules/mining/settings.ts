@@ -1,6 +1,8 @@
 import type { ObjectId } from "mongodb";
 import type { AppConfig, MiningConfig, MiningPoolsConfig, MiningPoolSpec } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import type { RedisHandle } from "../../infrastructure/redis/client.js";
+import { invalidate, miningSettingsKey, readThrough, type CacheContext } from "../../infrastructure/redis/cache.js";
 import { LEDGER_AMOUNT_MAX_MINOR, MONEY_SCALE } from "../../shared/types.js";
 
 /**
@@ -148,14 +150,34 @@ export function resolveMiningSettingsFromDocs(
 
 type EnvDefaults = Pick<AppConfig, "mining" | "miningPools">;
 
-/** Reads the live mining configuration: stored keys win, missing keys use env defaults. */
+/**
+ * Reads the live mining configuration: stored keys win, missing keys use env defaults.
+ *
+ * Hot path (every transfer settles mining first): with `cache` the settings documents go through
+ * cache-aside — one MongoDB read per TTL window per process instead of one per call. The cached
+ * value is the raw documents, so `resolveMiningSettingsFromDocs` still validates every read and a
+ * bad row can never be cemented by the cache. Writes (`setMiningSetting`/`resetMiningSetting`)
+ * invalidate eagerly; the TTL only bounds a lost-invalidation race. Without `cache` the behavior
+ * is exactly the historical one: one indexed read per call, effective immediately.
+ */
 export async function loadMiningSettings(
   collections: Collections,
   defaults: EnvDefaults,
+  cache?: CacheContext | undefined,
 ): Promise<ResolvedMiningConfig> {
   let docs: { key: string; value: unknown }[];
   try {
-    docs = await collections.miningSettings.find({}).toArray();
+    if (!cache) {
+      docs = await collections.miningSettings.find({}).toArray();
+    } else {
+      const read = await readThrough({
+        redis: cache.redis,
+        key: miningSettingsKey(cache.redis),
+        ttlSeconds: cache.ttlSeconds,
+        load: () => collections.miningSettings.find({}).toArray(),
+      });
+      docs = Array.isArray(read.value) ? read.value : [];
+    }
   } catch {
     // A failed read must not substitute the enabling env defaults over a stored pause:
     // with the store unreadable the safe answer is mining off until the next successful read.
@@ -176,6 +198,8 @@ export async function setMiningSetting(input: {
   key: string;
   value: unknown;
   updatedBy: string;
+  /** When present, the settings cache entry is invalidated after the write lands. */
+  redis?: RedisHandle;
 }): Promise<MiningSettingRecord> {
   if (!isMiningSettingKey(input.key)) {
     throw new Error(`Unknown mining setting: ${input.key}. Known keys: ${MINING_SETTING_KEYS.join(", ")}`);
@@ -197,6 +221,9 @@ export async function setMiningSetting(input: {
   );
   const stored = await input.collections.miningSettings.findOne({ key: input.key });
   if (!stored) throw new Error(`Failed to store mining setting ${input.key}`);
+  // MongoDB first, cache second: a failed invalidation only leaves the previous value cached
+  // until the TTL, and the next operator write retries the invalidation.
+  if (input.redis) await invalidate(input.redis, miningSettingsKey(input.redis));
   return stored;
 }
 
@@ -204,10 +231,13 @@ export async function setMiningSetting(input: {
 export async function resetMiningSetting(input: {
   collections: Collections;
   key: string;
+  /** When present, the settings cache entry is invalidated after the write lands. */
+  redis?: RedisHandle;
 }): Promise<boolean> {
   if (!isMiningSettingKey(input.key)) {
     throw new Error(`Unknown mining setting: ${input.key}. Known keys: ${MINING_SETTING_KEYS.join(", ")}`);
   }
   const removed = await input.collections.miningSettings.deleteOne({ key: input.key });
+  if (input.redis) await invalidate(input.redis, miningSettingsKey(input.redis));
   return removed.deletedCount === 1;
 }

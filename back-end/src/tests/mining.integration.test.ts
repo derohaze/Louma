@@ -8,8 +8,9 @@ import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
-import { MONEY_SCALE } from "../shared/types.js";
-import { reconcileLedger } from "../modules/ledger/reconciliation.js";
+import { disabledRedis } from "../infrastructure/redis/client.js";
+import { isMiningTransaction, MONEY_SCALE } from "../shared/types.js";
+import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
 
 /**
  * Mining against the configured MongoDB cluster.
@@ -329,7 +330,8 @@ function settledMatchesRecentAccrual(session: MiningSession, settledMinor: numbe
 }
 
 async function trackSettlements(sessionId: string): Promise<void> {
-  const settlements = await collections.miningSettlements.find({ sessionPublicId: sessionId }).toArray();
+  // The journal header is the settlement record (see ADR-003): one header per reward.
+  const settlements = await collections.transactions.find({ type: "mining", miningSessionId: sessionId }).toArray();
   for (const settlement of settlements) {
     if (!createdTransactionIds.includes(settlement.publicId)) {
       createdTransactionIds.push(settlement.publicId);
@@ -348,7 +350,7 @@ before(async () => {
   // full 24 hours and would correlate with this run's machines. Only test rows can match — a real
   // client reports a SHA-256 of its GPU string, never a `webgl-machine-*` label.
   await removeFixtureDevices();
-  app = await buildApp({ config, collections, mongoClient: client, logger: false });
+  app = await buildApp({ config, collections, mongoClient: client, redis: disabledRedis(), logger: false });
   const csrf = await call("GET", "/api/v1/auth/csrf");
   assert.equal(csrf.status, 200, JSON.stringify(csrf.body));
   preauthCsrfTokenValue = csrf.body["csrfToken"] as string;
@@ -363,8 +365,9 @@ after(async () => {
     await collections.miningPoolMembers.deleteMany({ ownerUserId: userId });
     await collections.securityEvents.deleteMany({ ownerUserId: userId });
     await collections.sessions.deleteMany({ ownerUserId: userId });
-    await collections.wallets.deleteMany({ ownerUserId: userId });
-    await collections.users.deleteMany({ publicId: userId });
+    // Wallets and their owners go last, after the ledger accounts below: an interrupted run must
+    // not leave a wallet account whose wallet is already gone (unreachable to cleanup and reported
+    // as a projection mismatch by the next suite's reconciliation).
   }
   // Device identity and its leases, so a finished run leaves nothing that can refuse the next
   // one's starts. Device records deliberately carry no owner, so the rows this run created are
@@ -404,6 +407,11 @@ after(async () => {
   await collections.ledgerAccounts.deleteMany({ publicId: { $in: createdWalletAccountIds } });
   if (treasuryDeltaMinor !== 0) {
     await collections.ledgerAccounts.updateOne({ accountType: "system_treasury", currency: "LMA" }, { $inc: { balanceMinor: -treasuryDeltaMinor } });
+  }
+  // Last, once every ledger account is gone: wallets and their owners.
+  for (const userId of createdUserIds) {
+    await collections.wallets.deleteMany({ ownerUserId: userId });
+    await collections.users.deleteMany({ publicId: userId });
   }
   await app?.close();
   await client?.close();
@@ -496,12 +504,20 @@ test("start opens exactly a 24-hour cycle with a server-chosen rate inside the c
   const account = await register("start");
   assert.equal((await miningState(account)).status, "idle", "a fresh account has no cycle");
 
+  const requestedAt = Date.now();
   const started = await startMining(account);
   const session = started.session;
   assert.equal(session.status, "active");
   assert.equal(new Date(session.endsAt).getTime() - new Date(session.startedAt).getTime(), DAY_MS, "the window is exactly 24 hours");
   assert.equal(session.durationSeconds, DAY_SECONDS);
-  assert.ok(session.remainingSeconds > DAY_SECONDS - 5 && session.remainingSeconds <= DAY_SECONDS, "the cycle opens at the start of its 24-hour window");
+  // "The cycle just opened" is a fact about the stored start versus the server clock (both in the
+  // payload), not about this process's wall clock: a fixed tolerance on `remainingSeconds` fails
+  // whenever the round trip to the database exceeds it. Assert the window's own arithmetic — the
+  // remaining time is derived from the stored start, never re-chosen — plus that this is a fresh
+  // cycle, still inside its 24-hour window.
+  assert.ok(new Date(session.startedAt).getTime() >= requestedAt - 1000, "the cycle opens at the server clock of this request");
+  assert.equal(session.remainingSeconds, DAY_SECONDS - session.elapsedSeconds, "remaining time is the stored window minus the stored start");
+  assert.ok(session.elapsedSeconds >= 0 && session.elapsedSeconds < DAY_SECONDS, "the fresh cycle is inside its 24-hour window");
   assert.match(session.rate, /^\d+\.\d{6}$/);
   const rateUnits = Number(session.rate.replace(".", ""));
   // Fixtures join the Low pool (factor 0.85–1.15x) on top of the configured band.
@@ -580,7 +596,7 @@ test("the server reports the accrual from persisted state, and settlement posts 
   // wallet, so this account's line count grows by one.
   const written = await collections.ledgerEntries.countDocuments({ ledgerAccountId: account.ledgerAccountId });
   assert.equal(written - before, 1, "one credit line for the wallet");
-  const settlement = await collections.miningSettlements.findOne({ sessionPublicId: started.session.id });
+  const settlement = await collections.transactions.findOne({ type: "mining", miningSessionId: started.session.id });
   assert.ok(settlement);
   const lines = await collections.ledgerEntries.find({ transactionId: settlement.publicId }).toArray();
   assert.equal(lines.length, 2, "the settlement is one balanced two-line transaction");
@@ -634,7 +650,7 @@ test("a partial settlement advances the cycle and a later one posts only the dif
   assert.ok(second.settledMinor > first.settledMinor, "the second settle posted only the newly accrued difference");
   assert.ok(settledMatchesRecentAccrual(second, second.settledMinor), "the cumulative settled total is still an exact accrual");
   // The two settlements' sequences advance, so nothing was rewritten in place.
-  const settlements = await collections.miningSettlements.find({ sessionPublicId: started.session.id }).sort({ sequenceNumber: 1 }).toArray();
+  const settlements = (await collections.transactions.find({ type: "mining", miningSessionId: started.session.id }).sort({ sequenceNumber: 1 }).toArray()).filter(isMiningTransaction);
   assert.deepEqual(settlements.map((row) => row.sequenceNumber), [1, 2]);
   assert.equal(await balanceMinorOf(account), second.settledMinor);
   assert.equal(await ledgerDerivedMinor(account.ledgerAccountId), second.settledMinor);
@@ -653,7 +669,7 @@ test("duplicate and concurrent settlement credit exactly once", async () => {
   // second's accrual and post that small difference. That is not a double credit — the guarantee is
   // that the total never exceeds what the window earned and that no accrual is posted twice, which
   // is what is asserted here. "Exactly one row" would be asserting the link's latency.
-  const settlements = await collections.miningSettlements.find({ sessionPublicId: started.session.id }).sort({ sequenceNumber: 1 }).toArray();
+  const settlements = (await collections.transactions.find({ type: "mining", miningSessionId: started.session.id }).sort({ sequenceNumber: 1 }).toArray()).filter(isMiningTransaction);
   assert.ok(settlements.length >= 1, "the reward reached the ledger");
   assert.deepEqual(
     settlements.map((row) => row.sequenceNumber),
@@ -748,6 +764,6 @@ test("the database enforces one active cycle per account", async () => {
 });
 
 test("the ledger remains reconciled after mining settles", async () => {
-  const result = await reconcileLedger({ collections, mongoClient: client, options: { excludeCorrelationIdPrefixes: ["smoke-funding-"] } });
+  const result = await reconcileLedger({ collections, mongoClient: client, options: { excludeCorrelationIdPrefixes: TEST_FUNDING_CORRELATION_PREFIXES } });
   assert.ok(result.ok, `ledger reconciliation must pass: ${JSON.stringify(result.issues)}`);
 });

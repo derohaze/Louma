@@ -9,11 +9,11 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
-import { Toaster } from "@/components/ui/sonner";
-import { parseTheme, readThemeCookie, useTheme, THEME_COOKIE, type Theme } from "@/hooks/use-theme";
+import { Toaster } from "@/shared/ui/sonner";
+import { parseTheme, readThemeCookie, useTheme, THEME_COOKIE, type Theme } from "@/shared/hooks";
 
 import appCss from "../styles.css?url";
-import { reportLovableError } from "../lib/lovable-error-reporting";
+import { reportLovableError } from "@/shared/lib/platform";
 
 /**
  * Kept in one place so the preload hint and the stylesheet below can never drift apart.
@@ -122,20 +122,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "color-scheme", content: "light dark" },
-      { title: "MyHome — Sales Workspace" },
+      // Private wallet app: never indexed, never followed. Belt and suspenders with
+      // robots.txt (Disallow: /) so a mis-served header cannot expose auth routes.
+      { name: "robots", content: "noindex, nofollow" },
+      { title: "Louma — Wallet" },
       {
         name: "description",
-        content: "Track sales conversations, leads, follow-ups, and team performance.",
+        content: "Louma wallet: balance, transfers, mining, and transactions.",
       },
-      { name: "author", content: "MyHome" },
-      { property: "og:title", content: "MyHome — Sales Workspace" },
+      { name: "author", content: "Louma" },
+      { property: "og:title", content: "Louma — Wallet" },
       {
         property: "og:description",
-        content: "A focused workspace for sales activity and customer conversations.",
+        content: "Louma wallet: balance, transfers, mining, and transactions.",
       },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
+      // No og:type website / twitter cards: nothing here is shareable public content.
+      { name: "twitter:card", content: "none" },
     ],
     links: [
       {

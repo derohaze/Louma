@@ -40,6 +40,12 @@ export interface Collections {
   financialControls: Collection<FinancialControlsRecord>;
   notifications: Collection<NotificationRecord>;
   miningSessions: Collection<MiningSessionRecord>;
+  /**
+   * @deprecated LEGACY (see ADR-003). No longer written by any code path: the journal header in
+   * `transactions` is the authoritative mining record. Kept only so the one-way migration can
+   * copy legacy rows into the journal; remove together with the collection once the migration is
+   * verified on every deployment (see docs/migrations.md).
+   */
   miningSettlements: Collection<MiningSettlementRecord>;
   miningSettings: Collection<import("../../modules/mining/settings.js").MiningSettingRecord>;
   miningPoolMembers: Collection<import("../../modules/mining/pools.js").MiningPoolMembershipRecord>;

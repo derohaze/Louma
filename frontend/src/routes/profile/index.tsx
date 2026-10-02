@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { ProfileContent } from "@/components/profile-page";
+import { WalletPage } from "@/app/shell";
+import { ProfileContent } from "@/features/profile";
 
 export const Route = createFileRoute("/profile/")({
   head: () => ({

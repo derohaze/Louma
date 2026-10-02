@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { SecurityCenterContent } from "@/components/security-center";
-import { securityCenter } from "@/lib/security-catalog";
-import { pageHead } from "@/lib/page-head";
+import { WalletPage } from "@/app/shell";
+import { SecurityCenterContent } from "@/features/security";
+import { securityCenter } from "@/shared/lib/security";
+import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/security/")({
   head: () => pageHead(securityCenter.title, securityCenter.description),

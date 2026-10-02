@@ -1,0 +1,60 @@
+# Architecture Decision Records
+
+## ADR-001 — MongoDB remains the source of truth
+
+Alternatives (event bus, second database, Redis-backed balances) were rejected:
+the workload is single-digit collections with strict consistency needs, and
+every correctness property (idempotency, one-spend, no-negative) maps to a
+MongoDB unique index or conditional update. Smallest architecture that scales.
+
+## ADR-002 — Redis is cache/ephemeral infrastructure only
+
+Redis accelerates rebuildable reads, throttles abuse per-identity, and
+coordinates non-critical work. It never authorizes money: locks are advisory,
+rate limits fail open, caches are invalidated-after-write with TTL-bounded
+staleness. A Redis lock is never the sole proof for a money movement;
+correctness is identical with Redis disabled (suites run disabled and pass).
+
+## ADR-003 — mining_settlements merged into transactions
+
+The settlement collection duplicated the journal header (same publicId, same
+amount, same parties). One financial event, one record: the `mining` journal
+header is authoritative, with (session, sequence) and idempotency-key unique
+indexes as the idempotency boundary. Migration is same-publicId insert-only;
+the old collection stays (read-only) until the drop checklist passes.
+
+## ADR-004 — two_factor_uses stays a separate collection
+
+Merging step-consumption into transfer_authorizations would couple two
+independent uniqueness grains (per-approval spend vs per-step-once) and weaken
+the audit trail (one row per accepted step, intent-bound). The separate
+collection with its own unique index is the stronger invariant; collection
+count is not worth trading for it.
+
+## ADR-005 — no collection renames
+
+mining_sessions/mining_pool_members keep their names. Renames require a live
+migration with zero financial upside and real production risk. Naming
+consistency is enforced for new collections only.
+
+## ADR-006 — index policy: justify, don't speculate
+
+Every index serves a named query (see definitions.ts). Partial unique indexes
+express business rules (one active cycle, one spend per approval/step).
+Redundant prefix duplicates are removed; unique and TTL indexes are never
+removed for tidiness. New indexes require a measured query + explain.
+
+## ADR-007 — bounded documents
+
+Every array has a validator-enforced maximum (participants = 2, digests <= 5
+per feature key, aliases <= 8, trusts <= 3, metadata <= 16 properties).
+History lives in separate TTL collections, never in growing parent arrays.
+The 16 MiB limit is treated as a failure state to stay orders of magnitude
+away from, not a budget to spend.
+
+## ADR-008 — repository scope
+
+Repositories own the journal header/entries pairing and the balance assertion
+(postBalancedJournal). Balance mutations stay in services (flow-specific
+conditional semantics), reads stay in services/modules (query-specific shapes).
+No abstraction without at least two callers — unused finders were deleted.

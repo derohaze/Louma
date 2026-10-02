@@ -125,6 +125,4 @@ export async function findLiveLeases(
   return leases.filter((lease) => lease.leaseEndsAt.getTime() > nowMs);
 }
 
-export function isDuplicateKeyError(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 11000;
-}
+export { isDuplicateKeyError } from "../../shared/mongo-retry.js";

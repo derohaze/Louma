@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LoginContent } from "@/components/auth-pages";
+import { LoginContent } from "@/features/auth";
 export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [

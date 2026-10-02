@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { HistoryContent } from "@/components/wallet-pages";
+import { WalletPage } from "@/app/shell";
+import { TransactionsPage } from "@/features/transactions";
 
 export const Route = createFileRoute("/transactions/")({
   head: () => ({
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/transactions/")({
   }),
   component: () => (
     <WalletPage title="Transactions">
-      <HistoryContent />
+      <TransactionsPage />
     </WalletPage>
   ),
 });

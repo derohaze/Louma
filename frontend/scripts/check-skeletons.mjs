@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "src");
 
-const skeletonFile = readFileSync(join(src, "components", "page-skeletons.tsx"), "utf8");
+const skeletonFile = readFileSync(join(src, "shared", "skeletons", "index.ts"), "utf8");
 
 const pickBlock = (name) => {
   const m = skeletonFile.match(new RegExp(`${name}\\s*[:=][^=]*?\\{([\\s\\S]*?)\\n\\};`));
@@ -63,7 +63,7 @@ for (const file of routeFiles) {
   }
   if (!resolves(m[1])) {
     failures.push(
-      `${file}: route "${m[1]}" has no skeleton (add it to skeletonsByPath in page-skeletons.tsx)`,
+      `${file}: route "${m[1]}" has no skeleton (add it to skeletonsByPath in shared/skeletons)`,
     );
   }
 }
@@ -71,14 +71,16 @@ for (const file of routeFiles) {
 // 2. Every href in the navigation catalogs must resolve too (a nav entry with only the generic
 //    skeleton means the shell jumps layout on first visit).
 const navSources = [
-  join(src, "lib", "wallet-nav.ts"),
-  join(src, "lib", "security-catalog.ts"),
-  join(src, "lib", "settings-pages.ts"),
+  join(src, "shared", "lib", "wallet", "wallet-nav.ts"),
+  join(src, "shared", "lib", "security", "security-catalog.ts"),
+  join(src, "shared", "lib", "account", "settings-pages.ts"),
 ];
 const hrefs = new Set();
 for (const file of navSources) {
   const text = readFileSync(file, "utf8");
-  for (const m of text.matchAll(/"(\/(?:security|settings|profile|history|wallet|transfer|mining|custom-address)[^"]*)"/g)) {
+  for (const m of text.matchAll(
+    /"(\/(?:security|settings|profile|history|wallet|transfer|mining|custom-address)[^"]*)"/g,
+  )) {
     hrefs.add(m[1]);
   }
   for (const m of text.matchAll(/href:\s*"([^"]+)"/g)) hrefs.add(m[1]);

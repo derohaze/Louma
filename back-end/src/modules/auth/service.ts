@@ -3,6 +3,8 @@ import argon2 from "argon2";
 import type { MongoClient } from "mongodb";
 import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import type { RedisHandle } from "../../infrastructure/redis/client.js";
+import { displayNameKey, invalidate } from "../../infrastructure/redis/cache.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { createAccessToken, verifyAccessToken } from "../security/access-token.js";
 import { createOpaqueToken, decryptSecret, hashRecoveryCode, hashToken } from "../security/crypto.js";
@@ -370,7 +372,7 @@ export async function getCurrentUser(input: { collections: Collections; ownerUse
   return { user: toPublicUser(user), wallet: wallet ? { id: wallet.publicId, address: wallet.customAddress ?? wallet.address, status: wallet.status, balance: formatMoney(ledgerAccount?.balanceMinor ?? 0), currency: "LMA", createdAt: wallet.createdAt.toISOString(), customAddressChangedAt: wallet.customAddressChangedAt?.toISOString() ?? null, customAddress: wallet.customAddress } : null };
 }
 
-export async function updateProfile(input: { collections: Collections; ownerUserId: string; displayName?: unknown; country?: unknown; requestId: string }) {
+export async function updateProfile(input: { collections: Collections; ownerUserId: string; displayName?: unknown; country?: unknown; requestId: string; redis?: RedisHandle }) {
   const changes: Record<string, string | null> = {};
   if (input.displayName !== undefined) {
     if (typeof input.displayName !== "string") throw badRequest("invalid_display_name", "Enter a valid display name.");
@@ -385,8 +387,33 @@ export async function updateProfile(input: { collections: Collections; ownerUser
   if (Object.keys(changes).length === 0) throw badRequest("empty_profile_update", "Provide at least one profile field.");
   const result = await input.collections.users.updateOne({ publicId: input.ownerUserId, status: "active" }, { $set: { ...changes, updatedAt: new Date() } });
   if (result.matchedCount !== 1) throw unauthorized();
+  // The preview masks the recipient's display name from a brief cache: invalidate on change.
+  // MongoDB first, cache second — a lost invalidation only mis-masks until the TTL.
+  if ("profile.displayName" in changes && input.redis) {
+    await invalidate(input.redis, displayNameKey(input.redis, input.ownerUserId));
+  }
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "profile_updated", outcome: "success", correlationId: input.requestId, metadata: { displayNameChanged: "profile.displayName" in changes, countryChanged: "profile.country" in changes } });
   return (await getCurrentUser({ collections: input.collections, ownerUserId: input.ownerUserId })).user;
+}
+
+/**
+ * Changes the account password, revoking every other session.
+ *
+ * Lives here (not in the HTTP layer) so the verify-hash-compare sessions-audit sequence has one
+ * owner and one test surface. The conditional update on the current hash keeps a concurrent change
+ * from silently winning, and revoking the sibling sessions (including a pending 2FA challenge
+ * started with the old password) is what makes the change actually end the old credential.
+ */
+export async function changePassword(input: { collections: Collections; ownerUserId: string; sessionId: string; currentPassword: unknown; newPassword: unknown; requestId: string }): Promise<{ changed: true }> {
+  if (typeof input.currentPassword !== "string" || typeof input.newPassword !== "string") throw badRequest("invalid_request", "The request data is invalid.");
+  validatePassword(input.newPassword);
+  const user = await input.collections.users.findOne({ publicId: input.ownerUserId });
+  if (!user || !(await argon2.verify(user.passwordHash, input.currentPassword).catch(() => false))) throw forbidden("invalid_credentials", "The current password is incorrect.");
+  const updated = await input.collections.users.updateOne({ _id: user._id, passwordHash: user.passwordHash }, { $set: { passwordHash: await argon2.hash(input.newPassword, ARGON2_OPTIONS), updatedAt: new Date() } });
+  if (updated.modifiedCount !== 1) throw badRequest("password_change_conflict", "The password changed. Sign in again and retry.");
+  await input.collections.sessions.updateMany({ ownerUserId: input.ownerUserId, status: { $in: ["active", "pending_two_factor"] }, publicId: { $ne: input.sessionId } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "password_changed", outcome: "success", correlationId: input.requestId });
+  return { changed: true };
 }
 
 export async function authenticateUser(input: { collections: Collections; config: AppConfig; authorization: string | undefined }) {

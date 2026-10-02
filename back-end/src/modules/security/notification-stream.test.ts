@@ -1,11 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
 import { buildApp } from "../../app.js";
 import { loadConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import { disabledRedis } from "../../infrastructure/redis/client.js";
 import {
+  createNotificationStreamWriter,
   ensureNotificationWatcher,
   MAX_STREAMS_PER_ACCOUNT,
+  NOTIFICATION_HEARTBEAT_FRAME,
   NOTIFICATIONS_CHANGED_FRAME,
   notificationStreamStats,
   notificationWatcherUnavailable,
@@ -164,6 +169,7 @@ test("a stream request is refused with 503 while the watcher cannot start", asyn
     }),
     collections: failingCollections,
     mongoClient: {} as never,
+    redis: disabledRedis(),
     logger: false,
   });
   // The route is behind the session pre-handler, which reads the database. The session is not what
@@ -205,6 +211,85 @@ test("one broken socket does not stop the other streams of the account", async (
 
   assert.equal(publishNotificationChange(owner), 2, "the healthy stream is still reached");
   assert.deepEqual(healthy.frames, [NOTIFICATIONS_CHANGED_FRAME]);
+
+  await stopNotificationStream();
+});
+
+/**
+ * A socket stub the writer can drive: records frames, answers whether the kernel accepted the
+ * write, and can die on demand the way a reaped mobile connection does.
+ */
+function fakeRaw(input: { acceptWrites?: boolean; dieOn?: "write" | "end" } = {}) {
+  const emitter = new EventEmitter();
+  const frames: string[] = [];
+  let ended = false;
+  const raw = Object.assign(emitter, {
+    write: (frame: string): boolean => {
+      if (input.dieOn === "write") throw new Error("socket is gone");
+      frames.push(frame);
+      return input.acceptWrites ?? true;
+    },
+    end: (): void => {
+      if (input.dieOn === "end") throw new Error("socket is gone");
+      ended = true;
+    },
+  }) as unknown as ServerResponse;
+  return { raw, frames, isEnded: () => ended };
+}
+
+test("a write to a dead socket closes the writer instead of throwing", async () => {
+  const { raw, frames } = fakeRaw({ dieOn: "write" });
+  const writer = createNotificationStreamWriter(raw);
+
+  // The heartbeat timer calls this with no request scope left to catch it: it must never throw.
+  assert.doesNotThrow(() => writer.send(NOTIFICATION_HEARTBEAT_FRAME));
+  assert.doesNotThrow(() => writer.send(NOTIFICATIONS_CHANGED_FRAME));
+  assert.doesNotThrow(() => writer.end());
+  assert.deepEqual(frames, [], "nothing was delivered to the dead socket");
+
+  await stopNotificationStream();
+});
+
+test("ending a dead socket never throws", async () => {
+  const { raw } = fakeRaw({ dieOn: "end" });
+  const writer = createNotificationStreamWriter(raw);
+
+  assert.doesNotThrow(() => writer.end());
+  assert.doesNotThrow(() => writer.send(NOTIFICATIONS_CHANGED_FRAME));
+
+  await stopNotificationStream();
+});
+
+test("a slow reader gets one coalesced change hint when it drains", async () => {
+  const { raw, frames } = fakeRaw({ acceptWrites: false });
+  const writer = createNotificationStreamWriter(raw);
+
+  writer.send(NOTIFICATION_HEARTBEAT_FRAME);
+  writer.send(NOTIFICATIONS_CHANGED_FRAME);
+  writer.send(NOTIFICATIONS_CHANGED_FRAME);
+  writer.send(NOTIFICATION_HEARTBEAT_FRAME);
+  assert.deepEqual(frames, [NOTIFICATION_HEARTBEAT_FRAME], "only the first frame reached the kernel");
+
+  raw.emit("drain");
+  assert.deepEqual(
+    frames,
+    [NOTIFICATION_HEARTBEAT_FRAME, NOTIFICATIONS_CHANGED_FRAME],
+    "the burst collapses into a single remembered hint",
+  );
+
+  await stopNotificationStream();
+});
+
+test("open/close churn leaves no registered stream behind", async () => {
+  for (let index = 0; index < 5_000; index += 1) {
+    const registration = registerNotificationSubscriber({
+      ownerUserId: `user-churn-${index % 100}`,
+      subscriber: fakeStream().subscriber,
+    });
+    assert.ok("unsubscribe" in registration);
+    if ("unsubscribe" in registration) registration.unsubscribe();
+  }
+  assert.deepEqual(notificationStreamStats(), { total: 0, accounts: 0 });
 
   await stopNotificationStream();
 });

@@ -30,6 +30,7 @@ import { loadConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
+import { disabledRedis } from "../infrastructure/redis/client.js";
 
 const SAMPLES = Number(process.env["BENCH_SAMPLES"] ?? 60);
 const PASSWORD = "SmokeTest1234";
@@ -324,6 +325,7 @@ async function main(): Promise<void> {
     config,
     collections: wrapCollections(real),
     mongoClient: wrapClient(client),
+    redis: disabledRedis(),
     logger: false,
   });
   const run = randomUUID().slice(0, 8);

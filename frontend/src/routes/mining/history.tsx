@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { MiningHistory } from "@/components/mining-page";
+import { WalletPage } from "@/app/shell";
+import { MiningHistorySection } from "@/features/mining";
 export const Route = createFileRoute("/mining/history")({
   head: () => ({
     meta: [
@@ -20,7 +20,7 @@ export const Route = createFileRoute("/mining/history")({
   }),
   component: () => (
     <WalletPage title="Mining History">
-      <MiningHistory />
+      <MiningHistorySection />
     </WalletPage>
   ),
 });

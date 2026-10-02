@@ -8,6 +8,7 @@ import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
+import { disabledRedis } from "../infrastructure/redis/client.js";
 import { ipHash } from "../modules/mining-device/identity.js";
 import { ENROLLMENT_DAY_MS } from "../modules/mining-device/policy.js";
 
@@ -403,7 +404,8 @@ async function startWith(account: Account, kind: Parameters<typeof deviceEvidenc
 
 async function trackSettlements(): Promise<void> {
   for (const sessionId of createdSessionIds) {
-    const settlements = await collections.miningSettlements.find({ sessionPublicId: sessionId }).toArray();
+    // The journal header is the settlement record (see ADR-003): one header per reward.
+    const settlements = await collections.transactions.find({ type: "mining", miningSessionId: sessionId }).toArray();
     for (const settlement of settlements) {
       if (!createdTransactionIds.includes(settlement.publicId)) {
         createdTransactionIds.push(settlement.publicId);
@@ -449,7 +451,7 @@ before(async () => {
   collections = getCollections(connection.db);
   await ensureDatabaseIndexes(connection.db);
   await removeFixtureDevices();
-  app = await buildApp({ config, collections, mongoClient: client, logger: false });
+  app = await buildApp({ config, collections, mongoClient: client, redis: disabledRedis(), logger: false });
   const csrf = await call("GET", "/api/v1/auth/csrf");
   assert.equal(csrf.status, 200);
   preauthCsrfTokenValue = csrf.body["csrfToken"] as string;
