@@ -12,7 +12,11 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# Coolify injects NODE_ENV=production at build time, which makes `npm ci`
+# skip devDependencies and leaves `tsc` missing when we build TypeScript.
+# --include=dev forces the build toolchain in; the runner stage still ships
+# production-only modules via `npm prune --omit=dev` below.
+RUN npm ci --include=dev
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
