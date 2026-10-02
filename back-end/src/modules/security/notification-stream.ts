@@ -1,5 +1,6 @@
 import type { ChangeStream } from "mongodb";
 import type { FastifyBaseLogger } from "fastify";
+import type { ServerResponse } from "node:http";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { NotificationRecord } from "../../shared/types.js";
 
@@ -57,6 +58,72 @@ export interface NotificationStreamSubscriber {
 export type NotificationStreamRejection = "per_account_limit" | "stream_capacity";
 
 const subscribers = new Map<string, Set<NotificationStreamSubscriber>>();
+
+/**
+ * Writes one Server-Sent Events frame, coalescing while the socket is behind.
+ *
+ * Every notification frame carries the same meaning — "your notifications page changed" — so a
+ * client that cannot keep up does not need the backlog: while a write is still draining, further
+ * frames are dropped rather than queued. That is this endpoint's backpressure story, and it is why
+ * a slow reader costs a bounded amount of memory instead of an unbounded buffer.
+ *
+ * Dropping the frames themselves is safe; forgetting that one arrived is not. A dropped change hint
+ * would leave that reader with no reason to re-read its page until the next reconnect, so one is
+ * remembered and written as soon as the socket drains. Heartbeats are not remembered: they carry no
+ * information, and a buffer that filled up will carry the next one anyway.
+ *
+ * A socket can die between two heartbeats — a killed mobile tab, a reaped proxy — and a write to
+ * it can throw synchronously inside the heartbeat timer, where there is no request scope left to
+ * catch it. A dead socket therefore closes the writer instead of throwing: the socket's own close
+ * handler owns the cleanup, and the next write is a no-op.
+ */
+export function createNotificationStreamWriter(raw: ServerResponse): NotificationStreamSubscriber {
+  let draining = false;
+  let closed = false;
+  let changePending = false;
+
+  const write = (frame: string): void => {
+    if (closed) return;
+    let accepted: boolean;
+    try {
+      accepted = raw.write(frame);
+    } catch {
+      closed = true;
+      changePending = false;
+      return;
+    }
+    if (accepted === false) {
+      draining = true;
+      raw.once("drain", () => {
+        draining = false;
+        if (!changePending) return;
+        changePending = false;
+        write(NOTIFICATIONS_CHANGED_FRAME);
+      });
+    }
+  };
+
+  return {
+    send: (frame: string) => {
+      if (closed) return;
+      if (draining) {
+        if (frame === NOTIFICATIONS_CHANGED_FRAME) changePending = true;
+        return;
+      }
+      write(frame);
+    },
+    end: () => {
+      if (closed) return;
+      closed = true;
+      changePending = false;
+      try {
+        raw.end();
+      } catch {
+        /* the socket is already gone; its close handler owns the cleanup */
+      }
+    },
+  };
+}
 
 let watcher: ChangeStream<NotificationRecord> | null = null;
 let watcherStart: Promise<void> | null = null;

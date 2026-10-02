@@ -3,16 +3,26 @@ import { loadConfig } from "./config/env.js";
 import { connectMongo } from "./infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "./infrastructure/mongodb/indexes.js";
 import { getCollections } from "./infrastructure/mongodb/collections.js";
+import { RedisHandle } from "./infrastructure/redis/client.js";
 
 const config = loadConfig();
 const { client, db } = await connectMongo(config);
+// Redis is optional infrastructure: construct-and-connect never rejects, and a dead Redis only
+// degrades the process to MongoDB-only. It is closed before MongoDB on shutdown so in-flight
+// requests finish their fallback reads first.
+const redis = new RedisHandle(config.redis);
+await redis.connect();
 
 try {
   await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled, observationTtlSeconds: config.lmdg.observationTtlSeconds });
-  const app = await buildApp({ config, collections: getCollections(db), mongoClient: client });
+  const app = await buildApp({ config, collections: getCollections(db), mongoClient: client, redis });
+  redis.describe().then((state) => {
+    app.log.info({ redis: state.status }, "redis_state_at_boot");
+  }).catch(() => undefined);
   const close = async (signal: string) => {
     app.log.info({ signal }, "server_shutdown_started");
     await app.close();
+    await redis.close();
     await client.close();
   };
 

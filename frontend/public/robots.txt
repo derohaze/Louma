@@ -1,14 +1,6 @@
-User-agent: Googlebot
-Allow: /
-
-User-agent: Bingbot
-Allow: /
-
-User-agent: Twitterbot
-Allow: /
-
-User-agent: facebookexternalhit
-Allow: /
-
+# This is the authenticated wallet app (not the public landing page).
+# Nothing here is public content: block every crawler instead of
+# allowlisting bots one by one. The landing page keeps its own
+# robots.txt/sitemap for its public routes.
 User-agent: *
-Allow: /
+Disallow: /

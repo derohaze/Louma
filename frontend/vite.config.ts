@@ -26,6 +26,14 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    build: {
+      // No source maps in any build: a `.js.map` file next to the bundle would publish the
+      // original source to "View Source". Vite defaults to no maps; this pins it so a future
+      // mode/preset can never re-enable them silently. Minification stays on for size/perf —
+      // real obfuscation is deliberately not used (see reply: it costs perf and buys nothing
+      // over minify + no-maps against DevTools, which cannot be blocked anyway).
+      sourcemap: false,
+    },
     server: {
       port: 3000,
       proxy: {

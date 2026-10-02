@@ -1,6 +1,7 @@
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { getCollections } from "../infrastructure/mongodb/collections.js";
-import type { LedgerAccountRecord } from "../shared/types.js";
+import { isTransferTransaction, type LedgerAccountRecord } from "../shared/types.js";
+import { TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
 
 /**
  * Removes the accounts the integration suites create, and their whole ledger footprint, without ever
@@ -25,7 +26,6 @@ import type { LedgerAccountRecord } from "../shared/types.js";
  * Exit codes: 0 = reported or applied, 2 = the run itself failed.
  */
 
-const TEST_FUNDING_PREFIXES = ["smoke-funding-", "adversarial-funding-", "benchmark-"];
 
 function positiveInteger(name: string, raw: string | undefined, fallback: number): number {
   const value = Number(raw ?? fallback);
@@ -61,36 +61,104 @@ async function main(): Promise<void> {
       .toArray();
     const transactionIds = transactions.map((transaction) => transaction.publicId);
 
-    // Only entries that belong to test-owned accounts (or the suites' funding lines) are
-    // removed. Entries are never selected by transaction alone: a transfer between a test
-    // account and a real account shares one transaction id, and matching on it would delete
-    // the real wallet's entry while only fee/treasury projections are reversed.
+    // A transaction is shared when any participant reference names someone outside the test
+    // domain. Only a present, non-test id counts: mining settlements carry `ownerUserId`
+    // but no sender/receiver, and absent fields must not read as real participants.
+    const testIdSet = new Set(userIds);
+    const isRealId = (value: unknown): value is string =>
+      typeof value === "string" && value.length > 0 && !testIdSet.has(value);
+    const sharedTxIds = new Set(
+      transactions
+        .filter((tx) => {
+          // Transfer headers name their parties; mining issuance headers carry `ownerUserId`
+          // but no sender/receiver, and absent fields must not read as real participants.
+          if (isTransferTransaction(tx)) {
+            return isRealId(tx.senderUserId) || isRealId(tx.receiverUserId) || tx.participants.some(isRealId);
+          }
+          return isRealId(tx.ownerUserId);
+        })
+        .map((tx) => tx.publicId),
+    );
+    const testOnlyTxIds = transactionIds.filter((id) => !sharedTxIds.has(id));
+
+    // Whole footprints of test-only transactions are removed — every line, including the
+    // treasury/fee lines (settlement rewards post treasury debits under a non-funding
+    // correlation, so selecting test accounts alone would orphan them) — plus test-account
+    // lines and journal-less funding lines. Lines are never selected by transaction alone
+    // without the shared-transaction exclusion below: deleting only the test side of a
+    // test↔real transfer would leave the kept header and counterparty line unbalanced,
+    // which reconciliation reports as critical.
+    const fundingPattern = `^(${TEST_FUNDING_CORRELATION_PREFIXES.join("|")})`;
     const entryFilter = {
       $or: [
-        { ledgerAccountId: { $in: accountIds } },
-        { correlationId: { $regex: `^(${TEST_FUNDING_PREFIXES.join("|")})` } },
+        ...(testOnlyTxIds.length > 0 ? [{ transactionId: { $in: testOnlyTxIds } }] : []),
+        ...(accountIds.length > 0 ? [{ ledgerAccountId: { $in: accountIds } }] : []),
+        { correlationId: { $regex: fundingPattern } },
       ],
     };
-    const entries = await collections.ledgerEntries.find(entryFilter).toArray();
+    const fetched = await collections.ledgerEntries.find(entryFilter).toArray();
+
+    // Shared transactions stay whole (header and every line), and lines posted on real
+    // (non-test, non-shared) accounts are never touched: unwinding those would rewrite real
+    // balances, which this script must not do. They are retained and reported instead.
+    const sharedAccounts = await collections.ledgerAccounts.find({ accountType: { $in: ["fee_revenue", "system_treasury"] } }).toArray();
+    const testAccountSet = new Set(accountIds);
+    const sharedAccountSet = new Set(sharedAccounts.map((account) => account.publicId));
+    const fundingRe = new RegExp(fundingPattern);
+    const deletableSet = new Set(
+      fetched
+        .filter(
+          (entry) =>
+            !sharedTxIds.has(entry.transactionId) &&
+            (testAccountSet.has(entry.ledgerAccountId) ||
+              sharedAccountSet.has(entry.ledgerAccountId) ||
+              fundingRe.test(entry.correlationId ?? "")),
+        )
+        .map((entry) => entry.publicId),
+    );
+    const entries = fetched.filter((entry) => deletableSet.has(entry.publicId));
+    const retainedEntries = fetched.filter((entry) => !deletableSet.has(entry.publicId));
+    const retainedTestAccountIds = new Set(
+      retainedEntries.filter((entry) => testAccountSet.has(entry.ledgerAccountId)).map((entry) => entry.ledgerAccountId),
+    );
 
     // The shared accounts lose exactly the lines being deleted, in one atomic decrement per account:
     // the projection is corrected by the same amount the entries contributed, so after the delete the
     // account still equals the sum of what remains.
-    const sharedAccounts = await collections.ledgerAccounts.find({ accountType: { $in: ["fee_revenue", "system_treasury"] } }).toArray();
     const deltas: { account: LedgerAccountRecord; deltaMinor: number }[] = [];
-    for (const account of sharedAccounts) {
-      const mine = entries.filter((entry) => entry.ledgerAccountId === account.publicId);
-      if (mine.length === 0) continue;
+    const signedContribution = (accountType: string, side: string, amountMinor: number): number => {
       // Signed contribution on the account's normal side (see reconciliation.ts): fee revenue is
       // credit-normal, the treasury is debit-normal. A treasury funding debit grows its
       // projection, so its removal must decrement it — not increment it.
-      const multiplier = account.accountType === "system_treasury" ? 1 : -1;
+      const multiplier = accountType === "system_treasury" ? 1 : -1;
+      return (side === "credit" ? -amountMinor : amountMinor) * multiplier;
+    };
+    for (const account of sharedAccounts) {
+      const mine = entries.filter((entry) => entry.ledgerAccountId === account.publicId);
+      if (mine.length === 0) continue;
       const deltaMinor = mine.reduce(
-        (total, entry) => total + (entry.side === "credit" ? -entry.amountMinor : entry.amountMinor) * multiplier,
+        (total, entry) => total + signedContribution(account.accountType, entry.side, entry.amountMinor),
         0,
       );
       deltas.push({ account, deltaMinor });
     }
+    // Test accounts whose shared-transaction lines are retained stay in the database (otherwise
+    // the kept lines would reference a missing account), with their projections corrected by
+    // exactly the deleted lines.
+    const retainedAdjustments: { account: LedgerAccountRecord; deltaMinor: number }[] = [];
+    for (const account of accounts) {
+      if (!retainedTestAccountIds.has(account.publicId)) continue;
+      const removed = entries.filter((entry) => entry.ledgerAccountId === account.publicId);
+      if (removed.length === 0) continue;
+      const deltaMinor = removed.reduce(
+        (total, entry) => total + signedContribution(account.accountType, entry.side, entry.amountMinor),
+        0,
+      );
+      retainedAdjustments.push({ account, deltaMinor });
+    }
+    const removableAccountIds = accounts
+      .filter((account) => !retainedTestAccountIds.has(account.publicId))
+      .map((account) => account.publicId);
 
     const report = {
       apply,
@@ -99,6 +167,9 @@ async function main(): Promise<void> {
       ledgerAccounts: accounts.length,
       transactions: transactions.length,
       ledgerEntries: entries.length,
+      sharedTransactionsRetained: sharedTxIds.size,
+      sharedEntriesRetained: retainedEntries.length,
+      testAccountsRetained: retainedTestAccountIds.size,
       sharedProjectionAdjustments: deltas.map((item) => ({ accountType: item.account.accountType, deltaMinor: item.deltaMinor })),
     };
     console.log(JSON.stringify(report, null, 2));
@@ -106,23 +177,19 @@ async function main(): Promise<void> {
 
     // One transaction: entries and their projection adjustments commit together, so a
     // crash cannot leave balances referencing deleted entries (a rerun only sees remains).
-    // Only transactions with no real-wallet participation are removed; shared transfers keep
-    // their header so the surviving counterparty entry still resolves.
-    const realInvolvedIds = new Set(
-      transactions
-        .filter((tx) => !userIds.includes(tx.senderUserId) || !userIds.includes(tx.receiverUserId))
-        .map((tx) => tx.publicId),
-    );
-    const deletableTransactionIds = transactionIds.filter((id) => !realInvolvedIds.has(id));
     const session = client.startSession();
     try {
       await session.withTransaction(async () => {
-        await collections.ledgerEntries.deleteMany(entryFilter, { session });
-        for (const { account, deltaMinor } of deltas) {
+        // Delete by explicit entry identity: the scan filter above also matches the retained
+        // shared-transaction lines, which must survive with their header.
+        if (entries.length > 0) {
+          await collections.ledgerEntries.deleteMany({ _id: { $in: entries.map((entry) => entry._id) } }, { session });
+        }
+        for (const { account, deltaMinor } of [...deltas, ...retainedAdjustments]) {
           if (deltaMinor !== 0) await collections.ledgerAccounts.updateOne({ _id: account._id }, { $inc: { balanceMinor: -deltaMinor } }, { session });
         }
-        if (deletableTransactionIds.length > 0) await collections.transactions.deleteMany({ publicId: { $in: deletableTransactionIds } }, { session });
-        await collections.ledgerAccounts.deleteMany({ publicId: { $in: accountIds } }, { session });
+        if (testOnlyTxIds.length > 0) await collections.transactions.deleteMany({ publicId: { $in: testOnlyTxIds } }, { session });
+        if (removableAccountIds.length > 0) await collections.ledgerAccounts.deleteMany({ publicId: { $in: removableAccountIds } }, { session });
         await collections.wallets.deleteMany({ publicId: { $in: walletIds } }, { session });
         await collections.transferAuthorizations.deleteMany({ ownerUserId: { $in: userIds } }, { session });
         await collections.twoFactorUses.deleteMany({ ownerUserId: { $in: userIds } }, { session });

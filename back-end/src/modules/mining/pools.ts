@@ -1,8 +1,10 @@
 import type { ObjectId } from "mongodb";
 import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import { invalidate, poolMembershipKey, type CacheContext } from "../../infrastructure/redis/cache.js";
 import { secureRandomIntInclusive } from "./rate.js";
 import { loadMiningSettings } from "./settings.js";
+import { loadPoolId } from "./state.js";
 import { badRequest, conflict } from "../../shared/errors.js";
 
 /**
@@ -127,9 +129,12 @@ export async function getMiningPoolsState(input: {
   collections: Collections;
   config: PoolsConfig;
   ownerUserId: string;
+  cache?: CacheContext | undefined;
+  membershipCache?: CacheContext | undefined;
 }): Promise<PublicMiningPoolsState> {
-  const live = await loadMiningSettings(input.collections, input.config);
-  const membership = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
+  const live = await loadMiningSettings(input.collections, input.config, input.cache);
+  const poolId = await loadPoolId(input.collections, input.ownerUserId, input.membershipCache);
+  const membership = poolId === null ? null : { poolId };
   const defs = poolDefinitions(live);
   const counts = await Promise.all(
     defs.map((pool) => input.collections.miningPoolMembers.countDocuments({ poolId: pool.id })),
@@ -162,17 +167,22 @@ export async function joinMiningPool(input: {
   config: PoolsConfig;
   ownerUserId: string;
   poolId: string;
+  cache?: CacheContext | undefined;
+  membershipCache?: CacheContext | undefined;
 }): Promise<PublicMiningPoolsState> {
-  const live = await loadMiningSettings(input.collections, input.config);
+  const live = await loadMiningSettings(input.collections, input.config, input.cache);
   const pool = getPoolById(live, input.poolId);
-  // Re-joining the same room is a no-op success; switching rooms never counts as occupancy.
+  // Re-joining the same room is a no-op success: return before any write or pool-wide
+  // read, so the steady-state join costs one indexed lookup instead of a sort over the pool.
   const current = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
-  if (current?.poolId !== pool.id) {
-    const occupants = await input.collections.miningPoolMembers.countDocuments({ poolId: pool.id });
-    if (occupants >= pool.maxMembers) {
-      throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
-    }
+  if (current?.poolId === pool.id) {
+    return getMiningPoolsState({ collections: input.collections, config: live, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
   }
+  const occupants = await input.collections.miningPoolMembers.countDocuments({ poolId: pool.id });
+  if (occupants >= pool.maxMembers) {
+    throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
+  }
+  const prevPoolId = current?.poolId ?? null;
   const now = new Date();
   await input.collections.miningPoolMembers.updateOne(
     { ownerUserId: input.ownerUserId },
@@ -180,27 +190,64 @@ export async function joinMiningPool(input: {
     { upsert: true },
   );
   // The pre-check above races: two joins against one seat can both pass `countDocuments`
-  // before either upsert lands. Enforce the cap after the write by keeping the earliest
-  // joiners; a loser removes its own membership and reports full instead of overfilling.
-  const members = await input.collections.miningPoolMembers
-    .find({ poolId: pool.id }, { projection: { ownerUserId: 1, joinedAt: 1 } })
-    .sort({ joinedAt: 1, _id: 1 })
-    .toArray();
-  if (members.length > pool.maxMembers) {
-    const kept = new Set(members.slice(0, pool.maxMembers).map((m) => m.ownerUserId));
-    if (!kept.has(input.ownerUserId)) {
-      await input.collections.miningPoolMembers.deleteOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
-      throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
+  // before either upsert lands. Trim the pool back to the cap after the write instead.
+  //
+  // Ordering is by the freshly written `updatedAt`, never the preserved `joinedAt`: a
+  // switching member keeps its original `joinedAt`, so ordering by it would let a later
+  // writer sort earlier and pass while the earlier writer had already returned — leaving
+  // the pool over capacity with nobody removing anything. By `updatedAt` the last writer
+  // always sorts last. The read is bounded (`maxMembers + 1` rows on an index-backed sort,
+  // see `mining_pool_members_pool_recency`) rather than the whole pool.
+  for (;;) {
+    const total = await input.collections.miningPoolMembers.countDocuments({ poolId: pool.id });
+    if (total <= pool.maxMembers) break;
+    const window = await input.collections.miningPoolMembers
+      .find({ poolId: pool.id }, { projection: { ownerUserId: 1 } })
+      .sort({ updatedAt: 1, _id: 1 })
+      .limit(pool.maxMembers + 1)
+      .toArray();
+    if (window.length <= pool.maxMembers) break;
+    const victim = window[window.length - 1]!;
+    if (victim.ownerUserId !== input.ownerUserId) {
+      // Someone else's racing join sorts after this one: evict it and re-check, so the cap
+      // holds even when that joiner already checked and returned.
+      await input.collections.miningPoolMembers.deleteOne({ ownerUserId: victim.ownerUserId, poolId: pool.id });
+      continue;
     }
+    // This join lost the race. A switcher goes back to its previous room instead of being
+    // left pool-less (and unable to mine until it joins again); a new joiner is removed.
+    if (prevPoolId !== null && prevPoolId !== pool.id) {
+      await input.collections.miningPoolMembers.updateOne(
+        { ownerUserId: input.ownerUserId },
+        { $set: { poolId: prevPoolId, updatedAt: new Date() } },
+      );
+    } else {
+      await input.collections.miningPoolMembers.deleteOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
+    }
+    throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
   }
-  return getMiningPoolsState({ collections: input.collections, config: live, ownerUserId: input.ownerUserId });
+  // A racing trim may have evicted this membership after it was counted above: confirm it is
+  // still there before reporting success, or a join that did not stick would read as joined.
+  const mine = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
+  if (!mine) {
+    throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
+  }
+  // The membership changed: invalidate eagerly so the next read is authoritative. MongoDB first,
+  // cache second — a lost invalidation only serves the previous room until the TTL.
+  const handle = input.membershipCache?.redis ?? input.cache?.redis;
+  if (handle) await invalidate(handle, poolMembershipKey(handle, input.ownerUserId));
+  return getMiningPoolsState({ collections: input.collections, config: live, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
 }
 
 export async function leaveMiningPool(input: {
   collections: Collections;
   config: PoolsConfig;
   ownerUserId: string;
+  cache?: CacheContext | undefined;
+  membershipCache?: CacheContext | undefined;
 }): Promise<PublicMiningPoolsState> {
   await input.collections.miningPoolMembers.deleteOne({ ownerUserId: input.ownerUserId });
-  return getMiningPoolsState({ collections: input.collections, config: input.config, ownerUserId: input.ownerUserId });
+  const handle = input.membershipCache?.redis ?? input.cache?.redis;
+  if (handle) await invalidate(handle, poolMembershipKey(handle, input.ownerUserId));
+  return getMiningPoolsState({ collections: input.collections, config: input.config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
 }

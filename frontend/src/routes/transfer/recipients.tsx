@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { RecipientsContent } from "@/components/wallet-pages";
+import { WalletPage } from "@/app/shell";
+import { RecipientsPage } from "@/features/transfer";
 export const Route = createFileRoute("/transfer/recipients")({
   head: () => ({
     meta: [
@@ -20,7 +20,7 @@ export const Route = createFileRoute("/transfer/recipients")({
   }),
   component: () => (
     <WalletPage title="Recipients">
-      <RecipientsContent />
+      <RecipientsPage />
     </WalletPage>
   ),
 });

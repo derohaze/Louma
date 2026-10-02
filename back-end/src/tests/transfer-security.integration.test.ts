@@ -8,10 +8,12 @@ import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
+import { disabledRedis } from "../infrastructure/redis/client.js";
 import { parseMoneyToMinorUnits } from "../modules/ledger/money.js";
-import { reconcileLedger } from "../modules/ledger/reconciliation.js";
+import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
 import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
 import { encryptSecret } from "../modules/security/crypto.js";
+import { isTransferTransaction } from "../shared/types.js";
 import { resetFinancialControlsCache, setFinancialControls } from "../modules/financial-controls/service.js";
 
 /**
@@ -271,7 +273,7 @@ async function assertFullReconciliation(): Promise<void> {
     // run killed before its teardown leaves its own funding lines behind, and reporting them here
     // would read as a financial defect when it is abandoned test data. The maintenance answer is
     // `npm run cleanup:test-accounts:dev -- --apply`.
-    options: { excludeCorrelationIdPrefixes: ["adversarial-funding-", "smoke-funding-", "benchmark-"] },
+    options: { excludeCorrelationIdPrefixes: TEST_FUNDING_CORRELATION_PREFIXES },
   });
   assert.ok(result.ok, `ledger reconciliation must pass: ${JSON.stringify(result.issues)}`);
 }
@@ -283,7 +285,7 @@ before(async () => {
   db = connection.db;
   collections = getCollections(db);
   await ensureDatabaseIndexes(db);
-  app = await buildApp({ config, collections, mongoClient: client, logger: false });
+  app = await buildApp({ config, collections, mongoClient: client, redis: disabledRedis(), logger: false });
   priorFinancialControls = (await collections.financialControls.findOne({ _id: "global" })) as unknown as Record<string, unknown> | null;
 });
 
@@ -296,13 +298,8 @@ after(async () => {
   const runTransactions = await collections.transactions
     .find({ $or: [{ senderUserId: { $in: createdUserIds } }, { receiverUserId: { $in: createdUserIds } }] })
     .toArray();
-  const runTransactionIds = [
-    ...new Set([
-      ...createdTransactionIds,
-      ...runTransactions.map((transaction) => transaction.publicId),
-      ...runTransactions.map((transaction) => transaction.transferId),
-    ]),
-  ];
+  const runTransferIds = runTransactions.filter(isTransferTransaction).map((transaction) => transaction.transferId);
+  const runTransactionIds = [...new Set([...createdTransactionIds, ...runTransactions.map((transaction) => transaction.publicId), ...runTransferIds])];
   for (const userId of createdUserIds) {
     await collections.sessions.deleteMany({ ownerUserId: userId });
     await collections.securityEvents.deleteMany({ ownerUserId: userId });
@@ -311,8 +308,9 @@ after(async () => {
     await collections.transferAuthorizations.deleteMany({ ownerUserId: userId });
     await collections.twoFactorUses.deleteMany({ ownerUserId: userId });
     await collections.notifications.deleteMany({ ownerUserId: userId });
-    await collections.wallets.deleteMany({ ownerUserId: userId });
-    await collections.users.deleteMany({ publicId: userId });
+    // Wallets and their owners go last, after the ledger accounts below: an interrupted run must
+    // not leave a wallet account whose wallet is already gone (unreachable to cleanup and reported
+    // as a projection mismatch by the next suite's reconciliation).
   }
   const feeAccount = await collections.ledgerAccounts.findOne({ accountType: "fee_revenue", currency: "LMA" });
   const feeDelta = feeAccount
@@ -330,6 +328,11 @@ after(async () => {
   if (feeAccount && feeDelta !== 0) await collections.ledgerAccounts.updateOne({ _id: feeAccount._id }, { $inc: { balanceMinor: -feeDelta } });
   if (treasuryFundedMinor !== 0) await collections.ledgerAccounts.updateOne({ accountType: "system_treasury", currency: "LMA" }, { $inc: { balanceMinor: -treasuryFundedMinor } });
   await collections.ledgerAccounts.deleteMany({ publicId: { $in: createdTreasuryAccountIds } });
+  // Last, once every ledger account is gone: wallets and their owners.
+  for (const userId of createdUserIds) {
+    await collections.wallets.deleteMany({ ownerUserId: userId });
+    await collections.users.deleteMany({ publicId: userId });
+  }
   // The operator controls belong to whoever set them: this run restores exactly what it found.
   if (priorFinancialControls) await collections.financialControls.replaceOne({ _id: "global" }, priorFinancialControls as never, { upsert: true });
   else await collections.financialControls.deleteMany({ _id: "global" });
@@ -500,7 +503,9 @@ test("a replayed authenticator code cannot authorise a second transfer", async (
   const uses = await collections.twoFactorUses.find({ ownerUserId: sender.userId, purpose: "transfer" }).toArray();
   assert.equal(uses.length, 1, "exactly one accepted step was consumed");
   assert.ok(Number.isInteger(uses[0]!.timeStep) && uses[0]!.timeStep > 0, "the consumed time step is recorded");
-  assert.equal(uses[0]!.intentHash, (await collections.transactions.findOne({ publicId: executed.id }))?.requestFingerprint, "the consumed step names the intent it authorised");
+  const executedHeader = await collections.transactions.findOne({ type: "transfer", publicId: executed.id });
+  assert.ok(executedHeader && isTransferTransaction(executedHeader));
+  assert.equal(uses[0]!.intentHash, executedHeader.requestFingerprint, "the consumed step names the intent it authorised");
   await assertAccountsInvolvedMatchLedger([sender, receiver]);
 });
 

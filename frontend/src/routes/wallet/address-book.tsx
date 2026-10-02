@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WalletPage } from "@/components/wallet-shell";
-import { AddressBookContent } from "@/components/wallet-pages";
+import { WalletPage } from "@/app/shell";
+import { AddressBookPage } from "@/features/wallet";
 export const Route = createFileRoute("/wallet/address-book")({
   head: () => ({
     meta: [
@@ -20,7 +20,7 @@ export const Route = createFileRoute("/wallet/address-book")({
   }),
   component: () => (
     <WalletPage title="Address Book">
-      <AddressBookContent />
+      <AddressBookPage />
     </WalletPage>
   ),
 });

@@ -1,6 +1,7 @@
 import Fastify, {
   LogController,
   type FastifyInstance,
+  type FastifyReply,
   type FastifyRequest,
 } from "fastify";
 import cookie from "@fastify/cookie";
@@ -11,6 +12,9 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig } from "./config/env.js";
 import type { Collections } from "./infrastructure/mongodb/collections.js";
 import type { MongoClient } from "mongodb";
+import type { RedisHandle } from "./infrastructure/redis/client.js";
+import type { CacheContext } from "./infrastructure/redis/cache.js";
+import { checkRateLimit } from "./infrastructure/redis/rate-limit.js";
 import { AppError } from "./shared/errors.js";
 import { registerCustomerRoutes } from "./modules/http/routes.js";
 import { stopNotificationStream } from "./modules/security/notification-stream.js";
@@ -35,6 +39,8 @@ declare module "fastify" {
     config: AppConfig;
     collections: Collections;
     mongoClient: MongoClient;
+    /** Ephemeral infrastructure (cache/rate-limit/locks). Disabled handle when REDIS_URL is unset. */
+    redis: RedisHandle;
     authenticate: (request: FastifyRequest) => Promise<AuthContext>;
   }
 }
@@ -43,7 +49,53 @@ export interface BuildAppOptions {
   config: AppConfig;
   collections: Collections;
   mongoClient: MongoClient;
+  redis: RedisHandle;
   logger?: boolean;
+}
+
+/** Cache contexts the routes hand to services. Undefined when Redis is disabled: services then read MongoDB directly. */
+export function settingsCache(app: FastifyInstance): CacheContext | undefined {
+  if (!app.redis.enabled) return undefined;
+  return { redis: app.redis, ttlSeconds: app.config.redis.miningSettingsCacheTtlSeconds };
+}
+
+export function membershipCache(app: FastifyInstance): CacheContext | undefined {
+  if (!app.redis.enabled) return undefined;
+  return { redis: app.redis, ttlSeconds: app.config.redis.poolMembershipCacheTtlSeconds };
+}
+
+export function displayNameCache(app: FastifyInstance): CacheContext | undefined {
+  if (!app.redis.enabled) return undefined;
+  return { redis: app.redis, ttlSeconds: app.config.redis.displayNameCacheTtlSeconds };
+}
+
+/**
+ * Distributed per-identity throttle for sensitive endpoints, layered over the global in-process
+ * limiter. Answers 429 when the window is exhausted; fail-open when Redis is degraded (the
+ * decision is `allowed` and the request proceeds), so a Redis outage never blocks legitimate
+ * traffic. Returns true when the request may proceed.
+ */
+export async function enforceRateLimit(input: {
+  app: FastifyInstance;
+  reply: FastifyReply;
+  scope: string;
+  identity: string;
+  limit: number;
+  windowMs?: number;
+  requestId: string;
+}): Promise<boolean> {
+  // Pure fail-open without Redis: a per-process local limiter cannot see the other processes'
+  // traffic, so enforcing a cap here would throttle legitimate bursts (e.g. 24 concurrent
+  // transfers) based on a partial count. The global in-process limiter still applies.
+  if (!input.app.redis.enabled) return true;
+  const decision = await checkRateLimit(input.app.redis, input.scope, input.identity, input.limit, input.windowMs ?? 60_000);
+  if (decision.allowed) return true;
+  input.app.log.warn({ scope: input.scope, requestId: input.requestId, retryAfterMs: decision.retryAfterMs }, "rate_limit_exceeded");
+  await input.reply.code(429).send({
+    error: { code: "rate_limited", message: "Too many requests. Try again later." },
+    requestId: input.requestId,
+  });
+  return false;
 }
 
 /**
@@ -90,6 +142,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.decorate("config", options.config);
   app.decorate("collections", options.collections);
   app.decorate("mongoClient", options.mongoClient);
+  app.decorate("redis", options.redis);
   app.decorateRequest("auth", null);
   app.decorate("authenticate", async (request: FastifyRequest) => {
     const authenticated = await authenticateUser({
@@ -185,7 +238,32 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     await stopNotificationStream();
   });
 
+  // Liveness: the process is alive. No dependency checks — a load balancer must not drain a
+  // process that is running but waiting on a dependency.
   app.get("/health", async () => ({ status: "ok" }));
+  /**
+   * Readiness: the process can serve traffic safely. MongoDB gates (a process that cannot reach
+   * the source of truth must not take traffic); Redis is reported but never gates — financial
+   * correctness does not depend on it, and every consumer degrades to MongoDB or local state.
+   */
+  app.get("/ready", async (_request, reply) => {
+    let mongo: { ok: boolean; latencyMs: number | null };
+    try {
+      const started = Date.now();
+      await options.mongoClient.db(options.config.mongoDatabase).command({ ping: 1 });
+      mongo = { ok: true, latencyMs: Date.now() - started };
+    } catch {
+      mongo = { ok: false, latencyMs: null };
+    }
+    const redis = await options.redis.describe();
+    const counters = options.redis.counters;
+    const body = {
+      status: mongo.ok ? "ready" : "not_ready",
+      mongo,
+      redis: { ...redis, hits: counters.hits, misses: counters.misses, errors: counters.errors, reconnects: counters.reconnects },
+    };
+    return reply.code(mongo.ok ? 200 : 503).send(body);
+  });
   await registerCustomerRoutes(app);
   return app;
 }
