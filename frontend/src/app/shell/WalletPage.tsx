@@ -106,6 +106,14 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
   const securitySectionOpen = location.pathname.startsWith("/security");
   const accessClosed = walletFrozen && !securitySectionOpen;
   /**
+   * The fail-closed gate: the account object only ever comes from an API answer, so a non-null user
+   * means this load has positively confirmed a session. Until then — a fresh visit, or the backend
+   * being unreachable — no page content is rendered, whatever a previous tab left in the cache. The
+   * wallet snapshot deliberately does not seed the profile (see server-state), so an unauthenticated
+   * visitor can never open a dashboard on the strength of old data.
+   */
+  const sessionConfirmed = user !== null;
+  /**
    * With no query the panel is a quick launcher, so it lists the most used pages instead of all of
    * them. Transactions join the list as soon as the owner types.
    */
@@ -406,7 +414,13 @@ function WalletShell({ children, title }: { children: ReactNode; title: string }
                 The wallet is frozen, so every transfer is refused until you unfreeze it.
               </p>
             )}
-            {loading ? (
+            {error && !sessionConfirmed ? (
+              <EmptyState
+                title="Wallet unavailable"
+                detail={error}
+                action={<Button onClick={() => void refresh().catch(() => undefined)}>Try again</Button>}
+              />
+            ) : loading || !sessionConfirmed ? (
               (() => {
                 const PageSkeleton = skeletonForPath(location.pathname, title);
                 return <PageSkeleton title={title} />;

@@ -27,7 +27,9 @@ const navItems = [
   },
 ];
 
-const appUrl = 'https://app.loumapay.com';
+// "Sign in" goes straight to the app's sign-in page. The app sends an already-authenticated
+// visitor on to the dashboard (/ ), so a signed-in customer never sits on the form.
+const signInUrl = 'https://app.loumapay.com/login';
 
 function ThemeModeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -81,7 +83,7 @@ export function ResizableHomeHeader({ className }: ComponentProps<'header'>) {
           <NavItems items={navItems} />
           <div className="relative z-20 flex items-center gap-4">
             <a
-              href={appUrl}
+              href={signInUrl}
               className="text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-950 dark:text-neutral-300 dark:hover:text-white"
             >
               Sign in
@@ -95,7 +97,7 @@ export function ResizableHomeHeader({ className }: ComponentProps<'header'>) {
             <NavbarLogo />
             <div className="flex items-center gap-3">
               <a
-                href={appUrl}
+                href={signInUrl}
                 className="text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-950 dark:text-neutral-300 dark:hover:text-white"
               >
                 Sign in

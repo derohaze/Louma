@@ -14,9 +14,9 @@ type ServerEntry = {
  * refresh cookie first-party and needs no CORS. In development Vite's proxy supplies that origin,
  * but a deployed build (Vercel Function or a plain Node server) does not have a proxy of its own:
  * without one, `/api/*` falls through to this app's router and answers the 404 page — exactly the
- * failure that made `/auth/csrf` and `/auth/refresh` return 404 in production. When `BACKEND_URL` is
- * set, this entry forwards those requests to the API instead, so the routing works on any host and
- * the backend URL never has to be baked into the browser bundle.
+ * failure that made `/auth/csrf` and `/auth/refresh` return 404 in production. This entry forwards
+ * those requests to `DEFAULT_BACKEND_URL` (`BACKEND_URL` overrides it), so the routing works on any
+ * host and the backend URL never has to be baked into the browser bundle.
  *
  * The response is rebuilt rather than returned as-is: `fetch` transparently decodes the body, so the
  * backend's `content-encoding`/`content-length` no longer describe what is being sent, and every
@@ -24,10 +24,16 @@ type ServerEntry = {
  */
 const API_PREFIX = "/api/";
 
-function backendBaseUrl(): string | null {
+/**
+ * Where the customer API actually lives. It is fixed for this deployment, but `BACKEND_URL` still
+ * overrides it so a preview/staging build can point somewhere else without a code change.
+ */
+const DEFAULT_BACKEND_URL = "https://api.loumapay.com";
+
+function backendBaseUrl(): string {
   const raw = typeof process === "undefined" ? undefined : process.env["BACKEND_URL"];
   const trimmed = raw?.trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : null;
+  return (trimmed || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
 }
 
 async function proxyApiRequest(request: Request, backend: string): Promise<Response> {
@@ -95,9 +101,8 @@ function isH3SwallowedErrorBody(body: string): boolean {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
-      const backend = backendBaseUrl();
-      if (backend && new URL(request.url).pathname.startsWith(API_PREFIX)) {
-        return await proxyApiRequest(request, backend);
+      if (new URL(request.url).pathname.startsWith(API_PREFIX)) {
+        return await proxyApiRequest(request, backendBaseUrl());
       }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
