@@ -200,18 +200,23 @@ export async function joinMiningPool(input: {
   // switching member keeps its original `joinedAt`, so ordering by it would let a later
   // writer sort earlier and pass while the earlier writer had already returned — leaving
   // the pool over capacity with nobody removing anything. By `updatedAt` the last writer
-  // always sorts last. The read is bounded (`maxMembers + 1` rows on an index-backed sort,
-  // see `mining_pool_members_pool_recency`) rather than the whole pool.
+  // always sorts last. Writers tied on the same-millisecond `$$NOW` stamp evict the older
+  // document (the switching member — a new join mints a fresh `_id`), because the switcher
+  // falls back to its previous room while an evicted new joiner would be left pool-less.
+  // The scan keeps the index-backed sort (`mining_pool_members_pool_recency`) and its bound
+  // (`maxMembers + 1` rows); only the victim choice among the tied-latest rows is in code.
   for (;;) {
     const total = await input.collections.miningPoolMembers.countDocuments({ poolId: pool.id });
     if (total <= pool.maxMembers) break;
     const window = await input.collections.miningPoolMembers
-      .find({ poolId: pool.id }, { projection: { ownerUserId: 1 } })
+      .find({ poolId: pool.id }, { projection: { ownerUserId: 1, updatedAt: 1 } })
       .sort({ updatedAt: 1, _id: 1 })
       .limit(pool.maxMembers + 1)
       .toArray();
     if (window.length <= pool.maxMembers) break;
-    const victim = window[window.length - 1]!;
+    const newestAt = window[window.length - 1]!.updatedAt?.getTime();
+    const tiedLatest = window.filter((row) => row.updatedAt?.getTime() === newestAt);
+    const victim = tiedLatest[0] ?? window[window.length - 1]!;
     if (victim.ownerUserId !== input.ownerUserId) {
       // Someone else's racing join sorts after this one: evict it and re-check, so the cap
       // holds even when that joiner already checked and returned.
@@ -232,8 +237,21 @@ export async function joinMiningPool(input: {
   }
   // A racing trim may have evicted this membership after it was counted above: confirm it is
   // still there before reporting success, or a join that did not stick would read as joined.
+  // A switcher evicted by someone else's trim goes back to its previous room (same fallback as
+  // losing its own trim above) instead of being left pool-less; a new joiner has nowhere to go
+  // back to and is removed.
   const mine = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId, poolId: pool.id });
   if (!mine) {
+    if (prevPoolId !== null && prevPoolId !== pool.id) {
+      const present = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
+      if (!present) {
+        await input.collections.miningPoolMembers.updateOne(
+          { ownerUserId: input.ownerUserId },
+          { $set: { poolId: prevPoolId, joinedAt: new Date(), updatedAt: new Date() } },
+          { upsert: true },
+        );
+      }
+    }
     throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
   }
   // The membership changed: invalidate eagerly so the next read is authoritative. MongoDB first,

@@ -54,7 +54,7 @@ const PILLARS: Pillar[] = [
     id: 'shield',
     title: 'Protection',
     description:
-      'Every incoming transfer is screened for spam and fraud before it can touch your balance.',
+      'Every transfer is verified against the ledger and gated by your credentials before anything moves.',
     cardClass: 'bg-[#efedea] dark:bg-[#141414]',
     titleClass: 'text-neutral-900 dark:text-white',
     descriptionClass: 'text-neutral-600 dark:text-neutral-400',
@@ -239,8 +239,21 @@ function PillarCanvas({ kind, glow }: { kind: PillarKind; glow: string }) {
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(wrapper);
 
-    const observer = new IntersectionObserver(([entry]) => {
-      visible = entry.isIntersecting;
+    const observer = new IntersectionObserver((entries) => {
+      const next = entries[0]?.isIntersecting ?? visible;
+      if (next === visible) return;
+      visible = next;
+      // Pause the repeating tweens too: skipping the draw alone would still pay for the
+      // animation work every frame while visitors read lower sections.
+      for (const tween of tweens) {
+        if (next) tween.play();
+        else tween.pause();
+      }
+      // The frame chain stops itself off-view, so restart it when scrolling back in.
+      if (next) {
+        cancelAnimationFrame(raf);
+        render();
+      }
     });
     observer.observe(wrapper);
 
@@ -253,9 +266,10 @@ function PillarCanvas({ kind, glow }: { kind: PillarKind; glow: string }) {
     }
 
     const render = () => {
-      raf = requestAnimationFrame(render);
-      if (!visible || disposed || !renderer) return;
+      if (disposed || !renderer) return;
+      if (!visible) return;
       renderer.render(scene, camera);
+      raf = requestAnimationFrame(render);
     };
     render();
 

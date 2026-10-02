@@ -11,7 +11,7 @@ export {
   subscribeToNotificationChanges,
 } from "./notification-stream";
 export { pageHead } from "./page-head";
-export type { TransactionPage, NotificationPage, AccountProfile } from "./server-state";
+export type { TransactionPage, NotificationPage, MiningHistoryPage, AccountProfile } from "./server-state";
 export {
   hasBrowserSession,
   serverStateKeys,

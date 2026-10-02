@@ -167,13 +167,13 @@ export function TransferAutomationHero() {
           audit at any time.
         </p>
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Link
-            href="/dashboard"
+          <a
+            href="https://app.loumapay.com"
             className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
           >
             Open your wallet
             <ArrowRight className="size-4" />
-          </Link>
+          </a>
           <Link
             href="/features"
             className="inline-flex min-h-[44px] cursor-pointer items-center rounded-full border border-neutral-300 px-5 py-3 text-sm font-medium transition-colors hover:bg-neutral-100 dark:border-white/20 dark:hover:bg-white/10"

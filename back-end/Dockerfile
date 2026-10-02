@@ -41,4 +41,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.LOUMA_API_PORT||process.env.PORT||8000)+'/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
-CMD ["node", "--env-file-if-exists=.env.production", "dist/server.js"]
+# Coolify injects the environment itself and the image ships no `.env.production`
+# file; `--env-file-if-exists` only exists on Node 22.9+, so on this Node 20
+# runner the flag exits before the API can serve. Read the ambient environment.
+CMD ["node", "dist/server.js"]

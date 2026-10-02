@@ -34,6 +34,8 @@ export function useTransferFlow() {
   const [busy, setBusy] = useState<"address" | "amount" | "send" | null>(null);
   const [error, setError] = useState("");
   const [sent, setSent] = useState<Transaction | null>(null);
+  /** Whether the inline QR scanner under the address field is open. */
+  const [scannerOpen, setScannerOpen] = useState(false);
   /**
    * One idempotency key per transfer attempt, kept together with the parameters it was minted for.
    * A retry of the same parameters — including a retry after a response that never arrived, the one
@@ -284,6 +286,8 @@ export function useTransferFlow() {
     error,
     setError,
     sent,
+    scannerOpen,
+    setScannerOpen,
     frozen,
     passwordSet,
     authenticatorSet,

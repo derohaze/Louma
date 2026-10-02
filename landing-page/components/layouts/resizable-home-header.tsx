@@ -27,7 +27,7 @@ const navItems = [
   },
 ];
 
-const appUrl = 'https://app.louma.com';
+const appUrl = 'https://app.loumapay.com';
 
 function ThemeModeToggle() {
   const { resolvedTheme, setTheme } = useTheme();

@@ -1,9 +1,10 @@
-import { ArrowRight01Icon, FavouriteIcon } from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon, FavouriteIcon, QrCodeScanIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Icon } from "@/shared/ui/page";
 import { FormMessage } from "@/shared/ui/panels";
 import { LIMITS } from "@/shared/lib/platform";
+import { QrScanner } from "@/features/transfer/send/TransferQrScanner";
 import type { TransferFlow } from "@/features/transfer/send/useTransferFlow";
 
 /** Stage one: the recipient address, checked against the ledger before an amount is asked for. */
@@ -16,6 +17,8 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
     hasShortcuts,
     savedShortcuts,
     looksLikeOwnAddress,
+    scannerOpen,
+    setScannerOpen,
     changeAddress,
     verifyAddress,
   } = flow;
@@ -71,7 +74,24 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
           {busy === "address" ? "Checking the address…" : "Continue"}
           <Icon icon={ArrowRight01Icon} size={16} />
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-9 rounded-full px-4 text-xs font-semibold"
+          onClick={() => setScannerOpen((open) => !open)}
+        >
+          <Icon icon={QrCodeScanIcon} size={16} />
+          {scannerOpen ? "Hide scanner" : "Scan QR"}
+        </Button>
       </div>
+      {scannerOpen && (
+        <QrScanner
+          onDetected={(detected) => {
+            changeAddress(detected);
+            setScannerOpen(false);
+          }}
+        />
+      )}
     </form>
   );
 }
