@@ -48,12 +48,12 @@ function readBalanceHidden(): boolean {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * How many pages of transactions the overview is allowed to pull in on top of the first one the
- * provider loads. Every card here describes a window of days, and a wallet with a long history keeps
- * its earlier transfers on later pages, so one page is not enough to answer that — but paging to the
- * very end would turn a dashboard into an unbounded request loop, so the walk is capped.
+ * The hard bound on transaction pages the overview may pull in on top of the first one the provider
+ * loads. Every card here describes a window of days and a wallet with a long history keeps its
+ * earlier transfers on later pages, so the walk pages back until it passes the window start; this
+ * cap only stops a cursor that never ends. It is deliberately far above a real window's page count.
  */
-const HISTORY_PAGE_CAP = 25;
+const HISTORY_PAGE_CAP = 200;
 
 /** Cycles settle about once a day, so ten pages cover a 90-day window with room to spare. */
 const MINING_HISTORY_PAGE_CAP = 10;
@@ -321,7 +321,7 @@ function MiningCycleCard({
 }
 
 export function OverviewContent() {
-  const { wallet, transactions, nextCursor, security } = useWallet();
+  const { wallet, transactions, security } = useWallet();
   const mining = useQuery({
     queryKey: serverStateKeys.mining,
     queryFn: accountFetchers.mining,
@@ -357,32 +357,6 @@ export function OverviewContent() {
   };
 
   /**
-   * Walks the shared transactions and mining-history lists to the end of their history, one
-   * page at a time. Every card describes a window of days, and the API pages newest-first, so a
-   * wallet whose window started before its twentieth transfer keeps part of it on later pages.
-   * The pages are appended to the same cache entries every screen reads, so this is not a
-   * private copy. Each walk is bounded and only starts once the session is confirmed, and a
-   * failure leaves the pages already loaded on screen rather than blanking them.
-   */
-  useHistoryWalk<TransactionPage>({
-    queryKey: serverStateKeys.transactions,
-    fetchPage: accountFetchers.transactions,
-    nextCursor: (page) => page.nextCursor,
-    cap: HISTORY_PAGE_CAP,
-    enabled: wallet !== null,
-    tailCursor: nextCursor,
-  });
-  const miningTailCursor = history.data?.pages.at(-1)?.nextCursor ?? null;
-  useHistoryWalk<MiningHistoryPage>({
-    queryKey: serverStateKeys.miningHistory,
-    fetchPage: accountFetchers.miningHistory,
-    nextCursor: (page) => page.nextCursor,
-    cap: MINING_HISTORY_PAGE_CAP,
-    enabled: wallet !== null,
-    tailCursor: miningTailCursor,
-  });
-
-  /**
    * The one request this board makes about mining: a re-read when the tab comes back to the
    * foreground, the same trigger the mining page uses. Between reads the cycle card advances on its
    * own clock, so there is nothing to poll and the database is never asked for a clock it has
@@ -402,6 +376,33 @@ export function OverviewContent() {
     const to = Date.now();
     return { from: to - period.days * DAY_MS, to, days: period.days };
   }, [period]);
+
+  /**
+   * Walks the shared transactions and mining-history lists, one page at a time, so every card's
+   * period totals cover the whole window instead of only the pages already loaded. The pages are
+   * appended to the cache every screen reads, so this is not a private copy. The transaction walk
+   * stops once it reaches a page older than the window, so a busy wallet's totals are not truncated
+   * at a fixed page count; `cap` only bounds a pathological cursor. Only starts once the session is
+   * confirmed, and a failure leaves the pages already loaded on screen rather than blanking them.
+   */
+  useHistoryWalk<TransactionPage>({
+    queryKey: serverStateKeys.transactions,
+    fetchPage: accountFetchers.transactions,
+    nextCursor: (page) => page.nextCursor,
+    cap: HISTORY_PAGE_CAP,
+    enabled: wallet !== null,
+    shouldContinue: (page) => {
+      const oldest = page.transactions.at(-1);
+      return !oldest || new Date(oldest.createdAt).getTime() >= range.from;
+    },
+  });
+  useHistoryWalk<MiningHistoryPage>({
+    queryKey: serverStateKeys.miningHistory,
+    fetchPage: accountFetchers.miningHistory,
+    nextCursor: (page) => page.nextCursor,
+    cap: MINING_HISTORY_PAGE_CAP,
+    enabled: wallet !== null,
+  });
 
   /**
    * Each side totals what actually moved: the sender is debited the full amount, while a received

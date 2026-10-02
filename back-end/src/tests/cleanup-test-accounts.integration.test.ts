@@ -52,6 +52,7 @@ let freeFundingEntry: string;
 let paidRealHeader: string;
 let testOnlyHeader: string;
 let receivedFromRealHeader: string;
+let treasuryAccountId: string;
 
 async function seedAccount(email: string, displayName: string): Promise<SeededAccount> {
   const now = new Date();
@@ -116,6 +117,40 @@ async function credit(account: SeededAccount, amountMinor: number, correlationId
   } as never);
   await collections.ledgerAccounts.updateOne({ publicId: account.accountId }, { $inc: { balanceMinor: amountMinor } });
   return entryPublicId;
+}
+
+/** The shared treasury account the funding pairs debit, so a retained pair can keep its offset. */
+async function seedTreasury(): Promise<void> {
+  treasuryAccountId = randomUUID();
+  await collections.ledgerAccounts.insertOne({
+    _id: new ObjectId(),
+    publicId: treasuryAccountId,
+    walletId: null,
+    accountType: "system_treasury",
+    currency: "LMA",
+    balanceMinor: 0,
+    createdAt: new Date(),
+  } as never);
+}
+
+/**
+ * A realistic funding mint: a treasury debit and the account credit on one journal-less transaction,
+ * so both lines share a `transactionId`. The single-sided `credit()` above cannot cover the rule that
+ * a retained credit keeps its paired debit — there is no debit to lose — so the tests below use this
+ * shape to make that invariant observable.
+ */
+async function fundPair(account: SeededAccount, amountMinor: number, correlationId: string): Promise<{ debitEntry: string; creditEntry: string }> {
+  const now = new Date();
+  const transactionId = randomUUID();
+  const debitEntry = randomUUID();
+  const creditEntry = randomUUID();
+  await collections.ledgerEntries.insertMany([
+    { publicId: debitEntry, transactionId, lineNumber: 1, walletId: null, ledgerAccountId: treasuryAccountId, side: "debit", amountMinor, currency: "LMA", correlationId, createdAt: now },
+    { publicId: creditEntry, transactionId, lineNumber: 2, walletId: account.walletId, ledgerAccountId: account.accountId, side: "credit", amountMinor, currency: "LMA", correlationId, createdAt: now },
+  ] as never);
+  await collections.ledgerAccounts.updateOne({ publicId: treasuryAccountId }, { $inc: { balanceMinor: amountMinor } });
+  await collections.ledgerAccounts.updateOne({ publicId: account.accountId }, { $inc: { balanceMinor: amountMinor } });
+  return { debitEntry, creditEntry };
 }
 
 /**
@@ -266,4 +301,27 @@ test("apply keeps the entangled accounts whole and removes only the free one", a
   assert.equal(real?.balanceMinor, 185);
   assert.equal(await derivedBalance(realUser.accountId), 185);
   assert.ok(await collections.users.findOne({ publicId: realUser.userId }));
+});
+
+test("a retained funding credit keeps its paired treasury debit, and a removed one loses both", async () => {
+  await seedTreasury();
+  const retained = await seedAccount(`cleanup.paired.retained.${RUN}@example.test`, "Cleanup paired retained");
+  const removable = await seedAccount(`cleanup.paired.free.${RUN}@example.test`, "Cleanup paired free");
+  // Entangle `retained` with the real counterparty so the script must keep it whole.
+  await seedTransfer(retained, realUser, 3, true);
+  const keptFunds = await fundPair(retained, 50, `smoke-funding-cleanup-${RUN}-paired-retained`);
+  const lostFunds = await fundPair(removable, 70, `smoke-funding-cleanup-${RUN}-paired-free`);
+
+  const { stdout } = await runCleanup(true);
+  assert.match(stdout, /"applied": true/);
+
+  // The kept credit pins its whole funding transaction, so the treasury debit offsetting it survives.
+  assert.ok(await collections.ledgerEntries.findOne({ publicId: keptFunds.creditEntry }), "the retained funding credit survives");
+  assert.ok(await collections.ledgerEntries.findOne({ publicId: keptFunds.debitEntry }), "its paired treasury debit survives with it");
+
+  // The removed credit's pair goes with it, and the treasury projection follows its own entries.
+  assert.equal(await collections.ledgerEntries.countDocuments({ publicId: lostFunds.creditEntry }), 0);
+  assert.equal(await collections.ledgerEntries.countDocuments({ publicId: lostFunds.debitEntry }), 0);
+  const treasury = await collections.ledgerAccounts.findOne({ publicId: treasuryAccountId });
+  assert.equal(treasury?.balanceMinor, 50, "the treasury keeps exactly the retained funding debit");
 });

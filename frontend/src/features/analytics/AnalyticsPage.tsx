@@ -242,7 +242,7 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
 }
 
 export function AnalyticsContent() {
-  const { transactions, nextCursor, wallet } = useWallet();
+  const { transactions, wallet } = useWallet();
   const history = useInfiniteQuery<
     MiningHistoryPage,
     Error,
@@ -257,30 +257,6 @@ export function AnalyticsContent() {
     staleTime: serverStateFreshness.miningHistoryMs,
     enabled: hasBrowserSession,
   });
-  // The totals below read the shared lists, so the walks feed every dashboard at once: totals
-  // computed from only the loaded pages would understate income, expenses, counts, and mining
-  // for any wallet whose window reaches past the first page.
-  useHistoryWalk({
-    queryKey: serverStateKeys.transactions,
-    fetchPage: accountFetchers.transactions,
-    nextCursor: (page) => page.nextCursor,
-    cap: 25,
-    enabled: wallet !== null,
-    tailCursor: nextCursor,
-  });
-  const miningTailCursor = history.data?.pages.at(-1)?.nextCursor ?? null;
-  useHistoryWalk<MiningHistoryPage>({
-    queryKey: serverStateKeys.miningHistory,
-    fetchPage: accountFetchers.miningHistory,
-    nextCursor: (page) => page.nextCursor,
-    cap: 10,
-    enabled: wallet !== null,
-    tailCursor: miningTailCursor,
-  });
-  const sessions = useMemo(
-    () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
-    [history.data],
-  );
   const [rangeId, setRangeId] = useState(RANGES[2]!.id);
   const range = RANGES.find((r) => r.id === rangeId) ?? RANGES[2]!;
   const [cardsIn, setCardsIn] = useState(false);
@@ -293,6 +269,34 @@ export function AnalyticsContent() {
     const to = Date.now();
     return { from: to - range.days * DAY_MS, to };
   }, [range]);
+
+  // The totals below read the shared lists, so the walks feed every dashboard at once: totals
+  // computed from only the loaded pages would understate income, expenses, counts, and mining
+  // for any wallet whose window reaches past the first page. The transaction walk keeps going until
+  // it reaches a page older than the selected window, so a busy wallet's totals cover the whole
+  // range rather than the first 500 rows; `cap` only bounds a pathological cursor.
+  useHistoryWalk({
+    queryKey: serverStateKeys.transactions,
+    fetchPage: accountFetchers.transactions,
+    nextCursor: (page) => page.nextCursor,
+    cap: 200,
+    enabled: wallet !== null,
+    shouldContinue: (page) => {
+      const oldest = page.transactions.at(-1);
+      return !oldest || new Date(oldest.createdAt).getTime() >= window.from;
+    },
+  });
+  useHistoryWalk<MiningHistoryPage>({
+    queryKey: serverStateKeys.miningHistory,
+    fetchPage: accountFetchers.miningHistory,
+    nextCursor: (page) => page.nextCursor,
+    cap: 10,
+    enabled: wallet !== null,
+  });
+  const sessions = useMemo(
+    () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
+    [history.data],
+  );
 
   /** One pass over transfers + paid-out mining cycles, bucketed by day slice. */
   const buckets = useMemo<Bucket[]>(() => {
@@ -312,17 +316,27 @@ export function AnalyticsContent() {
       if (t.direction === "received") bucket.income += moneyChartValue(t.netAmount);
       else bucket.expense += moneyChartValue(t.amount);
     }
-    // A cycle can carry wallet-credited payouts while still `active` (collecting mid-cycle
-    // never closes it), so paid-out means a positive settled amount with a settlement time —
-    // not a terminal status. The cumulative settled amount is booked at its latest settlement,
-    // because per-settlement timestamps are not exposed: earlier partial payouts inside a
-    // multi-payout cycle land in the latest window rather than the one that earned them.
+    // A cycle can carry wallet-credited payouts while still `active` (collecting mid-cycle never
+    // closes it) and can pay out more than once, so each posted settlement is placed on the day it
+    // landed — booking the cumulative `settled` total at `lastSettledAt` would move a payout earned
+    // before the window into it. An older payload without the per-settlement list falls back to the
+    // cumulative amount at its settle time.
     for (const s of sessions) {
-      if (s.settledMinor <= 0 || !s.lastSettledAt) continue;
-      const time = new Date(s.lastSettledAt).getTime();
-      if (time < window.from || time >= window.to) continue;
-      const i = Math.min(range.buckets - 1, Math.floor(((time - window.from) / span) * range.buckets));
-      list[i]!.mined += moneyChartValue(s.settled);
+      if (s.settledMinor <= 0) continue;
+      const payouts = s.settlements?.length
+        ? s.settlements
+        : s.lastSettledAt
+          ? [{ amount: s.settled, at: s.lastSettledAt }]
+          : [];
+      for (const payout of payouts) {
+        const time = new Date(payout.at).getTime();
+        if (time < window.from || time >= window.to) continue;
+        const i = Math.min(
+          range.buckets - 1,
+          Math.floor(((time - window.from) / span) * range.buckets),
+        );
+        list[i]!.mined += moneyChartValue(payout.amount);
+      }
     }
     return list;
   }, [transactions, sessions, window, range]);

@@ -64,6 +64,9 @@ export function toPublicSession(record: MiningSessionRecord, nowMs: number): Pub
     progress: Math.min(1, elapsedSeconds / record.durationSeconds),
     canSettle: accruedMinor > record.settledMinor,
     lastSettledAt: record.lastSettledAt?.toISOString() ?? null,
+    // Filled by the history reader, which loads each cycle's posted payouts in one batch; the live
+    // state path has no page of settlements to attach.
+    settlements: [],
   };
 }
 

@@ -57,9 +57,13 @@ export function SendStepper({ stage }: { stage: 1 | 2 | 3 }) {
   );
 }
 
-/** Pulls a transfer target out of decoded QR text, which may carry a prefix or URL. */
+/**
+ * Reads a transfer target from decoded QR text. The QR must be the target itself (optionally with a
+ * `louma:` scheme), because an unanchored scan would lift an `@handle`-looking substring out of any
+ * unrelated URL or email and silently replace the typed recipient. An unrecognised QR adds nothing.
+ */
 function targetFromQrText(text: string): string | null {
-  const match = /(LMA(?:-[A-Z0-9]{4}){3}|@[a-z0-9_]{4,24})/i.exec(text);
+  const match = /^(?:louma:)?(LMA(?:-[A-Z0-9]{4}){3}|@[a-z0-9_]{4,24})$/i.exec(text.trim());
   return match?.[1] ? normalizeTransferTarget(match[1]) : null;
 }
 
@@ -115,7 +119,8 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
   const startCamera = async () => {
     setCameraError("");
     if (!detectorSupported) {
-      setCameraError("This browser cannot read QR codes from the camera. Upload an image instead.");
+      // Uploading cannot help here: `scanImage` rejects images for the same missing decoder.
+      setCameraError("This browser cannot read QR codes. Paste the address instead.");
       return;
     }
     doneRef.current = false;
@@ -142,6 +147,9 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
       ).BarcodeDetector;
       void scanFrame(new Detector({ formats: ["qr_code"] }));
     } catch {
+      // The stream may already be live when `play()` or detector construction rejects: release the
+      // acquired tracks here, or the camera stays on with no scan loop and no way to turn it off.
+      stop();
       setWorking(false);
       setCameraError("The camera could not be opened. Check permission, or upload an image.");
     }

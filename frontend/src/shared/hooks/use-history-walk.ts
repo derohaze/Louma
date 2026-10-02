@@ -14,6 +14,11 @@ import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
  * once the session is confirmed), and failure-tolerant: a failed page leaves the pages already
  * loaded on screen rather than blanking them. The append is guarded on the exact tail it was
  * fetched for, so two walkers racing the same cursor cannot file the same page twice.
+ *
+ * The walk reads the tail from the cache on every step rather than from a dependency, and its effect
+ * is keyed only on the session/gate. Keying it on the tail would cancel the in-flight walk the very
+ * moment it appended a page (the append is what moves the tail), and the replacement effect would
+ * then see `walking.current` and exit — stopping the walk after a page or two.
  */
 export function useHistoryWalk<Page>(options: {
   queryKey: readonly unknown[];
@@ -22,14 +27,28 @@ export function useHistoryWalk<Page>(options: {
   /** Hard bound on total pages, so a dashboard can never turn into an unbounded request loop. */
   cap: number;
   enabled: boolean;
-  /** The list's current tail cursor: the walk restarts whenever pagination state moves. */
-  tailCursor: string | null | undefined;
+  /**
+   * Optional stop condition, evaluated on each page just appended. A dashboard that only needs a
+   * date window returns false once a page is older than that window, so the walk keeps going past
+   * `cap` while matching history remains instead of reporting totals from a truncated list.
+   */
+  shouldContinue?: (page: Page) => boolean;
 }): void {
-  const { queryKey, cap, enabled, tailCursor } = options;
+  const { queryKey, cap, enabled } = options;
   const queryClient = useQueryClient();
   const walking = useRef(false);
-  const latest = useRef({ fetchPage: options.fetchPage, nextCursor: options.nextCursor, cap });
-  latest.current = { fetchPage: options.fetchPage, nextCursor: options.nextCursor, cap };
+  const latest = useRef({
+    fetchPage: options.fetchPage,
+    nextCursor: options.nextCursor,
+    cap,
+    shouldContinue: options.shouldContinue,
+  });
+  latest.current = {
+    fetchPage: options.fetchPage,
+    nextCursor: options.nextCursor,
+    cap,
+    shouldContinue: options.shouldContinue,
+  };
 
   useEffect(() => {
     if (!enabled || walking.current) return;
@@ -56,6 +75,9 @@ export function useHistoryWalk<Page>(options: {
             return { pages: [...prev.pages, page], pageParams: [...prev.pageParams, cursor] };
           });
           if (!appended) break;
+          // Stop once the appended page has reached past the caller's window; the next page would
+          // only hold older rows the totals ignore anyway.
+          if (live.shouldContinue && !live.shouldContinue(page)) break;
         }
       } catch {
         // The pages already in the cache still describe this wallet.
@@ -66,5 +88,5 @@ export function useHistoryWalk<Page>(options: {
     return () => {
       cancelled = true;
     };
-  }, [enabled, queryClient, queryKey, tailCursor]);
+  }, [enabled, queryClient, queryKey]);
 }

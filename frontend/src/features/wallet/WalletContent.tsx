@@ -140,7 +140,7 @@ function BreakdownRows({ rows }: { rows: readonly Row[] }) {
  * other page, with the primary address kept in one slim strip on top.
  */
 export function WalletContent() {
-  const { wallet, transactions, nextCursor } = useWallet();
+  const { wallet, transactions } = useWallet();
   const history = useInfiniteQuery<
     MiningHistoryPage,
     Error,
@@ -155,31 +155,34 @@ export function WalletContent() {
     staleTime: serverStateFreshness.miningHistoryMs,
     enabled: hasBrowserSession,
   });
+  const to = useMemo(() => Date.now(), []);
+  const from = to - WINDOW_DAYS * DAY_MS;
+
   // Same shared lists the other dashboards read: without the walks this board's window totals
-  // would cover only the loaded pages.
+  // would cover only the loaded pages. The transaction walk runs until it reaches a page older than
+  // the window, so a busy wallet's totals reflect the whole window rather than its first 500 rows.
   useHistoryWalk({
     queryKey: serverStateKeys.transactions,
     fetchPage: accountFetchers.transactions,
     nextCursor: (page) => page.nextCursor,
-    cap: 25,
+    cap: 200,
     enabled: wallet !== null,
-    tailCursor: nextCursor,
+    shouldContinue: (page) => {
+      const oldest = page.transactions.at(-1);
+      return !oldest || new Date(oldest.createdAt).getTime() >= from;
+    },
   });
-  const miningTailCursor = history.data?.pages.at(-1)?.nextCursor ?? null;
   useHistoryWalk<MiningHistoryPage>({
     queryKey: serverStateKeys.miningHistory,
     fetchPage: accountFetchers.miningHistory,
     nextCursor: (page) => page.nextCursor,
     cap: 10,
     enabled: wallet !== null,
-    tailCursor: miningTailCursor,
   });
   const sessions = useMemo(
     () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
     [history.data],
   );
-  const to = useMemo(() => Date.now(), []);
-  const from = to - WINDOW_DAYS * DAY_MS;
 
   const stats = useMemo(() => {
     const at = (t: Transaction) => new Date(t.createdAt).getTime();
@@ -216,13 +219,21 @@ export function WalletContent() {
       }
     }
     let mined = 0;
-    // Paid-out means a positive settled amount with a settlement time: a cycle can carry
-    // wallet-credited payouts while still `active`, and a terminal-status filter would show
-    // that real credit as zero mined.
+    // Each posted payout is placed on its own day: a cycle can pay out more than once while still
+    // `active`, so booking the cumulative `settled` total at `lastSettledAt` would move a payout
+    // earned before this window into it. An older payload without the per-settlement list falls back
+    // to that cumulative amount at its settle time.
     for (const s of sessions) {
-      if (s.settledMinor <= 0 || !s.lastSettledAt) continue;
-      const time = new Date(s.lastSettledAt).getTime();
-      if (inWindow(time, from, to)) mined += moneyChartValue(s.settled);
+      if (s.settledMinor <= 0) continue;
+      const payouts = s.settlements?.length
+        ? s.settlements
+        : s.lastSettledAt
+          ? [{ amount: s.settled, at: s.lastSettledAt }]
+          : [];
+      for (const payout of payouts) {
+        if (inWindow(new Date(payout.at).getTime(), from, to))
+          mined += moneyChartValue(payout.amount);
+      }
     }
     const volume = income + expense;
     const total = volume + mined;

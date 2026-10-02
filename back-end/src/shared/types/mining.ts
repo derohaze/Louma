@@ -103,6 +103,13 @@ export interface PublicMiningSession {
   progress: number;
   canSettle: boolean;
   lastSettledAt: string | null;
+  /**
+   * Each posted payout of this cycle, oldest first. A cycle can pay out more than once (a settle
+   * during the window, then the close-out), so a dashboard places each amount on the day it landed
+   * instead of booking the whole cumulative `settled` total at `lastSettledAt`, which would move a
+   * payout earned before a selected range into that range. Empty when the cycle has never settled.
+   */
+  settlements: { amount: string; at: string }[];
 }
 
 export interface PublicMiningState {
