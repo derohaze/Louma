@@ -62,7 +62,7 @@ export function MiningOrb({
         <p
           role="status"
           className={cn(
-            "text-xs text-muted-foreground",
+            "text-xs text-foreground dark:text-muted-foreground",
             captionShimmer && "orb-caption-shimmer",
             captionClassName,
           )}

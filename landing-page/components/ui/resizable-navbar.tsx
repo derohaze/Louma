@@ -48,12 +48,36 @@ interface MobileNavMenuProps {
   isOpen: boolean;
 }
 
+/**
+ * ONE shadow geometry, with the two states differing only in alpha.
+ *
+ * The visible and hidden states used to be `boxShadow: <long list>` versus `boxShadow: 'none'`.
+ * `none` cannot be interpolated, so the transition snapped at both ends and repainted the whole
+ * bar — the visible glitch on every scroll toggle. Matching structures interpolate smoothly.
+ */
+const NAV_SHADOW =
+  '0 0 24px rgba(34, 42, 53, 0.06), 0 1px 1px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(34, 42, 53, 0.04), 0 0 4px rgba(34, 42, 53, 0.08), 0 16px 68px rgba(47, 48, 55, 0.05), 0 1px 0 rgba(255, 255, 255, 0.1) inset';
+const NAV_SHADOW_HIDDEN =
+  '0 0 24px rgba(34, 42, 53, 0), 0 1px 1px rgba(0, 0, 0, 0), 0 0 0 1px rgba(34, 42, 53, 0), 0 0 4px rgba(34, 42, 53, 0), 0 16px 68px rgba(47, 48, 55, 0), 0 1px 0 rgba(255, 255, 255, 0) inset';
+
+/** How far the bar travels down once it detaches from the top edge. */
+const NAV_LIFT_PX = 6;
+
+/**
+ * How far the bar pulls in from full width once scrolled. Deliberately small: the bar keeps its
+ * footprint and only tightens a little, instead of collapsing into a narrow pill.
+ */
+const NAV_SHRINK = '92%';
+
 export function Navbar({ children, className }: NavbarProps) {
   const { scrollY } = useScroll();
   const [visible, setVisible] = useState(false);
 
+  // Hysteresis, not a single threshold: `latest > 8` re-armed the spring on every jitter around
+  // that line — momentum scrolling, rubber-banding, sub-pixel trackpad deltas — which made the bar
+  // flicker and replay its animation. Enter late, leave early, and the state only flips on intent.
   useMotionValueEvent(scrollY, 'change', (latest) => {
-    setVisible(latest > 8);
+    setVisible((current) => (current ? latest > 8 : latest > 24));
   });
 
   return (
@@ -71,12 +95,10 @@ export function NavBody({ children, className, visible }: NavBodyProps) {
   return (
     <motion.div
       animate={{
-        backdropFilter: visible ? 'blur(10px)' : 'none',
-        boxShadow: visible
-          ? '0 0 24px rgba(34, 42, 53, 0.06), 0 1px 1px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(34, 42, 53, 0.04), 0 0 4px rgba(34, 42, 53, 0.08), 0 16px 68px rgba(47, 48, 55, 0.05), 0 1px 0 rgba(255, 255, 255, 0.1) inset'
-          : 'none',
-        width: visible ? '760px' : '100%',
-        y: visible ? 14 : 0,
+        backdropFilter: visible ? 'blur(10px)' : 'blur(0px)',
+        boxShadow: visible ? NAV_SHADOW : NAV_SHADOW_HIDDEN,
+        width: visible ? NAV_SHRINK : '100%',
+        y: visible ? NAV_LIFT_PX : 0,
       }}
       transition={{
         type: 'spring',
@@ -84,7 +106,9 @@ export function NavBody({ children, className, visible }: NavBodyProps) {
         damping: 50,
       }}
       className={cn(
-        'relative z-[60] mx-auto hidden h-14 max-w-7xl flex-row items-center justify-between rounded-full bg-transparent px-4 py-2 lg:flex dark:bg-transparent',
+        // The tint is a class swap, not an animated property, so it needs its own transition or it
+        // pops in a frame while the width and blur are still easing.
+        'relative z-[60] mx-auto hidden h-14 max-w-7xl flex-row items-center justify-between rounded-full bg-transparent px-4 py-2 transition-colors duration-300 lg:flex dark:bg-transparent',
         visible && 'bg-white/80 dark:bg-neutral-950/80',
         className,
       )}
@@ -123,15 +147,13 @@ export function MobileNav({ children, className, visible }: MobileNavProps) {
   return (
     <motion.div
       animate={{
-        backdropFilter: visible ? 'blur(10px)' : 'none',
-        boxShadow: visible
-          ? '0 0 24px rgba(34, 42, 53, 0.06), 0 1px 1px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(34, 42, 53, 0.04), 0 0 4px rgba(34, 42, 53, 0.08), 0 16px 68px rgba(47, 48, 55, 0.05), 0 1px 0 rgba(255, 255, 255, 0.1) inset'
-          : 'none',
+        backdropFilter: visible ? 'blur(10px)' : 'blur(0px)',
+        boxShadow: visible ? NAV_SHADOW : NAV_SHADOW_HIDDEN,
         width: visible ? '90%' : '100%',
         paddingLeft: visible ? '12px' : '0px',
         paddingRight: visible ? '12px' : '0px',
         borderRadius: visible ? '2rem' : '0px',
-        y: visible ? 12 : 0,
+        y: visible ? NAV_LIFT_PX : 0,
       }}
       transition={{
         type: 'spring',
@@ -139,7 +161,7 @@ export function MobileNav({ children, className, visible }: MobileNavProps) {
         damping: 50,
       }}
       className={cn(
-        'relative z-50 mx-auto flex w-full max-w-[calc(100vw-2rem)] flex-col items-center justify-between bg-transparent px-0 py-2 lg:hidden',
+        'relative z-50 mx-auto flex w-full max-w-[calc(100vw-2rem)] flex-col items-center justify-between bg-transparent px-0 py-2 transition-colors duration-300 lg:hidden',
         visible && 'bg-white/80 dark:bg-neutral-950/80',
         className,
       )}
@@ -187,10 +209,6 @@ export function NavbarLogo() {
       href="/"
       className="relative z-20 mr-4 flex items-center space-x-2 px-2 py-1 text-sm font-normal text-black"
     >
-      <span className="relative block h-6 w-9 shrink-0" aria-hidden="true">
-        <img src="/darklogo.svg" alt="" className="block h-full w-full object-contain dark:hidden" />
-        <img src="/whitelogo.svg" alt="" className="hidden h-full w-full object-contain dark:block" />
-      </span>
       <span className="font-medium text-black dark:text-white">Louma</span>
     </a>
   );

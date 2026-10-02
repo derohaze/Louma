@@ -135,13 +135,6 @@ export function RecipientsPage() {
           )}
         </div>
       </section>
-      <p className="mt-4 text-xs text-muted-foreground">
-        Manage names in the{" "}
-        <Link to="/wallet/address-book" className="font-semibold text-primary-soft">
-          address book
-        </Link>
-        .
-      </p>
     </>
   );
 }

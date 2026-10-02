@@ -183,10 +183,14 @@ export async function joinMiningPool(input: {
     throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
   }
   const prevPoolId = current?.poolId ?? null;
-  const now = new Date();
+  // `updatedAt` is stamped by the server (`$$NOW`) rather than captured before the write: a join
+  // delayed between capture and write would otherwise land with an older stamp than a join whose
+  // success was already returned, sort as the older row in the trim below, and evict that winner —
+  // leaving a member who was told it joined without a membership. Server time orders rows by when
+  // they actually landed. `joinedAt` keeps the first-seen time on a switch.
   await input.collections.miningPoolMembers.updateOne(
     { ownerUserId: input.ownerUserId },
-    { $set: { poolId: pool.id, updatedAt: now }, $setOnInsert: { joinedAt: now } },
+    [{ $set: { poolId: pool.id, joinedAt: { $ifNull: ["$joinedAt", "$$NOW"] }, updatedAt: "$$NOW" } }],
     { upsert: true },
   );
   // The pre-check above races: two joins against one seat can both pass `countDocuments`

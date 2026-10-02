@@ -11,19 +11,20 @@ export function PricingPageClient() {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
 
   return (
-    <main className="min-h-screen bg-fd-background px-5 pb-16 pt-16 text-fd-foreground dark:bg-[#0A0A0A] md:px-8">
-      <section className="mx-auto w-full max-w-[1500px]">
+    <main className="min-h-screen bg-fd-background px-5 pb-16 pt-20 text-fd-foreground dark:bg-[#0A0A0A] md:px-8">
+      <section className="mx-auto w-full max-w-[980px]">
         <div className="flex flex-col items-center text-center">
-          <h1 className="text-3xl font-medium leading-none tracking-normal text-fd-foreground md:text-5xl">
-            Pricing
+          <h1 className="text-balance text-4xl font-semibold leading-[1.05] tracking-tight md:text-6xl">
+            Built for every stage of your wallet
           </h1>
-          <BillingToggle billingCycle={billingCycle} onChange={setBillingCycle} />
-          <p className="mt-3 text-xs font-medium text-fd-muted-foreground">
-            {billingCycle === 'yearly' ? 'Billed yearly' : 'Billed monthly'}
+          <p className="mt-5 max-w-xl text-sm leading-6 text-fd-muted-foreground md:text-base">
+            Whether you are holding, sending, or mining LMA, there is a plan that fits.
           </p>
+
+          <BillingToggle billingCycle={billingCycle} onChange={setBillingCycle} />
         </div>
 
-        <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+        <div className="relative mt-12 grid w-full grid-cols-1 items-stretch gap-5 rounded-[2rem] bg-[#f2f2f2] p-4 sm:grid-cols-2 sm:gap-6 dark:bg-[#0f0f0f]">
           {plans.map((plan) => (
             <PlanCard key={plan.name} billingCycle={billingCycle} plan={plan} />
           ))}

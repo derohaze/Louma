@@ -1,5 +1,6 @@
 import './global.css';
 import type { Metadata, Viewport } from 'next';
+import Script from 'next/script';
 import { NextProvider } from 'fumadocs-core/framework/next';
 import type { ReactNode } from 'react';
 import { Body } from './layout.client';
@@ -52,9 +53,6 @@ export const metadata: Metadata = {
       'max-video-preview': -1,
     },
   },
-  icons: {
-    icon: [{ url: '/whitelogo.svg', type: 'image/svg+xml' }],
-  },
 };
 
 export const viewport: Viewport = {
@@ -68,9 +66,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script
+        <Script
+          id="bis-skin-cleanup"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
-            __html: `new MutationObserver(function(){document.querySelectorAll("[bis_skin_checked]").forEach(function(e){e.removeAttribute("bis_skin_checked")})}).observe(document.documentElement,{attributes:true,subtree:true,attributeFilter:["bis_skin_checked"]})`,
+            __html: `(function(){var s="[bis_skin_checked]";function clean(){try{document.querySelectorAll(s).forEach(function(e){e.removeAttribute("bis_skin_checked")})}catch(_){}}clean();new MutationObserver(clean).observe(document.documentElement,{attributes:true,subtree:true,attributeFilter:["bis_skin_checked"]})})()`,
           }}
         />
       </head>

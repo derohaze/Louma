@@ -2,7 +2,6 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
   BitcoinCpuIcon,
-  BookBookmark01Icon,
   ChartIncreaseIcon,
   FavouriteIcon,
   Home04Icon,
@@ -20,13 +19,13 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
 export type NavHref =
   | "/"
+  | "/analytics"
   | "/transfer"
   | "/transfer/recipients"
   | "/mining"
   | "/mining/pools"
   | "/mining/history"
   | "/wallet"
-  | "/wallet/address-book"
   | "/transactions"
   | "/custom-address"
   | "/profile"
@@ -70,10 +69,16 @@ const sectionItems = (items: readonly NavItem[]): [NavItem, ...NavItem[]] => {
  */
 export const navSections: readonly [NavSection, ...NavSection[]] = [
   {
-    title: "Overview",
+    title: "Home",
     icon: Home04Icon,
     items: [
-      { title: "Overview", href: "/", icon: Home04Icon, searchTerms: "balance dashboard home" },
+      { title: "Overview", href: "/", icon: Home04Icon, searchTerms: "balance dashboard home overview" },
+      {
+        title: "Analytics",
+        href: "/analytics",
+        icon: ChartIncreaseIcon,
+        searchTerms: "analytics charts insights income expenses mining transfers activity",
+      },
     ],
   },
   {
@@ -85,12 +90,6 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         href: "/wallet",
         icon: Wallet01Icon,
         searchTerms: "balance receiving address",
-      },
-      {
-        title: "Address Book",
-        href: "/wallet/address-book",
-        icon: BookBookmark01Icon,
-        searchTerms: "saved addresses recipients favorites send",
       },
       {
         title: "Custom Address",
@@ -123,16 +122,16 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
     icon: BitcoinCpuIcon,
     items: [
       {
-        title: "Mining Pools",
-        href: "/mining/pools",
-        icon: UserGroupIcon,
-        searchTerms: "mining pools join room community low medium",
-      },
-      {
         title: "Mining",
         href: "/mining",
         icon: BitcoinCpuIcon,
         searchTerms: "mining rewards rate cycle earn lma earn",
+      },
+      {
+        title: "Mining Pools",
+        href: "/mining/pools",
+        icon: UserGroupIcon,
+        searchTerms: "mining pools join room community low medium",
       },
       {
         title: "History",

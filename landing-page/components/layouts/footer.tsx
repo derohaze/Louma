@@ -8,7 +8,6 @@ const footerColumns = [
     links: [
       { text: 'Features', url: '/features' },
       { text: 'Pricing', url: '/pricing' },
-      { text: 'Integrations', url: '/sponsors' },
       { text: 'Changelog', url: '/changelog' },
     ],
   },

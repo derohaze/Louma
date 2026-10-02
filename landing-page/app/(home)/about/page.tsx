@@ -32,7 +32,6 @@ const structuredData = {
       '@id': `${siteConfig.url}/#organization`,
       name: siteConfig.name,
       url: siteConfig.url,
-      logo: `${siteConfig.url}/whitelogo.svg`,
       description: siteConfig.description,
       sameAs: [`${siteConfig.url}/features`, `${siteConfig.url}/pricing`],
     },

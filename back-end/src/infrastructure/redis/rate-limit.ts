@@ -39,6 +39,14 @@ function checkLocal(key: string, limit: number, windowMs: number): RateLimitDeci
       if (entry.resetAt <= now) localWindows.delete(stored);
       if (localWindows.size <= LOCAL_WINDOW_CAP / 2) break;
     }
+    // During a sustained Redis outage every distinct active identity adds a window that has not
+    // expired yet, so pruning expired entries alone cannot bound this table. Evict the oldest
+    // windows (insertion order is window age) down to half the cap; an evicted identity simply
+    // gets a fresh window, which is the documented best-effort behavior of this fallback.
+    for (const stored of localWindows.keys()) {
+      if (localWindows.size <= LOCAL_WINDOW_CAP / 2) break;
+      localWindows.delete(stored);
+    }
   }
   const entry = localWindows.get(key);
   if (!entry || entry.resetAt <= now) {

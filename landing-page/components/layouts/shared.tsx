@@ -17,12 +17,8 @@ export const linkItems: LinkItemType[] = [
   },
 ];
 
-export const logo = (
-  <span className="relative block h-5 w-8 shrink-0" aria-hidden="true">
-    <img src="/darklogo.svg" alt="" className="block h-full w-full object-contain dark:hidden" />
-    <img src="/whitelogo.svg" alt="" className="hidden h-full w-full object-contain dark:block" />
-  </span>
-);
+// Brand mark removed temporarily — nav shows the wordmark only.
+export const logo = null;
 
 export function baseOptions(): BaseLayoutProps {
   return {

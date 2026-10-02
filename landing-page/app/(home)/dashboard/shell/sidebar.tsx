@@ -41,10 +41,6 @@ export function DemoSidebar({
   return (
     <aside className="hidden w-56 shrink-0 flex-col pt-3 lg:flex">
       <div className="flex items-center gap-2.5 px-4 pb-3">
-        <span className="relative flex h-6 w-9 shrink-0 items-center justify-center" aria-hidden="true">
-          <img src="/darklogo.svg" alt="" className="block h-full w-full object-contain dark:hidden" />
-          <img src="/whitelogo.svg" alt="" className="hidden h-full w-full object-contain dark:block" />
-        </span>
         <span className="text-[13px] font-semibold">Louma</span>
       </div>
 
