@@ -3,7 +3,8 @@ import { WalletPage } from "@/app/shell";
 import { MiningPools } from "@/features/mining";
 import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/mining/pools")({
-  head: () => pageHead("mining.pools.title", "mining.pools.description"),
+  head: ({ match }) =>
+    pageHead("mining.pools.title", "mining.pools.description", match.context.language),
   component: () => (
     <WalletPage titleKey="mining.pools.title">
       <MiningPools />

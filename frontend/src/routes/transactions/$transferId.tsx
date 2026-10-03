@@ -4,7 +4,12 @@ import { TransactionDetailContent } from "@/features/transactions";
 import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/transactions/$transferId")({
-  head: () => pageHead("transactions.detail.title", "transactions.detail.description"),
+  head: ({ match }) =>
+    pageHead(
+      "transactions.detail.title",
+      "transactions.detail.description",
+      match.context.language,
+    ),
   component: TransactionRoute,
 });
 

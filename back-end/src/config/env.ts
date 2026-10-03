@@ -156,6 +156,17 @@ export interface AppConfig {
    * and rate-limits by.
    */
   trustProxy: boolean | string[];
+  /**
+   * Shared secret the first-party frontend proxy uses to assert the real client IP.
+   *
+   * The API sits behind Cloudflare and the browser never talks to it directly: the page calls its
+   * own origin, whose server forwards to the API. By the time the request arrives, `request.ip` is a
+   * Cloudflare edge (or Vercel egress) address shared by many users — useless for the per-IP login
+   * throttle and the stored signup IP. The proxy therefore stamps the connecting IP it saw into
+   * `x-louma-client-ip`, and this secret authenticates that stamp. Null disables the header entirely
+   * and every consumer falls back to `request.ip`.
+   */
+  proxySharedSecret: string | null;
   redis: RedisConfig;
   mining: MiningConfig;
   miningPools: MiningPoolsConfig;
@@ -288,6 +299,20 @@ function parseTrustedProxies(name: string, values: NodeJS.ProcessEnv): boolean |
     }
   }
   return proxies;
+}
+
+/**
+ * Reads the secret that authenticates the first-party proxy's client-IP stamp.
+ *
+ * Empty means the deployment has no proxy asserting IPs, so the header is never trusted. A short
+ * value is refused at boot rather than silently accepted: a guessable secret would let any direct
+ * caller choose the IP the login throttle counts and the signup row stores.
+ */
+function parseProxySharedSecret(values: NodeJS.ProcessEnv): string | null {
+  const raw = values["PROXY_SHARED_SECRET"]?.trim();
+  if (!raw) return null;
+  if (raw.length < 16) throw new Error("PROXY_SHARED_SECRET must be at least 16 characters");
+  return raw;
 }
 
 function logLevel(raw: string): LogLevel {
@@ -550,6 +575,7 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     proxycheckTimeoutMs: positiveInteger("PROXYCHECK_TIMEOUT_MS", values["PROXYCHECK_TIMEOUT_MS"] ?? "2500"),
     proxycheckHmacKey: optionalString("PROXYCHECK_HMAC_KEY", values),
     trustProxy: parseTrustedProxies("TRUST_PROXY", values),
+    proxySharedSecret: parseProxySharedSecret(values),
     redis: loadRedisConfig(values),
     mining: loadMiningConfig(values),
     miningPools: loadMiningPoolsConfig(values),

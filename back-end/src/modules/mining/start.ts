@@ -17,6 +17,9 @@ import {
 } from "../mining-device/policy.js";
 import { LEDGER_AMOUNT_MAX_MINOR } from "../../shared/types.js";
 import { isDuplicateKeyError } from "../../shared/mongo-retry.js";
+import { allowedSessionSeconds } from "./quota.js";
+import { loadAccountQuota, loadDeviceQuota } from "./quota-store.js";
+import { deviceQuotaKeyFor } from "./quota.js";
 import { applyPoolFactor, drawPoolFactorBps, getPoolById } from "./pools.js";
 import {
   buildFeatureMap,
@@ -46,13 +49,15 @@ export interface MiningStartDeviceContext {
 }
 
 /**
- * Opens a new mining cycle for the account.
+ * Opens a new mining segment for the account inside its 10h/24h quota window.
  *
- * The window and the rate are chosen here, on the server, and are never accepted from the caller:
- * `startedAt` is the server clock, `endsAt` is exactly one configured cycle later, and the rate is a
- * cryptographically drawn integer inside the configured band. A running cycle blocks a second one —
- * through the unique index as much as through the check — and an expired-but-unsettled cycle is
- * settled first so its reward is never stranded and the one-active slot is freed.
+ * The window, the length, and the rate are chosen here, on the server, and are never accepted
+ * from the caller: `startedAt` is the server clock, `endsAt` is `startedAt + min(accountRemaining,
+ * deviceRemaining)` capped to both 24h window ends, and the rate is a cryptographically drawn
+ * integer inside the configured band. A running segment blocks a second one — through the unique
+ * index as much as through the check — and an expired-but-unsettled segment is settled first so
+ * its reward is never stranded and the one-active slot is freed. Resume is a new segment on the
+ * same anchors, never a quota reset.
  */
 export async function startMining(input: {
   collections: Collections;
@@ -132,21 +137,12 @@ export async function startMining(input: {
     { sort: { createdAt: -1, publicId: -1 }, projection: { publicId: 1, cycleNumber: 1 } },
   );
 
-  const now = new Date();
-  const startedAtMs = now.getTime();
-  // Base rate from the configured band, then one bounded pool draw (avg ≈ 1.0x for both
-  // pools): pool choice adds variance, never issuance.
-  const poolDef = getPoolById(poolsLive, membership.poolId);
-  const rateUnits = applyPoolFactor(pickRateUnits(mining.rate), drawPoolFactorBps(poolsLive, poolDef.id));
-  // Defense in depth behind the boot-time config validation: never open a cycle whose 24-hour
-  // total cannot be represented exactly or posted through the ledger. A bad rate fails the start
-  // instead of stranding an unsettleable, irreplaceable active cycle on the account.
-  const endsAtMs = startedAtMs + mining.cycleDurationSeconds * 1000;
-  const cycleTotalMinor = totalAccrualMinor(
-    { rateUnits, rateScale: mining.rate.scale },
-    { startedAtMs, endsAtMs, durationSeconds: mining.cycleDurationSeconds },
-  );
-  if (cycleTotalMinor < 1 || cycleTotalMinor > LEDGER_AMOUNT_MAX_MINOR) {
+  // Account quota pre-check before any device side effects (resolution can mint
+  // device rows and observations): an exhausted account is refused without
+  // touching device state and without consuming any quota.
+  const preQuotaNowMs = Date.now();
+  const preAccountQuota = await loadAccountQuota(collections, input.ownerUserId, preQuotaNowMs);
+  if (preAccountQuota.remainingSeconds <= 0) {
     await recordSecurityEvent({
       collections,
       ownerUserId: input.ownerUserId,
@@ -154,32 +150,16 @@ export async function startMining(input: {
       eventType: "mining_rejected",
       outcome: "failure",
       correlationId: input.correlationId,
-      metadata: { reason: "rate_total_out_of_range" },
+      metadata: { reason: "quota_exhausted", scope: "account" },
     }).catch(() => undefined);
-    throw serviceUnavailable("mining_rate_unavailable", "Mining is temporarily unavailable.");
+    throw conflict("mining_quota_exhausted", "The 10-hour daily mining quota for this account is exhausted. Try again after the 24-hour window resets.");
   }
-  const session: Omit<MiningSessionRecord, "_id"> = {
-    publicId: randomUUID(),
-    ownerUserId: input.ownerUserId,
-    poolId: poolDef.id,
-    walletId: wallet.publicId,
-    ledgerAccountId: walletAccount.publicId,
-    status: "active",
-    cycleNumber: (previous?.cycleNumber ?? 0) + 1,
-    startedAt: now,
-    endsAt: new Date(endsAtMs),
-    durationSeconds: mining.cycleDurationSeconds,
-    rateUnits,
-    rateScale: mining.rate.scale,
-    rateDecimals: mining.rate.decimals,
-    rate: rateToString(rateUnits, mining.rate.scale, mining.rate.decimals),
-    rateUnit: "LMA/hour",
-    settledMinor: 0,
-    settlementSequence: 0,
-    lastSettledAt: null,
-    createdAt: now,
-    updatedAt: now,
-  };
+
+  // Base rate from the configured band, then one bounded pool draw (avg ≈ 1.0x for both
+  // pools): pool choice adds variance, never issuance. The window/total check
+  // happens after the quota intersection below, on the capped segment length.
+  const poolDef = getPoolById(poolsLive, membership.poolId);
+  const rateUnits = applyPoolFactor(pickRateUnits(mining.rate), drawPoolFactorBps(poolsLive, poolDef.id));
 
   // LMDG admission control: resolve the device cluster and enforce one active lease per device.
   //
@@ -206,6 +186,11 @@ export async function startMining(input: {
   let leaseDeviceId: string | null = null;
   // The device cluster this start resolves to, credited with one admission once the cycle commits.
   let creditDeviceId: string | null = null;
+  // Machine identity for the shared 10h device quota (`machineKey ?? cluster id`).
+  // Hoisted so the quota intersection below sees the same identity the lease was
+  // assessed on, even in monitor mode (no lease) — quota still binds the machine.
+  let resolvedMachineKey: string | null = null;
+  let resolvedDevicePublicId: string | null = null;
   if (deviceLeaseEnabled && input.device) {
     // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
     // traits and no browser key, so the lease would fall back to a network-dependent identity that a
@@ -252,6 +237,8 @@ export async function startMining(input: {
       ownerUserId: input.ownerUserId,
       correlationId: input.correlationId,
     });
+    resolvedMachineKey = resolution.machineKey;
+    resolvedDevicePublicId = resolution.device.publicId;
     // Defense in depth: the post-resolution check below repeats the same refusal on the resolved
     // identities, in case sanitization and resolution ever disagree about what counts as evidence.
     if (resolution.machineKey === null && !resolution.evidence.browserKeyPublicKey) {
@@ -346,7 +333,117 @@ export async function startMining(input: {
     // A cycle is about to be created on this cluster whichever mode ran (monitor only skips the
     // lease, not the cycle), so the admission is credited to it once the session commits below.
     creditDeviceId = eligibility.device.publicId;
+    // Monitor may have refused the lease but still resolved the machine: keep the
+    // resolution identity for quota (quota binds even when the lease is skipped).
+    if (resolvedDevicePublicId === null) resolvedDevicePublicId = eligibility.device.publicId;
   }
+
+  // 10h/24h quota intersection, computed on the server clock after admission so a
+  // stop that landed during resolution is already visible. Stop never moves the
+  // anchors; a start at/after `anchor + 24h` opens the next window. The segment
+  // is capped to `min(accountRemaining, deviceRemaining)` and to both window
+  // ends, so it can never cross a reset and 10h + 1s can never accrue.
+  const quotaNow = new Date();
+  const quotaNowMs = quotaNow.getTime();
+  const accountQuota = await loadAccountQuota(collections, input.ownerUserId, quotaNowMs);
+  if (accountQuota.remainingSeconds <= 0) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: input.ownerUserId,
+      sessionId: null,
+      eventType: "mining_rejected",
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { reason: "quota_exhausted", scope: "account" },
+    }).catch(() => undefined);
+    throw conflict("mining_quota_exhausted", "The 10-hour daily mining quota for this account is exhausted. Try again after the 24-hour window resets.");
+  }
+  let deviceQuotaKey: string | null = null;
+  let deviceQuota: { remainingSeconds: number; windowRemainingSeconds: number; windowStartMs: number } | null = null;
+  if (resolvedDevicePublicId !== null) {
+    deviceQuotaKey = deviceQuotaKeyFor(resolvedMachineKey, resolvedDevicePublicId);
+    const loaded = await loadDeviceQuota(collections, deviceQuotaKey, quotaNowMs);
+    deviceQuota = loaded;
+    if (loaded.remainingSeconds <= 0) {
+      await recordSecurityEvent({
+        collections,
+        ownerUserId: input.ownerUserId,
+        sessionId: null,
+        eventType: "mining_rejected",
+        outcome: "failure",
+        correlationId: input.correlationId,
+        metadata: { reason: "quota_exhausted", scope: "device" },
+      }).catch(() => undefined);
+      throw conflict("mining_quota_exhausted", "The 10-hour daily mining quota for this device is exhausted. Try again after the 24-hour window resets.");
+    }
+  }
+  const allowedSeconds = allowedSessionSeconds({
+    accountRemainingSeconds: accountQuota.remainingSeconds,
+    deviceRemainingSeconds: deviceQuota?.remainingSeconds ?? null,
+    accountWindowRemainingSeconds: accountQuota.windowRemainingSeconds,
+    deviceWindowRemainingSeconds: deviceQuota?.windowRemainingSeconds ?? null,
+  });
+  if (allowedSeconds <= 0) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: input.ownerUserId,
+      sessionId: null,
+      eventType: "mining_rejected",
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { reason: "quota_exhausted", scope: "window" },
+    }).catch(() => undefined);
+    throw conflict("mining_quota_exhausted", "The daily mining quota window has ended. Try again in the next 24-hour window.");
+  }
+  // Defense in depth behind the boot-time config validation: never open a segment
+  // whose total cannot be posted through the ledger. A bad rate fails the start
+  // instead of stranding an unsettleable active segment. Zero-total micro-segments
+  // (a few seconds left at the minimum rate) are allowed: they accrue nothing and
+  // close without a journal write, so nothing strands.
+  const startedAtMs = quotaNowMs;
+  const endsAtMs = startedAtMs + allowedSeconds * 1000;
+  const segmentTotalMinor = totalAccrualMinor(
+    { rateUnits, rateScale: mining.rate.scale },
+    { startedAtMs, endsAtMs, durationSeconds: allowedSeconds },
+  );
+  if (segmentTotalMinor > LEDGER_AMOUNT_MAX_MINOR) {
+    await recordSecurityEvent({
+      collections,
+      ownerUserId: input.ownerUserId,
+      sessionId: null,
+      eventType: "mining_rejected",
+      outcome: "failure",
+      correlationId: input.correlationId,
+      metadata: { reason: "rate_total_out_of_range" },
+    }).catch(() => undefined);
+    throw serviceUnavailable("mining_rate_unavailable", "Mining is temporarily unavailable.");
+  }
+  const session: Omit<MiningSessionRecord, "_id"> = {
+    publicId: randomUUID(),
+    ownerUserId: input.ownerUserId,
+    poolId: poolDef.id,
+    walletId: wallet.publicId,
+    ledgerAccountId: walletAccount.publicId,
+    status: "active",
+    cycleNumber: (previous?.cycleNumber ?? 0) + 1,
+    startedAt: quotaNow,
+    endsAt: new Date(endsAtMs),
+    durationSeconds: allowedSeconds,
+    accountWindowStart: new Date(accountQuota.windowStartMs),
+    deviceQuotaKey,
+    deviceWindowStart: deviceQuota && deviceQuotaKey ? new Date(deviceQuota.windowStartMs) : null,
+    deviceId: resolvedDevicePublicId,
+    rateUnits,
+    rateScale: mining.rate.scale,
+    rateDecimals: mining.rate.decimals,
+    rate: rateToString(rateUnits, mining.rate.scale, mining.rate.decimals),
+    rateUnit: "LMA/hour",
+    settledMinor: 0,
+    settlementSequence: 0,
+    lastSettledAt: null,
+    createdAt: quotaNow,
+    updatedAt: quotaNow,
+  };
 
   if (leaseKeys.length > 0) {
     // Expired rows stay `active` in the database — expiry is a fact about the clock, not a write —

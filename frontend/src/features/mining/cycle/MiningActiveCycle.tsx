@@ -10,6 +10,7 @@ import { MiningLiveLog } from "@/features/mining/live/MiningLiveLog";
 import { MiningBusyButton } from "@/features/mining/cycle/MiningBusyButton";
 import { MiningInfoCard } from "@/features/mining/cycle/MiningReadyPanel";
 import { countdown } from "@/features/mining/cycle/mining-format";
+import { revealDelay } from "@/shared/ui/page";
 import type { MiningCycle } from "@/features/mining/cycle/useMiningCycle";
 
 /** The running (or collectable) cycle: countdown, earnings, progress, and collect actions. */
@@ -36,7 +37,10 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
   if (!session) return null;
   return (
     <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-      <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+      <section
+        style={revealDelay(0)}
+        className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+      >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -178,12 +182,21 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
       </section>
 
       <div className="grid gap-4">
-        <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+        <section
+          style={revealDelay(1)}
+          className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+        >
           <p className="text-sm text-muted-foreground">{t("active.rateCard")}</p>
           <p className="mt-3 font-display text-xl font-bold tabular-nums">{rateText}</p>
           <p className="mt-3 text-xs text-muted-foreground">{t("active.rateNote")}</p>
         </section>
-        {session.status === "active" ? <MiningLiveLog events={feed} /> : <MiningInfoCard />}
+        {session.status === "active" ? (
+          <div style={revealDelay(2)} className="card-enter">
+            <MiningLiveLog events={feed} />
+          </div>
+        ) : (
+          <MiningInfoCard delayMs={150} />
+        )}
       </div>
     </div>
   );

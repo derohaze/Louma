@@ -74,7 +74,14 @@ export function readLanguageCookie(): LanguageCode {
 export function persistLanguage(code: LanguageCode): void {
   if (typeof document === "undefined") return;
   const secure = window.location.protocol === "https:" ? "; secure" : "";
-  document.cookie = `${LANGUAGE_COOKIE}=${code}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax${secure}`;
+  // Shared with the marketing site: a host-only cookie set on one hostname is never sent to the
+  // other, so the choice follows the visitor between `loumapay.com` and `app.loumapay.com` via the
+  // parent domain. Localhost and preview hosts keep a host-only cookie — a Domain attribute for a
+  // suffix that is not theirs would be rejected and the choice lost entirely.
+  const host = window.location.hostname;
+  const domain =
+    host === "loumapay.com" || host.endsWith(".loumapay.com") ? "; domain=.loumapay.com" : "";
+  document.cookie = `${LANGUAGE_COOKIE}=${code}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax${secure}${domain}`;
 }
 
 /**

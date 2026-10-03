@@ -41,7 +41,7 @@ export function CustomAddressPage() {
   return (
     <>
       <PageHeader title={t("title")} subtitle={t("description")} />
-      <section className="max-w-2xl rounded-[22px] border bg-card p-5 shadow-sm">
+      <section className="card-enter max-w-2xl rounded-[22px] border bg-card p-5 shadow-sm">
         <p className="text-sm text-muted-foreground">{t("current")}</p>
         <div className="mt-2 flex items-center gap-2 rounded-xl bg-secondary p-3">
           <code className="min-w-0 flex-1 break-all">{wallet?.address}</code>

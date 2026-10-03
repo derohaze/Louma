@@ -5,7 +5,8 @@ import { securityCenter } from "@/shared/lib/security";
 import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/security/")({
-  head: () => pageHead(securityCenter.titleKey, securityCenter.descriptionKey),
+  head: ({ match }) =>
+    pageHead(securityCenter.titleKey, securityCenter.descriptionKey, match.context.language),
   component: () => (
     <WalletPage titleKey={securityCenter.titleKey}>
       <SecurityCenterContent />

@@ -420,7 +420,9 @@ export async function createTransfer(input: {
           maybeAbort({ abortSignal: input.abortSignal, point: "after_ledger_insert" });
           // Both sides are told inside the same transaction: a transfer that rolls back notifies
           // nobody, and a replayed one returns above without writing a second notice. Addresses are
-          // the canonical ones the transaction shows, not what the sender typed.
+          // the canonical ones the transaction shows, not what the sender typed. `data` repeats the
+          // money facts as structured params so clients can render the notice in any language;
+          // title/body stay the English rendering as the fallback.
           await input.collections.notifications.insertMany(
             [
               {
@@ -429,6 +431,7 @@ export async function createTransfer(input: {
                 kind: "transfer_sent",
                 title: "Transfer sent",
                 body: `You sent ${formatMoney(amounts.amountMinor)} LMA to ${transaction.receiverAddress}. Fee ${formatMoney(amounts.feeMinor)} LMA.`,
+                data: { direction: "sent", amountMinor: amounts.amountMinor, feeMinor: amounts.feeMinor, counterpartyAddress: transaction.receiverAddress },
                 readAt: null,
                 createdAt: now,
               },
@@ -438,6 +441,7 @@ export async function createTransfer(input: {
                 kind: "transfer_received",
                 title: "Transfer received",
                 body: `You received ${formatMoney(amounts.netAmountMinor)} LMA from ${transaction.senderAddress}.`,
+                data: { direction: "received", amountMinor: amounts.netAmountMinor, feeMinor: 0, counterpartyAddress: transaction.senderAddress },
                 readAt: null,
                 createdAt: now,
               },

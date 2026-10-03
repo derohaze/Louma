@@ -25,7 +25,13 @@ export function LanguageMenu() {
         <Icon icon={LanguageSkillIcon} />
         {t("menu.language")}
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="min-w-44 rounded-[16px] p-1.5">
+      <DropdownMenuSubContent
+        sideOffset={8}
+        alignOffset={-4}
+        avoidCollisions
+        collisionPadding={12}
+        className="min-w-44 max-w-[calc(100vw-3rem)] rounded-[16px] p-1.5"
+      >
         <DropdownMenuRadioGroup
           value={language}
           onValueChange={(code) => setLanguage(code as LanguageCode)}

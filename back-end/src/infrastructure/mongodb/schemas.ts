@@ -198,8 +198,10 @@ export const schemas: Record<string, Document> = {
   },
   notifications: {
     // Titles and bodies are server-rendered one-liners (amounts, addresses); the bounds keep a
-    // notification a notice, never a payload sink. New kinds must fit inside them.
-    $jsonSchema: { bsonType: "object", required: ["ownerUserId", "kind", "title", "body", "readAt", "createdAt"], properties: { ownerUserId: { bsonType: "string" }, kind: { bsonType: "string", maxLength: 64 }, title: { bsonType: "string", maxLength: 120 }, body: { bsonType: "string", maxLength: 1000 }, readAt: { bsonType: ["date", "null"] }, createdAt: { bsonType: "date" } } },
+    // notification a notice, never a payload sink. New kinds must fit inside them. `data` carries
+    // the same money facts as structured params so clients can render transfer notices in the
+    // reader's language; title/body stay the English fallback for old rows and param-less kinds.
+    $jsonSchema: { bsonType: "object", required: ["ownerUserId", "kind", "title", "body", "readAt", "createdAt"], properties: { ownerUserId: { bsonType: "string" }, kind: { bsonType: "string", maxLength: 64 }, title: { bsonType: "string", maxLength: 120 }, body: { bsonType: "string", maxLength: 1000 }, data: { bsonType: "object", required: ["direction", "amountMinor", "feeMinor", "counterpartyAddress"], properties: { direction: { enum: ["sent", "received"] }, amountMinor: { bsonType: "number", minimum: 0 }, feeMinor: { bsonType: "number", minimum: 0 }, counterpartyAddress: { bsonType: "string", maxLength: 128 } } }, readAt: { bsonType: ["date", "null"] }, createdAt: { bsonType: "date" } } },
   },
   mining_sessions: {
     $jsonSchema: {
@@ -214,7 +216,11 @@ export const schemas: Record<string, Document> = {
         cycleNumber: { bsonType: "int", minimum: 1 },
         startedAt: { bsonType: "date" },
         endsAt: { bsonType: "date" },
-        durationSeconds: { bsonType: "int", minimum: 1 },
+        durationSeconds: { bsonType: "int", minimum: 0 },
+        accountWindowStart: { bsonType: ["date", "null"] },
+        deviceQuotaKey: { bsonType: ["string", "null"] },
+        deviceWindowStart: { bsonType: ["date", "null"] },
+        deviceId: { bsonType: ["string", "null"] },
         rateUnits: { bsonType: "number", minimum: 1 },
         rateScale: { bsonType: "number", minimum: 1 },
         rateDecimals: { bsonType: "int", minimum: 0 },

@@ -20,7 +20,7 @@ const clean = (html) =>
     .replace(/<(script|style|svg|template)[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<[^>]+>/g, '\n')
     .replace(/&[a-z]+;|&#\d+;/gi, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/[^\S\n]+/g, ' ')
     .trim();
 
 /** Text chunks with at least two Latin letters — the ones a reader would notice stuck in one language. */

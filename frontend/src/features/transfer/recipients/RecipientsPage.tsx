@@ -7,7 +7,7 @@ import {
   FavouriteIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
-import { Icon, PageHeader } from "@/shared/ui/page";
+import { Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { Input } from "@/shared/ui/input";
 import { useT } from "@/shared/i18n";
 import { useWallet } from "@/shared/hooks";
@@ -59,7 +59,10 @@ export function RecipientsPage() {
     <>
       <PageHeader title={t("title")} subtitle={t("description")} />
       {saved.length > 0 && (
-        <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+        <section
+          style={revealDelay(0)}
+          className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+        >
           <div className="flex items-center gap-2">
             <Icon icon={FavouriteIcon} size={19} className="text-primary-soft" />
             <h2 className="font-display font-semibold">{t("saved")}</h2>
@@ -119,7 +122,10 @@ export function RecipientsPage() {
           </div>
         </section>
       )}
-      <section className="mt-4 rounded-[22px] border bg-card p-5 shadow-sm">
+      <section
+        style={revealDelay(1)}
+        className="card-enter mt-4 rounded-[22px] border bg-card p-5 shadow-sm"
+      >
         <div className="flex items-center gap-2">
           <Icon icon={Clock01Icon} size={19} />
           <h2 className="font-display font-semibold">{t("recent")}</h2>
@@ -127,12 +133,13 @@ export function RecipientsPage() {
         <p className="mt-2 text-xs text-muted-foreground">{t("recentNote")}</p>
         <div className="mt-4">
           {recent.length ? (
-            recent.map((item) => {
+            recent.map((item, row) => {
               const isSaved = savedKeys.has(item.address.toLowerCase());
               return (
                 <div
                   key={item.address}
-                  className="flex flex-wrap items-center gap-3 border-b px-1 py-3 last:border-0"
+                  style={revealDelay(row, 45, 360)}
+                  className="list-enter flex flex-wrap items-center gap-3 border-b px-1 py-3 last:border-0"
                 >
                   <div className="min-w-0 flex-1">
                     <code className="break-all text-sm font-semibold">{item.address}</code>

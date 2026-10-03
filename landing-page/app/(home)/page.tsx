@@ -7,7 +7,7 @@ import { siteConfig } from '@/lib/site';
 import { createMetadata } from '@/lib/metadata';
 import { StructuredData } from '@/components/structured-data';
 import { RichText } from '@/components/rich-text';
-import { createT, getRequestLanguage } from '@/lib/i18n';
+import { createT, getRequestLanguage, listIn } from '@/lib/i18n';
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = createT(await getRequestLanguage(), 'home');
@@ -15,20 +15,12 @@ export async function generateMetadata(): Promise<Metadata> {
   return createMetadata({ title: t('seo.title'), description: t('seo.description'), path: '/' });
 }
 
-const featureList = [
-  'Balance overview',
-  'Receiving addresses',
-  'Custom address with QR code',
-  'Send and receive LMA',
-  'Mining rewards',
-  'Transaction history',
-  'Transaction search',
-  'Security centre',
-  'Profile and settings',
-];
-
 export default async function Page() {
-  const t = createT(await getRequestLanguage(), 'home');
+  const language = await getRequestLanguage();
+  const t = createT(language, 'home');
+  // Machine-readable like everything else in this record: the names come from the dictionary in
+  // the request's language rather than a hard-coded English list.
+  const featureList = listIn(language, 'home.seo.features');
 
   // The structured data is rebuilt per request so its description matches the page it describes.
   const structuredData = {

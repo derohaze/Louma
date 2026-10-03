@@ -14,6 +14,16 @@ export default {
   },
   loadingOlder: "Loading older notices…",
   loadOlder: "Load older notices",
+  transfer: {
+    sent: {
+      title: "Transfer sent",
+      body: "You sent {amount} LMA to {address}. Fee {fee} LMA.",
+    },
+    received: {
+      title: "Transfer received",
+      body: "You received {amount} LMA from {address}.",
+    },
+  },
   bell: {
     ariaUnread: "Notifications, {count} unread",
     viewAll: "View all",

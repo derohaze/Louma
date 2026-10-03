@@ -28,7 +28,7 @@ export function PageHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <h1 className="font-display text-2xl font-semibold">{title}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
@@ -36,6 +36,18 @@ export function PageHeader({
       {action}
     </div>
   );
+}
+
+/**
+ * Staggered entrance delay for dashboard sections and list rows.
+ *
+ * Each step is 75ms and the total is capped at 525ms, so a long list cascades
+ * without keeping the page in motion after the user started reading. Pair with
+ * `card-enter` (sections) or `list-enter` (rows):
+ * `<section style={revealDelay(2)} className="card-enter ...">`.
+ */
+export function revealDelay(index: number, stepMs = 75, capMs = 525): { animationDelay: string } {
+  return { animationDelay: `${Math.min(Math.max(0, index) * stepMs, capMs)}ms` };
 }
 
 export function EmptyState({

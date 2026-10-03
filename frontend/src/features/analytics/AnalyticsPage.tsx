@@ -16,7 +16,7 @@ import {
   BitcoinCpuIcon,
 } from "@hugeicons/core-free-icons";
 import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
-import { currentLocale, useT } from "@/shared/i18n";
+import { currentLocale, useI18n, useT } from "@/shared/i18n";
 import { moneyChartValue, shortAddress, sumMoney } from "@/shared/lib/wallet";
 import {
   accountFetchers,
@@ -147,6 +147,9 @@ type ChartPoint = { label: string; full: string; income: number; expense: number
 
 function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
   const t = useT("analytics");
+  // Read through the hook (not just the module mirror): the axis and tooltip labels are formatted
+  // inside this memo, so the language must be a dependency or they freeze in the previous language.
+  const { language } = useI18n();
   const data = useMemo<ChartPoint[]>(
     () =>
       buckets.map((b) => ({
@@ -159,7 +162,7 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
         expense: Math.round(b.expense * 10_000) / 10_000,
         mined: b.mined,
       })),
-    [buckets],
+    [buckets, language],
   );
   const peak = useMemo(() => Math.max(...buckets.map((b) => b.income + b.expense), 1), [buckets]);
 
@@ -386,7 +389,7 @@ export function AnalyticsContent() {
   return (
     <div className="grid gap-4">
       {/* The chart card: range pills on top, the interactive flow below. */}
-      <section className={`${CARD} p-6`}>
+      <section style={{ animationDelay: "0ms" }} className={`${CARD} p-6`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="font-display text-[22px] font-semibold">{t("flow.title")}</h2>
@@ -483,7 +486,7 @@ export function AnalyticsContent() {
 
       {/* Who moves the money, and where mining lands inside the same window. */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className={`${CARD} overflow-hidden`}>
+        <section style={{ animationDelay: "300ms" }} className={`${CARD} overflow-hidden`}>
           <div className="p-5 pb-2">
             <h2 className="font-display text-[18px] font-semibold">{t("counterparties.title")}</h2>
             <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
@@ -491,10 +494,14 @@ export function AnalyticsContent() {
             </p>
           </div>
           <ul>
-            {topCounterparties.map(([address, entry]) => {
+            {topCounterparties.map(([address, entry], row) => {
               const received = entry.last.direction === "received";
               return (
-                <li key={address} className="border-b last:border-b-0">
+                <li
+                  key={address}
+                  style={{ animationDelay: `${Math.min(row * 60, 240)}ms` }}
+                  className="list-enter border-b last:border-b-0"
+                >
                   <div className="flex items-center gap-3 px-5 py-3.5">
                     <span
                       className={`grid size-9 shrink-0 place-items-center rounded-[12px] ${
@@ -505,7 +512,7 @@ export function AnalyticsContent() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[13px] font-bold">
-                        {entry.last.note || shortAddress(address)}
+                        {shortAddress(address)}
                       </span>
                       <span className="block truncate text-[11px] text-muted-foreground">
                         {received ? t("counterparties.received") : t("counterparties.sent")} ·{" "}
@@ -526,7 +533,7 @@ export function AnalyticsContent() {
             )}
           </ul>
         </section>
-        <section className={`${CARD} flex flex-col p-5`}>
+        <section style={{ animationDelay: "375ms" }} className={`${CARD} flex flex-col p-5`}>
           <h2 className="font-display text-[18px] font-semibold">{t("mining.title")}</h2>
           <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
             {t("mining.subtitle", { days: range.days })}

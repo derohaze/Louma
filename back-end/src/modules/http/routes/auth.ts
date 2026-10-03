@@ -13,6 +13,7 @@ import {
 } from "../schemas.js";
 import {
   authenticated,
+  clientIp,
   csrfProtected,
   clearRefreshCookie,
   getAuth,
@@ -49,10 +50,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const body = parseBody(registerSchema, request.body);
-      // `request.ip` is the socket address, or the forwarded one when TRUST_PROXY is on. It is stored
-      // with the account immediately and enriched afterwards, because a lookup service is not part of
-      // registering: it may only add fields, and never delay or fail the request.
-      const ipAddress = request.ip.slice(0, 45);
+      // The real client IP (see clientIp): the socket address here is a shared edge/proxy address.
+      // It is stored with the account immediately and enriched afterwards, because a lookup service
+      // is not part of registering: it may only add fields, and never delay or fail the request.
+      const ipAddress = clientIp(request).slice(0, 45);
       const session = await auth.register({
         collections: app.collections,
         mongoClient: app.mongoClient,
@@ -101,7 +102,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const body = parseBody(loginSchema, request.body);
       // Distributed login throttle per IP, fail-open: a Redis outage never locks real users out.
-      const loginOk = await enforceRateLimit({ app, reply, scope: "login", identity: request.ip, limit: app.config.redis.loginMaxPerMinute, requestId: request.id });
+      const loginOk = await enforceRateLimit({ app, reply, scope: "login", identity: clientIp(request), limit: app.config.redis.loginMaxPerMinute, requestId: request.id });
       if (!loginOk) return reply;
       const session = await auth.login({
         collections: app.collections,

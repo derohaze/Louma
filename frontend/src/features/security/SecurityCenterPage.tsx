@@ -23,7 +23,7 @@ import {
 import { securityCenter, securityControls, securityFeatures } from "@/shared/lib/security";
 import { dateText } from "@/shared/lib/wallet";
 import { useT, useTranslate } from "@/shared/i18n";
-import { Icon, PageHeader } from "@/shared/ui/page";
+import { Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { Panel, StatusPill } from "@/shared/ui/panels";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
@@ -81,7 +81,10 @@ export function SecurityCenterContent() {
         </div>
       )}
       <div className="grid gap-4 xl:grid-cols-[1fr_1.3fr]">
-        <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+        <section
+          style={revealDelay(0)}
+          className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+        >
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Icon icon={ShieldEnergyIcon} size={18} className="text-muted-foreground" />
             {t("score.title")}
@@ -100,6 +103,7 @@ export function SecurityCenterContent() {
           </p>
         </section>
         <Panel
+          delayMs={75}
           title={t("devices.title")}
           description={state(sessions === 1 ? "sessions.one" : "sessions.other", {
             count: sessions,
@@ -118,17 +122,21 @@ export function SecurityCenterContent() {
           </div>
         </Panel>
       </div>
-      <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
+      <section
+        style={revealDelay(2)}
+        className="card-enter mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm"
+      >
         <div className="border-b px-5 py-4">
           <h2 className="font-display font-semibold">{t("protections.title")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{t("protections.description")}</p>
         </div>
-        {securityFeatures.map((feature) => {
+        {securityFeatures.map((feature, row) => {
           const enabled = score.enabled[feature.id];
           return (
             <div
               key={feature.id}
-              className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
+              style={revealDelay(row, 45, 270)}
+              className="list-enter flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
             >
               <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
                 <Icon icon={feature.icon} size={19} />
@@ -154,7 +162,10 @@ export function SecurityCenterContent() {
           );
         })}
       </section>
-      <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
+      <section
+        style={revealDelay(3)}
+        className="card-enter mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm"
+      >
         <div className="border-b px-5 py-4">
           <h2 className="font-display font-semibold">{t("controls.title")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{t("controls.description")}</p>
@@ -187,6 +198,8 @@ export function SecurityCenterContent() {
       {/* The alerts below are a copy of the API's answer with a freshness window on it, so a refresh
           that fails leaves the previous copy on screen and the failure has to be said out loud. */}
       <Panel
+        delayMs={300}
+        className="mt-4"
         title={t("alerts.title")}
         description={t("alerts.description")}
         bodyClassName="p-0"

@@ -25,15 +25,13 @@ export default {
       id: 'accounts',
       title: 'Accounts & Access',
       body: [
-        { p: 'You must provide accurate registration information and keep it up to date.' },
         {
-          p: 'You are responsible for safeguarding your credentials and API tokens, and for all activity that happens under your account.',
-        },
-        {
-          p: 'Account holders control access to their account; actions taken while signed in are the account holder’s responsibility.',
-        },
-        {
-          p: 'You must be at least 18 years old, or the age of legal majority in your jurisdiction, to use the Service.',
+          ul: [
+            'You must provide accurate registration information and keep it up to date.',
+            'You are responsible for safeguarding your credentials and API tokens, and for all activity that happens under your account.',
+            'Account holders control access to their account; actions taken while signed in are the account holder’s responsibility.',
+            'You must be at least 18 years old, or the age of legal majority in your jurisdiction, to use the Service.',
+          ],
         },
       ],
     },
@@ -83,15 +81,13 @@ export default {
       title: 'Plans, Billing & Renewal',
       body: [
         {
-          p: 'Paid plans are billed in advance on a recurring basis (monthly or annually) and renew automatically until cancelled.',
+          ul: [
+            'Paid plans are billed in advance on a recurring basis (monthly or annually) and renew automatically until cancelled.',
+            'You can cancel at any time from the wallet; cancellation takes effect at the end of the current billing period.',
+            'Fees are non-refundable except where required by law or stated otherwise in a written agreement.',
+            'We may change pricing with at least 30 days’ notice; changes apply from your next billing cycle.',
+          ],
         },
-        {
-          p: 'You can cancel at any time from the wallet; cancellation takes effect at the end of the current billing period.',
-        },
-        {
-          p: 'Fees are non-refundable except where required by law or stated otherwise in a written agreement.',
-        },
-        { p: 'We may change pricing with at least 30 days’ notice; changes apply from your next billing cycle.' },
       ],
     },
     {

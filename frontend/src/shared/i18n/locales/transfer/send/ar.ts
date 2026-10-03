@@ -29,8 +29,6 @@ const ar: Strings<typeof en> = {
     tax: "ضريبة الشبكة (1%): {amount}",
     leaves: "يخرج {sent} من محفظتك ويصل {received} إلى المستلم.",
     noFunds: "لا توجد أموال متاحة. شارك عنوان الاستلام لاستلام LMA أولًا.",
-    noteLabel: "ملاحظة (اختياري)",
-    notePlaceholder: "ما سبب هذا التحويل؟",
     checking: "جارٍ التحقق من السجل…",
   },
   confirm: {
@@ -39,7 +37,6 @@ const ar: Strings<typeof en> = {
     amount: "المبلغ (LMA)",
     receives: "يستلم المستلم",
     balanceAfter: "الرصيد بعد التحويل",
-    note: "ملاحظة",
     paying:
       "الدفع لمحفظة يملكها {name}. تحقق من جانبي العنوان قبل الإرسال: لا يمكن التراجع عن التحويل.",
     authenticatorCode: "رمز المصادقة",

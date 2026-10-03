@@ -3,7 +3,12 @@ import { WalletPage } from "@/app/shell";
 import { RecipientsPage } from "@/features/transfer";
 import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/transfer/recipients")({
-  head: () => pageHead("transfer.recipients.title", "transfer.recipients.description"),
+  head: ({ match }) =>
+    pageHead(
+      "transfer.recipients.title",
+      "transfer.recipients.description",
+      match.context.language,
+    ),
   component: () => (
     <WalletPage titleKey="transfer.recipients.title">
       <RecipientsPage />

@@ -45,7 +45,10 @@ reaches the collection by hand, reads warn and keep the default.
 
 ## Deliberately NOT in the collection
 
-- **Cycle length (24h)** and **one active cycle per account**: code invariants
-  enforced by the ledger math, the unique index, and the test suite — moving
-  them would risk strandable cycles, not add control.
+- **Quota window (24h), daily quota (10h)** and **one active segment per
+  account / one active lease per device**: code invariants enforced by the
+  ledger math, the unique indexes, and the test suite — moving them would risk
+  strandable segments, not add control. See `src/modules/mining/quota.ts`:
+  10h of actual mining per anchored 24h window, per account and per shared
+  device identity, with stop/resume that never moves the anchors.
 - **Device-guard (LMDG) thresholds**: security policy, stays in env.

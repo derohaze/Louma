@@ -65,13 +65,18 @@ export function TransferPasswordPage() {
       />
       <div className="space-y-4">
         <Panel
+          delayMs={0}
           title={t(enabled ? "set.title" : "unset.title")}
           description={translate(feature.descriptionKey)}
           action={<StatusPill enabled={enabled} />}
         >
           <p className="text-sm text-muted-foreground">{t(enabled ? "set.body" : "unset.body")}</p>
         </Panel>
-        <Panel title={t(enabled ? "set.action" : "unset.action")} description={t("description")}>
+        <Panel
+          delayMs={75}
+          title={t(enabled ? "set.action" : "unset.action")}
+          description={t("description")}
+        >
           <form onSubmit={(event) => void submit(event)} className="max-w-xl space-y-4">
             {enabled && (
               <label className="block text-sm font-semibold">
@@ -125,7 +130,7 @@ export function TransferPasswordPage() {
             {message && <FormMessage tone="ok">{message}</FormMessage>}
           </form>
         </Panel>
-        <Panel title={t("rules.title")} description={t("rules.description")}>
+        <Panel delayMs={150} title={t("rules.title")} description={t("rules.description")}>
           <FactList
             items={[
               [t("rules.everyTransfer"), t(enabled ? "rules.required" : "rules.notRequired")],

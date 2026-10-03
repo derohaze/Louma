@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import * as deviceGuard from "../../mining-device/service.js";
-import { authenticated, getAuth, parseBody } from "../http-helpers.js";
+import { authenticated, clientIp, getAuth, parseBody } from "../http-helpers.js";
 
 export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -84,7 +84,7 @@ export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<
         binding,
         // The proof credits the network context it was actually answered from, so a verified handshake
         // counts as activity on the network it happened on (never on one it was only claimed for).
-        ip: request.ip ?? null,
+        ip: clientIp(request) ?? null,
         origin: origin ?? null,
         correlationId: request.id,
       });

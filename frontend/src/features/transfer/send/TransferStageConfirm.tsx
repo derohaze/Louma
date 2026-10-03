@@ -22,7 +22,6 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
     recipient,
     quote,
     verifiedAddress,
-    note,
     needsCredential,
     usingCode,
     passwordSet,
@@ -47,7 +46,6 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
           [t("confirm.amount"), currency(quote.amount)],
           [t("confirm.receives"), currency(quote.netAmount)],
           [t("confirm.balanceAfter"), currency(quote.balanceAfter)],
-          ...(note.trim() ? ([[t("confirm.note"), note.trim()]] as [string, string][]) : []),
         ].map(([label, value]) => (
           <div
             key={label}

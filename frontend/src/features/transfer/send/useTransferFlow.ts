@@ -26,7 +26,6 @@ export function useTransferFlow() {
   // A "Send" action from the address book stashes the recipient here; it is
   // consumed once so a later visit starts empty again.
   const [address, setAddress] = useState(() => consumeTransferPrefill());
-  const [note, setNote] = useState("");
   /** Bumped when the address book changes, so the shortcut chips re-read it. */
   const [bookTick, setBookTick] = useState(0);
   const [recipient, setRecipient] = useState<ApiTransferPreview["recipient"] | null>(null);
@@ -48,9 +47,9 @@ export function useTransferFlow() {
    * original transfer instead of moving funds twice. Only a confirmed transfer ends the attempt.
    */
   const attempt = useRef<{ key: string; fingerprint: string } | null>(null);
-  /** Mirrors the backend's fingerprint: recipient, amounts, and note make two attempts the same one. */
-  const attemptFingerprint = (target: string, amountValue: string, noteValue: string) =>
-    JSON.stringify([target.trim().toLowerCase(), amountValue, noteValue]);
+  /** Mirrors the backend's fingerprint: recipient and amounts make two attempts the same one. */
+  const attemptFingerprint = (target: string, amountValue: string) =>
+    JSON.stringify([target.trim().toLowerCase(), amountValue]);
   const frozen = security?.wallet.status === "frozen";
   const passwordSet = security?.transferPassword.enabled ?? false;
   const authenticatorSet = security?.twoFactor.enabled ?? false;
@@ -83,7 +82,6 @@ export function useTransferFlow() {
   const startOver = () => {
     setStage(1);
     setAddress("");
-    setNote("");
     setRecipient(null);
     setQuote(null);
     setAuthorization(null);
@@ -138,7 +136,7 @@ export function useTransferFlow() {
     try {
       const { preview } = await api.post<{ preview: ApiTransferPreview }>(
         "/api/v1/transfers/preview",
-        { recipientAddress: verifiedAddress, amount: amountCheck.value, note },
+        { recipientAddress: verifiedAddress, amount: amountCheck.value },
       );
       if (!preview.quote || !preview.authorization) {
         throw new Error(translate("transfer.send.errors.quoteFailed"));
@@ -206,10 +204,10 @@ export function useTransferFlow() {
     }
     setBusy("send");
     try {
-      // The note is part of the fingerprint (as on the server): after an ambiguous send,
-      // editing only the note mints a fresh idempotency key instead of reusing the old one
+      // The fingerprint names the attempt (as on the server): after an ambiguous send,
+      // a changed intent mints a fresh idempotency key instead of reusing the old one
       // and being rejected as `idempotency_key_reused`.
-      const fingerprint = attemptFingerprint(verifiedAddress, quote.amount, note);
+      const fingerprint = attemptFingerprint(verifiedAddress, quote.amount);
       const pending =
         attempt.current?.fingerprint === fingerprint
           ? attempt.current
@@ -221,7 +219,6 @@ export function useTransferFlow() {
           authorizationId: authorization.id,
           recipientAddress: verifiedAddress,
           amount: quote.amount,
-          note,
           ...(usingCode
             ? { twoFactorCode: proof }
             : passwordSet && proof
@@ -278,8 +275,6 @@ export function useTransferFlow() {
     stage,
     setStage,
     address,
-    note,
-    setNote,
     setBookTick,
     recipient,
     quote,

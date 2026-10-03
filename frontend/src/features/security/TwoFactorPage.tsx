@@ -136,6 +136,7 @@ export function TwoFactorPage() {
       />
       <div className="space-y-4">
         <Panel
+          delayMs={0}
           title={t(enabled ? "on.title" : "off.title")}
           description={translate(feature.descriptionKey)}
           action={
@@ -281,7 +282,7 @@ export function TwoFactorPage() {
           )}
         </Panel>
         {codes.length > 0 && (
-          <Panel title={t("recovery.title")} description={t("recovery.description")}>
+          <Panel delayMs={75} title={t("recovery.title")} description={t("recovery.description")}>
             <div className="grid gap-2 sm:grid-cols-4">
               {codes.map((code) => (
                 <code
@@ -300,7 +301,11 @@ export function TwoFactorPage() {
         )}
         {enabled && (
           <>
-            <Panel title={t("regenerate.title")} description={t("regenerate.description")}>
+            <Panel
+              delayMs={150}
+              title={t("regenerate.title")}
+              description={t("regenerate.description")}
+            >
               <div className="max-w-xs space-y-4">
                 <label className="block text-sm font-semibold">
                   {t("fields.password")}

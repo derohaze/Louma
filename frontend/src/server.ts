@@ -36,6 +36,38 @@ function backendBaseUrl(): string {
   return (trimmed || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
 }
 
+/**
+ * Stamps the real client IP for the API to count and store.
+ *
+ * By the time a request reaches the API, its socket address is a shared Cloudflare/Vercel address,
+ * so the backend cannot tell users apart by IP (login throttle, stored signup IP). The connecting
+ * address this server saw is stamped into a header the backend only believes alongside the shared
+ * secret (`PROXY_SHARED_SECRET`, set on both sides; without it nothing is stamped). Cloudflare
+ * appends the true client address to `X-Forwarded-For`, so the LAST entry is the one no client
+ * could have planted — anything before it may be spoofed. `set` overwrites any planted stamp or
+ * secret on the way through rather than appending to it.
+ */
+const PROXY_CLIENT_IP_HEADER = "x-louma-client-ip";
+const PROXY_SECRET_HEADER = "x-louma-proxy-secret";
+const IP_LITERAL = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:.]{2,45})$/;
+
+function stampClientIp(request: Request, headers: Headers): void {
+  const secret = process.env["PROXY_SHARED_SECRET"]?.trim();
+  if (!secret) return;
+  const forwarded = request.headers.get("x-forwarded-for");
+  const last = forwarded
+    ?.split(",")
+    .map((part) => part.trim().replace(/^\[|\]$/g, ""))
+    .filter(Boolean)
+    .pop();
+  const fromForwarded = last && IP_LITERAL.test(last) ? last : null;
+  const fromCfDirect = request.headers.get("cf-connecting-ip")?.trim().replace(/^\[|\]$/g, "");
+  const candidate = fromForwarded ?? (fromCfDirect && IP_LITERAL.test(fromCfDirect) ? fromCfDirect : null);
+  if (!candidate) return;
+  headers.set(PROXY_CLIENT_IP_HEADER, candidate);
+  headers.set(PROXY_SECRET_HEADER, secret);
+}
+
 async function proxyApiRequest(request: Request, backend: string): Promise<Response> {
   const incoming = new URL(request.url);
   const target = new URL(`${incoming.pathname}${incoming.search}`, backend);
@@ -44,6 +76,7 @@ async function proxyApiRequest(request: Request, backend: string): Promise<Respo
   // backend itself, and forwarding the originals would make the backend see the wrong host.
   headers.delete("host");
   headers.delete("content-length");
+  stampClientIp(request, headers);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const response = await fetch(target, {
     method: request.method,

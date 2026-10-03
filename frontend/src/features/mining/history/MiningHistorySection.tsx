@@ -68,7 +68,7 @@ export function MiningHistorySection() {
     : 0;
 
   return (
-    <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
+    <section className="card-enter mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
       <div className="border-b px-5 py-4">
         <h2 className="font-display text-base font-semibold">{t("heading")}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{t("headingNote")}</p>
@@ -91,10 +91,11 @@ export function MiningHistorySection() {
               </div>
             ))}
           </div>
-          {sessions.map((item) => (
+          {sessions.map((item, row) => (
             <div
               key={item.id}
-              className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
+              style={{ animationDelay: `${Math.min(row * 45, 360)}ms` }}
+              className="list-enter flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
             >
               <span
                 className={cn(

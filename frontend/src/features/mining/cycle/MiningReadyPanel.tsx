@@ -4,6 +4,7 @@ import { Button } from "@/shared/ui/button";
 import { Icon } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { FactList, Panel } from "@/shared/ui/panels";
+import { revealDelay } from "@/shared/ui/page";
 import { MiningOrb } from "@/features/mining/live/MiningOrb";
 import type { MiningCycle } from "@/features/mining/cycle/useMiningCycle";
 
@@ -13,7 +14,10 @@ export function MiningReadyPanel({ cycle }: { cycle: MiningCycle }) {
   const { poolRequired, isChecking, isDeviceBlocked, error } = cycle;
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      <section className="overflow-hidden rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2">
+      <section
+        style={revealDelay(0)}
+        className="card-enter overflow-hidden rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2"
+      >
         {poolRequired ? (
           <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
             <div>
@@ -84,15 +88,17 @@ export function MiningReadyPanel({ cycle }: { cycle: MiningCycle }) {
           </div>
         )}
       </section>
-      <MiningInfoCard />
+      <div style={revealDelay(1)} className="card-enter">
+        <MiningInfoCard />
+      </div>
     </div>
   );
 }
 
-export function MiningInfoCard() {
+export function MiningInfoCard({ delayMs }: { delayMs?: number } = {}) {
   const t = useT("mining.cycle");
   return (
-    <Panel title={t("info.title")} description={t("info.description")}>
+    <Panel title={t("info.title")} description={t("info.description")} delayMs={delayMs}>
       <FactList
         items={[
           [t("info.cycleLength"), t("info.cycleLengthValue")],

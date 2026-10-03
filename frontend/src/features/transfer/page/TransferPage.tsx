@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Key01Icon, SquareLock02Icon } from "@hugeicons/core-free-icons";
-import { Icon, PageHeader } from "@/shared/ui/page";
+import { Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { currency } from "@/shared/lib/wallet";
 import { SendStepper } from "@/features/transfer/send/TransferQrScanner";
@@ -18,7 +18,11 @@ export function TransferPage() {
   return (
     <>
       <PageHeader title={t("title")} subtitle={t("description")} />
-      {!sent && <SendStepper stage={stage} />}
+      {!sent && (
+        <div className="page-enter">
+          <SendStepper stage={stage} />
+        </div>
+      )}
       {frozen && !sent && (
         <p
           role="status"
@@ -32,23 +36,35 @@ export function TransferPage() {
         </p>
       )}
       {sent ? (
-        <TransferReceipt flow={flow} />
+        <div key="receipt" className="stage-enter">
+          <TransferReceipt flow={flow} />
+        </div>
       ) : (
         <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
-          <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+          <section
+            key={stage}
+            style={revealDelay(0)}
+            className="stage-enter rounded-[22px] border bg-card p-5 shadow-sm"
+          >
             {stage === 1 && <TransferStageAddress flow={flow} />}
             {stage === 2 && <TransferStageAmount flow={flow} />}
             {stage === 3 && <TransferStageConfirm flow={flow} />}
           </section>
           <aside className="h-fit space-y-4">
-            <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+            <section
+              style={revealDelay(1)}
+              className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+            >
               <p className="text-sm text-muted-foreground">{t("availableBalance")}</p>
               <p className="mt-3 font-display text-2xl font-bold">
                 {currency(wallet?.balance ?? "0")}
               </p>
               <p className="mt-5 text-sm text-muted-foreground">{t("taxNote")}</p>
             </section>
-            <section className="rounded-[22px] border bg-card p-5 shadow-sm">
+            <section
+              style={revealDelay(2)}
+              className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+            >
               <div className="flex items-center gap-2 text-sm font-semibold">
                 <Icon icon={needsCredential ? Key01Icon : SquareLock02Icon} size={18} />
                 {needsCredential ? t("credential.required") : t("credential.none")}

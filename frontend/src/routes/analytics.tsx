@@ -4,7 +4,7 @@ import { AnalyticsContent } from "@/features/analytics";
 import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/analytics")({
-  head: () => pageHead("analytics.title", "analytics.description"),
+  head: ({ match }) => pageHead("analytics.title", "analytics.description", match.context.language),
   component: () => (
     <WalletPage titleKey="analytics.title">
       <AnalyticsContent />
