@@ -1,10 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "tanstack-start",
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "https://api.loumapay.com/api/$1"
-    }
-  ]
+  "framework": "tanstack-start"
 }

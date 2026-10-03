@@ -10,6 +10,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { useT } from "@/shared/i18n";
 import { useWallet } from "@/shared/hooks";
 import { parseAmount } from "@/shared/lib/platform";
 import { displayNote, loadLocalNote } from "@/shared/lib/wallet";
@@ -18,6 +19,7 @@ import { currency, dateText, moneyToMinorUnits, sumMoney } from "@/shared/lib/wa
 
 /** The Transactions page: searchable, filterable history with CSV export. */
 export function TransactionsPage() {
+  const t = useT("transactions.list");
   const { transactions, nextCursor, loadMore, userId } = useWallet();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "sent" | "received">("all");
@@ -77,8 +79,8 @@ export function TransactionsPage() {
   return (
     <>
       <PageHeader
-        title="Transactions"
-        subtitle="Search and filter your transactions."
+        title={t("title")}
+        subtitle={t("description")}
         action={
           <Button
             variant="outline"
@@ -91,14 +93,14 @@ export function TransactionsPage() {
             }
           >
             <Icon icon={Download01Icon} size={17} />
-            Export shown ({filtered.length})
+            {t("exportShown", { count: filtered.length })}
           </Button>
         }
       />
       <div className="mb-5 flex flex-col gap-3 sm:flex-row">
         <Input
-          aria-label="Search transactions"
-          placeholder="Search address, note, or transfer ID"
+          aria-label={t("searchAria")}
+          placeholder={t("searchPlaceholder")}
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -117,7 +119,7 @@ export function TransactionsPage() {
               }}
               className={`h-8 rounded-full px-4 text-xs font-semibold ${filter === item ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}
             >
-              {item.charAt(0).toUpperCase() + item.slice(1)}
+              {t(`filters.${item}`)}
             </Button>
           ))}
         </div>
@@ -128,7 +130,7 @@ export function TransactionsPage() {
           aria-expanded={advancedOpen}
         >
           <Icon icon={FilterIcon} size={16} />
-          Advanced{hasAdvanced ? " · on" : ""}
+          {hasAdvanced ? t("advanced.on") : t("advanced.label")}
         </Button>
       </div>
       {advancedOpen && (
@@ -136,7 +138,7 @@ export function TransactionsPage() {
           <label className="block text-xs font-semibold">
             <span className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
               <Icon icon={Calendar01Icon} size={15} />
-              From date
+              {t("fields.fromDate")}
             </span>
             <Input
               type="date"
@@ -151,7 +153,7 @@ export function TransactionsPage() {
           <label className="block text-xs font-semibold">
             <span className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
               <Icon icon={Calendar01Icon} size={15} />
-              To date
+              {t("fields.toDate")}
             </span>
             <Input
               type="date"
@@ -164,7 +166,7 @@ export function TransactionsPage() {
             />
           </label>
           <label className="block text-xs font-semibold">
-            <span className="mb-1.5 block text-muted-foreground">Min amount (LMA)</span>
+            <span className="mb-1.5 block text-muted-foreground">{t("fields.minAmount")}</span>
             <Input
               inputMode="decimal"
               placeholder="0.0000"
@@ -177,7 +179,7 @@ export function TransactionsPage() {
             />
           </label>
           <label className="block text-xs font-semibold">
-            <span className="mb-1.5 block text-muted-foreground">Max amount (LMA)</span>
+            <span className="mb-1.5 block text-muted-foreground">{t("fields.maxAmount")}</span>
             <Input
               inputMode="decimal"
               placeholder="0.0000"
@@ -192,17 +194,17 @@ export function TransactionsPage() {
           {(minAmount.trim() && minCheck && !minCheck.ok) ||
           (maxAmount.trim() && maxCheck && !maxCheck.ok) ? (
             <p className="text-xs text-destructive sm:col-span-2 lg:col-span-4">
-              Amounts must be positive numbers with up to four decimals.
+              {t("amountsError")}
             </p>
           ) : null}
         </div>
       )}
       <div className="mb-4 grid gap-4 sm:grid-cols-4">
         {[
-          ["Loaded transactions", String(transactions.length)],
-          ["Sent", String(sent.length)],
-          ["Received", String(transactions.length - sent.length)],
-          ["Network tax paid", currency(sumMoney(sent.map((item) => item.fee)))],
+          [t("stats.loaded"), String(transactions.length)],
+          [t("stats.sent"), String(sent.length)],
+          [t("stats.received"), String(transactions.length - sent.length)],
+          [t("stats.tax"), currency(sumMoney(sent.map((item) => item.fee)))],
         ].map(([label, value]) => (
           <div key={label} className="rounded-2xl border bg-card p-4 shadow-sm">
             <p className="text-sm text-muted-foreground">{label}</p>
@@ -212,7 +214,7 @@ export function TransactionsPage() {
       </div>
       <section className="overflow-hidden rounded-[22px] border bg-card shadow-sm">
         <div className="border-b px-5 py-4 font-display font-semibold">
-          Transactions · {filtered.length} shown
+          {t("listHeading", { count: filtered.length })}
         </div>
         {shown.length ? (
           shown.map((transaction) => {
@@ -257,20 +259,16 @@ export function TransactionsPage() {
           })
         ) : (
           <EmptyState
-            title={transactions.length ? "No matching transactions" : "No transactions yet"}
-            detail={
-              transactions.length
-                ? "Try another search or filter."
-                : "Send or receive LMA to see your transactions here."
-            }
+            title={transactions.length ? t("empty.noMatchTitle") : t("empty.noneTitle")}
+            detail={transactions.length ? t("empty.noMatchDetail") : t("empty.noneDetail")}
             action={
               transactions.length ? (
                 <Button variant="outline" onClick={clearFilters}>
-                  Clear filters
+                  {t("empty.clear")}
                 </Button>
               ) : (
                 <Link to="/transfer">
-                  <Button>Transfer</Button>
+                  <Button>{t("empty.transfer")}</Button>
                 </Link>
               )
             }
@@ -278,7 +276,7 @@ export function TransactionsPage() {
         )}
       </section>
       {(nextCursor || pages > 1) && (
-        <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           {nextCursor && (
             <Button
               variant="outline"
@@ -288,19 +286,19 @@ export function TransactionsPage() {
                 void loadMore().finally(() => setLoadingMore(false));
               }}
             >
-              {loadingMore ? "Loading…" : "Load older transactions"}
+              {loadingMore ? t("loading") : t("loadOlder")}
             </Button>
           )}
           {pages > 1 && (
             <div className="flex items-center gap-3">
               <Button variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                Previous
+                {t("previous")}
               </Button>
               <span className="text-sm">
                 {page} / {pages}
               </span>
               <Button variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
-                Next
+                {t("next")}
               </Button>
             </div>
           )}

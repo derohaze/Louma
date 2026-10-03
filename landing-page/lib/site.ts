@@ -1,4 +1,6 @@
-export const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://louma.com').replace(/\/$/, '');
+export const siteUrl = (
+  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://loumapay.com'
+).replace(/\/$/, '');
 
 export const siteConfig = {
   name: 'Louma',
@@ -6,7 +8,9 @@ export const siteConfig = {
   title: 'Louma | Digital wallet for LMA',
   description:
     'Louma is a digital wallet for holding, sending, and receiving LMA — with mining rewards, a full transaction history, custom receiving addresses, and a built-in security centre.',
-  socialImage: '/banner.png',
+  socialImage: '/cover.jpg',
+  socialImageWidth: 1200,
+  socialImageHeight: 797,
   keywords: [
     'digital wallet',
     'LMA wallet',

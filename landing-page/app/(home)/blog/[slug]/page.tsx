@@ -10,6 +10,7 @@ import { ShareButton } from '@/app/(home)/blog/[slug]/page.client';
 import { cn } from '@/lib/cn';
 import { siteConfig } from '@/lib/site';
 import { StructuredData } from '@/components/structured-data';
+import { createT, getRequestLanguage, languageLocale } from '@/lib/i18n';
 
 function sanitizeMarkdown(content: string): string {
   return content
@@ -201,6 +202,10 @@ export default async function Page(props: { params: Promise<{ slug: string }> })
 
   if (!page) notFound();
 
+  const language = await getRequestLanguage();
+  const t = createT(language, 'blog');
+  const common = createT(language, 'common');
+
   const description = page.data.description ?? 'Wallet notes from Louma';
   const author = page.data.author ?? siteConfig.name;
   const structuredData = {
@@ -253,18 +258,18 @@ export default async function Page(props: { params: Promise<{ slug: string }> })
         )}
       >
         <ArrowLeft className="size-4" />
-        Back to Blog
+        {common('blog.backToBlog')}
       </Link>
 
       <h1 className="text-3xl font-semibold mb-4">{page.data.title}</h1>
       <p className="text-fd-muted-foreground">{description}</p>
       <p className="mt-3 mb-8 text-sm text-fd-muted-foreground">
-        By {author}
+        {t('by', { author })}
         {page.data.date && (
           <>
             {' · '}
             <time dateTime={page.data.date}>
-              {new Date(page.data.date).toLocaleDateString('en', {
+              {new Date(page.data.date).toLocaleDateString(languageLocale(language), {
                 year: 'numeric',
                 month: 'long',
                 day: 'numeric',

@@ -7,6 +7,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { Icon } from "@/shared/ui/page";
 import { normalizeTransferTarget } from "@/shared/lib/platform";
+import { useT } from "@/shared/i18n";
 import { cn } from "@/shared/lib/platform";
 
 /**
@@ -15,12 +16,13 @@ import { cn } from "@/shared/lib/platform";
  * amount the ledger refuses never reaches the confirmation.
  */
 const sendSteps = [
-  { id: 1, label: "Address" },
-  { id: 2, label: "Amount" },
-  { id: 3, label: "Confirm" },
+  { id: 1, labelKey: "steps.address" },
+  { id: 2, labelKey: "steps.amount" },
+  { id: 3, labelKey: "steps.confirm" },
 ] as const;
 
 export function SendStepper({ stage }: { stage: 1 | 2 | 3 }) {
+  const t = useT("transfer.send");
   return (
     <ol className="mb-5 flex items-center gap-3">
       {sendSteps.map((step, index) => {
@@ -47,7 +49,7 @@ export function SendStepper({ stage }: { stage: 1 | 2 | 3 }) {
                 current ? "text-foreground" : "text-muted-foreground",
               )}
             >
-              {step.label}
+              {t(step.labelKey)}
             </span>
             {index < sendSteps.length - 1 && <span aria-hidden className="h-px flex-1 bg-border" />}
           </li>
@@ -77,6 +79,7 @@ type BarcodeDetectorLike = {
  * scan leaves the typed address untouched.
  */
 export function QrScanner({ onDetected }: { onDetected: (address: string) => void }) {
+  const t = useT("transfer.send");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -120,7 +123,7 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
     setCameraError("");
     if (!detectorSupported) {
       // Uploading cannot help here: `scanImage` rejects images for the same missing decoder.
-      setCameraError("This browser cannot read QR codes. Paste the address instead.");
+      setCameraError(t("scanner.unsupported"));
       return;
     }
     doneRef.current = false;
@@ -151,14 +154,14 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
       // acquired tracks here, or the camera stays on with no scan loop and no way to turn it off.
       stop();
       setWorking(false);
-      setCameraError("The camera could not be opened. Check permission, or upload an image.");
+      setCameraError(t("scanner.cameraFailed"));
     }
   };
 
   const scanImage = async (file: File) => {
     setCameraError("");
     if (!detectorSupported) {
-      setCameraError("This browser cannot read QR codes. Paste the address instead.");
+      setCameraError(t("scanner.unsupported"));
       return;
     }
     setWorking(true);
@@ -173,9 +176,9 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
         .map(targetFromQrText)
         .find(Boolean);
       if (found) onDetected(found);
-      else setCameraError("No wallet address was found in that image.");
+      else setCameraError(t("scanner.notFound"));
     } catch {
-      setCameraError("That image could not be read. Try a clearer one.");
+      setCameraError(t("scanner.unreadable"));
     } finally {
       setWorking(false);
     }
@@ -191,11 +194,11 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
           disabled={working}
         >
           <Icon icon={QrCodeScanIcon} size={17} />
-          {working ? "Scanning…" : "Scan with camera"}
+          {working ? t("scanner.scanning") : t("scanner.camera")}
         </Button>
         <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border px-4 text-xs font-semibold">
           <Icon icon={ImageUpload01Icon} size={16} />
-          Upload QR image
+          {t("scanner.upload")}
           <input
             type="file"
             accept="image/*"
@@ -213,12 +216,10 @@ export function QrScanner({ onDetected }: { onDetected: (address: string) => voi
         muted
         playsInline
         className="mt-3 w-full rounded-xl bg-black"
-        aria-label="QR scanner preview"
+        aria-label={t("scanner.previewAria")}
       />
       {cameraError && <p className="mt-2 text-xs text-destructive">{cameraError}</p>}
-      <p className="mt-2 text-xs text-muted-foreground">
-        Point at a Louma receive QR. Nothing is filled in until an address is recognised.
-      </p>
+      <p className="mt-2 text-xs text-muted-foreground">{t("scanner.hint")}</p>
     </div>
   );
 }

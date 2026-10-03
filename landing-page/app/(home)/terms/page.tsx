@@ -1,20 +1,30 @@
+import type { Metadata } from 'next';
 import { LegalPage } from '@/components/layouts/legal-page';
-import { termsSections } from './sections';
 import { createMetadata } from '@/lib/metadata';
+import { createT, getRequestLanguage, sectionIn } from '@/lib/i18n';
 
-export const metadata = createMetadata({
-  title: 'Terms of Service',
-  description: 'The agreement that governs your use of the Louma wallet.',
-  path: '/terms',
-});
-export default function TermsPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const t = createT(await getRequestLanguage(), 'legal.terms');
+
+  return createMetadata({
+    title: t('seo.title'),
+    description: t('seo.description'),
+    path: '/terms',
+  });
+}
+
+export default async function TermsPage() {
+  const language = await getRequestLanguage();
+  const t = createT(language, 'common');
+  const terms = sectionIn(language, 'legal.terms');
+
   return (
     <LegalPage
-      eyebrow="Legal"
-      title="Terms of Service"
-      description="The plain-language agreement between you and Louma — what you can expect from us, and what we ask of you."
-      lastUpdated="July 5, 2026"
-      sections={termsSections}
+      eyebrow={t('legal.eyebrow')}
+      title={terms.title}
+      description={terms.description}
+      lastUpdated={terms.lastUpdated}
+      sections={terms.sections}
     />
   );
-}
+}

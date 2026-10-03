@@ -195,12 +195,19 @@ export function MobileNavMenu({ children, className, isOpen }: MobileNavMenuProp
   );
 }
 
-export function MobileNavToggle({ isOpen, onClick }: { isOpen: boolean; onClick: () => void }) {
-  return isOpen ? (
-    <IconX className="text-black dark:text-white" onClick={onClick} />
-  ) : (
-    <IconMenu2 className="text-black dark:text-white" onClick={onClick} />
-  );
+export function MobileNavToggle({
+  isOpen,
+  onClick,
+  label,
+}: {
+  isOpen: boolean;
+  onClick: () => void;
+  /** The accessible name of the toggle; the icon alone says nothing to a screen reader. */
+  label?: string;
+}) {
+  const Icon = isOpen ? IconX : IconMenu2;
+
+  return <Icon className="text-black dark:text-white" aria-label={label} onClick={onClick} />;
 }
 
 export function NavbarLogo() {

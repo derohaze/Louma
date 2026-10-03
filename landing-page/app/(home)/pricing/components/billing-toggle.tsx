@@ -1,8 +1,8 @@
 'use client';
 
 import { cn } from '@/lib/cn';
+import { useT } from '@/lib/i18n';
 import type { BillingCycle } from '../data';
-import { annualSavingsLabel } from '../data';
 
 const labelClass = (active: boolean) =>
   cn(
@@ -17,19 +17,20 @@ export function BillingToggle({
   billingCycle: BillingCycle;
   onChange: (value: BillingCycle) => void;
 }) {
+  const t = useT('pricing');
   const yearly = billingCycle === 'yearly';
 
   return (
     <div className="mt-8 flex items-center justify-center gap-3">
       <button type="button" onClick={() => onChange('monthly')} className={labelClass(!yearly)}>
-        Monthly
+        {t('billing.monthly')}
       </button>
 
       <button
         type="button"
         role="switch"
         aria-checked={yearly}
-        aria-label="Bill annually"
+        aria-label={t('billing.billAnnually')}
         onClick={() => onChange(yearly ? 'monthly' : 'yearly')}
         className={cn(
           'relative h-5 w-9 shrink-0 rounded-full transition-colors',
@@ -45,7 +46,7 @@ export function BillingToggle({
       </button>
 
       <button type="button" onClick={() => onChange('yearly')} className={labelClass(yearly)}>
-        Annually · {annualSavingsLabel}
+        {t('billing.annually')} · {t('billing.annualSavings')}
       </button>
     </div>
   );

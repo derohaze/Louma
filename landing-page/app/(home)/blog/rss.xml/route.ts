@@ -1,9 +1,10 @@
 import { getBlogPosts } from '@/lib/blog';
+import { siteUrl } from '@/lib/site';
 import { NextResponse } from 'next/server';
 
 export const revalidate = false;
 
-const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://louma.com';
+const baseUrl = siteUrl;
 
 function escapeXml(value: string): string {
   return value

@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { BitcoinCpuIcon, Coins01Icon, UserGroupIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { useT } from "@/shared/i18n";
 import { FormMessage } from "@/shared/ui/panels";
 import { messageForError } from "@/shared/api";
 import { MiningSkeleton } from "@/shared/skeletons";
@@ -12,6 +13,7 @@ import { useMiningCycle } from "@/features/mining/cycle/useMiningCycle";
 
 /** The Mining page: a 24-hour cycle at a server-assigned rate. */
 export function MiningPage() {
+  const t = useT("mining.page");
   const cycle = useMiningCycle();
   const {
     mining,
@@ -34,11 +36,11 @@ export function MiningPage() {
   if (mining.isError && !mining.data) {
     return (
       <>
-        <PageHeader title="Mining" subtitle="Earn LMA by mining a 24-hour cycle." />
+        <PageHeader title={t("title")} subtitle={t("shortDescription")} />
         <EmptyState
-          title="Couldn't load mining state"
+          title={t("loadError.title")}
           detail={messageForError(mining.error)}
-          action={<Button onClick={() => void refetch()}>Try again</Button>}
+          action={<Button onClick={() => void refetch()}>{t("loadError.retry")}</Button>}
         />
       </>
     );
@@ -49,13 +51,13 @@ export function MiningPage() {
   if (mining.data && !mining.data.enabled && !mining.data.session) {
     return (
       <>
-        <PageHeader title="Mining" subtitle="Earn LMA by mining a 24-hour cycle." />
+        <PageHeader title={t("title")} subtitle={t("shortDescription")} />
         <EmptyState
-          title="Mining is unavailable"
-          detail="Mining is temporarily switched off on this network. Your wallet is unaffected."
+          title={t("disabled.title")}
+          detail={t("disabled.detail")}
           action={
             <Link to="/mining/history">
-              <Button variant="outline">View cycle history</Button>
+              <Button variant="outline">{t("historyLink")}</Button>
             </Link>
           }
         />
@@ -71,48 +73,44 @@ export function MiningPage() {
         <Link to="/mining/pools">
           <Button>
             <Icon icon={UserGroupIcon} size={17} />
-            Join a mining pool
+            {t("actions.joinPool")}
           </Button>
         </Link>
       ) : (
         <MiningBusyButton
-          label="Start mining"
+          label={t("actions.start")}
           icon={BitcoinCpuIcon}
           busy={busy === "start"}
           onAction={start}
           disabled={busy !== null || loading}
-          busyLabel="Start mining in progress"
+          busyLabel={t("actions.startBusy")}
         />
       )
     ) : session.status === "active" || needsCollection ? (
       <MiningBusyButton
-        label="Collect reward"
+        label={t("actions.collect")}
         icon={Coins01Icon}
         busy={busy === "settle"}
         onAction={collect}
         // `canSettle` is the server's capability flag: while settlement is paused the endpoint
         // refuses every request, so the action stays unavailable instead of calling it.
         disabled={busy !== null || !needsCollection || !session.canSettle}
-        busyLabel="Collecting reward"
+        busyLabel={t("actions.collectBusy")}
       />
     ) : mining.data.canStart ? (
       <MiningBusyButton
-        label="Start next cycle"
+        label={t("actions.startNext")}
         icon={BitcoinCpuIcon}
         busy={busy === "start"}
         onAction={start}
         disabled={busy !== null}
-        busyLabel="Start mining in progress"
+        busyLabel={t("actions.startBusy")}
       />
     ) : null;
 
   return (
     <>
-      <PageHeader
-        title="Mining"
-        subtitle="A 24-hour cycle at a rate chosen for your account by the server."
-        action={headerAction}
-      />
+      <PageHeader title={t("title")} subtitle={t("description")} action={headerAction} />
 
       {error && !isDeviceBlocked && (
         <div className="mb-4">
@@ -121,7 +119,7 @@ export function MiningPage() {
       )}
 
       {loading ? (
-        <MiningSkeleton title="Mining" />
+        <MiningSkeleton title={t("title")} />
       ) : !session ? (
         <MiningReadyPanel cycle={cycle} />
       ) : (
@@ -129,9 +127,9 @@ export function MiningPage() {
       )}
       <p className="mt-4 text-sm">
         <Link to="/mining/history" className="font-semibold text-primary-soft">
-          View cycle history
+          {t("historyLink")}
         </Link>{" "}
-        <span className="text-muted-foreground">— every past cycle with its earnings.</span>
+        <span className="text-muted-foreground">{t("historyNote")}</span>
       </p>
     </>
   );

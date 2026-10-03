@@ -14,92 +14,93 @@ import { Button } from "@/shared/ui/button";
 import { Switch } from "@/shared/ui/switch";
 import { useWallet } from "@/shared/hooks";
 import { useTheme } from "@/shared/hooks";
-import { settingsPage } from "@/shared/lib/account";
+import { useT } from "@/shared/i18n";
 import { dateText } from "@/shared/lib/wallet";
 import { CopyButton, PageHeader } from "@/shared/ui/page";
 import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
 
 export function AccountContent() {
-  const page = settingsPage("/settings");
+  const t = useT("settings.account");
+  const common = useT("common");
   const { user, wallet } = useWallet();
   const { isDark, toggle } = useTheme();
   const [message, setMessage] = useState("");
   return (
     <>
-      <PageHeader title={page.title} subtitle={page.description} />
+      <PageHeader title={t("title")} subtitle={t("description")} />
       <div className="space-y-4">
-        <Panel title="Appearance" description="Choose how the dashboard looks on this device.">
+        <Panel title={t("appearance.title")} description={t("appearance.description")}>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-sm font-semibold">Dark mode</p>
+              <p className="text-sm font-semibold">{t("appearance.darkMode")}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Switch the dashboard to a darker color scheme.
+                {t("appearance.darkModeDetail")}
               </p>
             </div>
-            <Switch checked={isDark} onCheckedChange={toggle} aria-label="Dark mode" />
+            <Switch
+              checked={isDark}
+              onCheckedChange={toggle}
+              aria-label={t("appearance.darkMode")}
+            />
           </div>
         </Panel>
-        <Panel title="Wallet identity" description="Details tied to this wallet account.">
+        <Panel title={t("identity.title")} description={t("identity.description")}>
           <FactList
             items={[
-              ["Sign-in email", user?.email ?? "—"],
+              [t("identity.email"), user?.email ?? common("state.none")],
               [
-                "Account ID",
+                t("identity.accountId"),
                 <code key="id" className="break-all">
-                  {user?.id ?? "—"}
+                  {user?.id ?? common("state.none")}
                 </code>,
               ],
               [
-                "Wallet address",
+                t("identity.address"),
                 <span key="address" className="flex items-center gap-1">
-                  <code className="min-w-0 break-all">{wallet?.address ?? "—"}</code>
+                  <code className="min-w-0 break-all">
+                    {wallet?.address ?? common("state.none")}
+                  </code>
                   {wallet?.address && <CopyButton text={wallet.address} />}
                 </span>,
               ],
-              ["Wallet status", wallet?.status === "frozen" ? "Frozen" : "Active"],
-              ["Created", wallet?.createdAt ? dateText(wallet.createdAt) : "—"],
+              [
+                t("identity.status"),
+                wallet?.status === "frozen" ? common("state.frozen") : common("state.active"),
+              ],
+              [
+                t("identity.created"),
+                wallet?.createdAt ? dateText(wallet.createdAt) : common("state.none"),
+              ],
             ]}
           />
         </Panel>
         <Panel
-          title="Delete wallet account"
-          description="Permanently removes the wallet, its ledger accounts, and its history."
+          title={t("delete.title")}
+          description={t("delete.description")}
           tone="danger"
           action={
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="border-destructive text-destructive">
-                  Delete account
+                  {t("delete.button")}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Delete this wallet account?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    The wallet, its address, and every transfer would be removed permanently. This
-                    cannot be undone.
-                  </AlertDialogDescription>
+                  <AlertDialogTitle>{t("delete.confirmTitle")}</AlertDialogTitle>
+                  <AlertDialogDescription>{t("delete.confirmBody")}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Keep my wallet</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() =>
-                      setMessage(
-                        "Account deletion is not available yet. Nothing was deleted; ask support to close an account with a balance.",
-                      )
-                    }
-                  >
-                    Delete account
+                  <AlertDialogCancel>{t("delete.keep")}</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => setMessage(t("delete.unavailable"))}>
+                    {t("delete.button")}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
           }
         >
-          <p className="text-sm text-muted-foreground">
-            Withdraw your balance before deleting the account: anything left in the wallet cannot be
-            recovered afterwards.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("delete.warning")}</p>
           {message && (
             <div className="mt-4">
               <FormMessage tone="ok">{message}</FormMessage>

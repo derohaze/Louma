@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { cn } from '@/lib/cn';
+import { useT } from '@/lib/i18n';
 
 /**
  * Mining marketing surface.
@@ -20,13 +21,11 @@ import { cn } from '@/lib/cn';
 
 const BLOCKS = [0, 1, 2, 3, 4, 5] as const;
 
-const FACTS = [
-  { id: 'direct', term: 'Direct', detail: 'Rewards land in your wallet' },
-  { id: 'cycle', term: 'Every cycle', detail: 'Collect it with one tap' },
-  { id: 'receipt', term: 'Receipted', detail: 'Every credit stays auditable' },
-] as const;
+/** The three facts beside the copy; the wording comes from `locales/home`. */
+const FACT_IDS = ['direct', 'cycle', 'receipt'] as const;
 
 export function MiningGuard() {
+  const t = useT('home');
   const sectionRef = useRef<HTMLElement>(null);
   const stackRef = useRef<HTMLDivElement>(null);
 
@@ -78,30 +77,34 @@ export function MiningGuard() {
   return (
     <section
       ref={sectionRef}
-      aria-label="Mining"
+      aria-label={t('mining.aria')}
       className="col-span-full mx-auto w-full max-w-[1400px]"
     >
       <div className="grid items-center gap-10 overflow-hidden rounded-[2rem] bg-[#ECECEE] p-7 text-neutral-900 ring-1 ring-black/5 sm:rounded-[2.5rem] sm:p-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)] lg:gap-14 lg:p-12 dark:bg-[#141414] dark:text-neutral-50 dark:ring-white/10">
         <div className="min-w-0">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-neutral-500 dark:text-neutral-400">
-            Mining
+            {t('mining.eyebrow')}
           </p>
           <h2 className="mt-3 max-w-xl text-balance text-2xl font-medium tracking-tight sm:text-3xl lg:text-[2.25rem] lg:leading-[1.1]">
-            Every cycle pays out.
+            {t('mining.title')}
           </h2>
           <p className="mt-4 max-w-lg text-[15px] leading-7 text-neutral-600 dark:text-neutral-300">
-            Start mining on a device you already own. Louma credits LMA to your wallet when you
-            collect a finished cycle — one tap on the mining page, with a receipt you can check
-            long after the fact.
+            {t('mining.body')}
           </p>
 
           <dl className="mt-8 grid gap-x-8 gap-y-5 sm:grid-cols-3">
-            {FACTS.map((fact) => (
-              <div key={fact.id} data-fact>
+            {FACT_IDS.map((id) => {
+              const fact = {
+                term: t(`mining.facts.${id}.term` as 'mining.facts.direct.term'),
+                detail: t(`mining.facts.${id}.detail` as 'mining.facts.direct.detail'),
+              };
+              return (
+              <div key={id} data-fact>
                 <dt className="text-[15px] font-medium tracking-tight">{fact.term}</dt>
                 <dd className="mt-1 text-[13px] leading-6 text-neutral-600 dark:text-neutral-300">{fact.detail}</dd>
               </div>
-            ))}
+              );
+            })}
           </dl>
         </div>
 
@@ -128,7 +131,7 @@ export function MiningGuard() {
             </div>
           </div>
           <p className="absolute inset-x-0 bottom-0 text-center text-[12px] leading-5 text-neutral-500 dark:text-neutral-400">
-            Every block your device secures is settled to the ledger.
+            {t('mining.caption')}
           </p>
         </div>
       </div>

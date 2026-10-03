@@ -2,6 +2,7 @@ import NumberFlow from "@number-flow/react";
 import { BitcoinCpuIcon, Coins01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { Icon } from "@/shared/ui/page";
+import { useT } from "@/shared/i18n";
 import { FactList } from "@/shared/ui/panels";
 import { MONEY_SCALE, currency, dateText } from "@/shared/lib/wallet";
 import { MiningOrb } from "@/features/mining/live/MiningOrb";
@@ -13,6 +14,9 @@ import type { MiningCycle } from "@/features/mining/cycle/useMiningCycle";
 
 /** The running (or collectable) cycle: countdown, earnings, progress, and collect actions. */
 export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
+  const t = useT("mining.cycle");
+  /** The action labels live with the page, because the header renders the same buttons. */
+  const page = useT("mining.page");
   const {
     session,
     mining,
@@ -37,16 +41,16 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {session.status === "active"
-                ? "Mining"
+                ? t("active.statusActive")
                 : session.status === "completed"
-                  ? "Cycle complete"
-                  : "Cycle settled"}
+                  ? t("active.statusCompleted")
+                  : t("active.statusSettled")}
             </p>
             <p className="mt-1 font-display text-4xl font-bold tabular-nums">
               {countdown(remaining)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {session.status === "active" ? "remaining" : "window closed"}
+              {session.status === "active" ? t("active.remaining") : t("active.windowClosed")}
             </p>
           </div>
           <MiningOrb
@@ -54,21 +58,21 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
             size={120}
             label={
               needsCollection
-                ? "Mining reward ready to collect"
+                ? t("active.orb.ready")
                 : session.status === "active"
-                  ? "Mining cycle hashing"
-                  : "Mining cycle settled"
+                  ? t("active.orb.hashing")
+                  : t("active.orb.settled")
             }
             caption={
               needsCollection
-                ? "Reward ready"
+                ? t("active.captions.ready")
                 : session.status === "active"
-                  ? "Hashing…"
-                  : "Settled"
+                  ? t("active.captions.hashing")
+                  : t("active.captions.settled")
             }
           />
           <div className="text-end">
-            <p className="text-xs text-muted-foreground">Earned this cycle</p>
+            <p className="text-xs text-muted-foreground">{t("active.earned")}</p>
             <p className="mt-1 font-display text-2xl font-bold tabular-nums">
               <NumberFlow
                 className="earned-number"
@@ -80,7 +84,7 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
             </p>
             {session.settledMinor > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
-                {currency(session.settled)} already collected
+                {t("active.alreadyCollected", { amount: currency(session.settled) })}
               </p>
             )}
           </div>
@@ -89,7 +93,7 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
         <div className="mt-6">
           <div
             role="progressbar"
-            aria-label="Mining cycle progress"
+            aria-label={t("active.progressAria")}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(progressPercent)}
@@ -101,19 +105,31 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
             />
           </div>
           <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-            <span>{countdown(live?.elapsedSeconds ?? session.elapsedSeconds)} elapsed</span>
-            <span>24:00:00 cycle</span>
+            <span>
+              {t("active.elapsed", {
+                time: countdown(live?.elapsedSeconds ?? session.elapsedSeconds),
+              })}
+            </span>
+            <span>{t("active.window")}</span>
           </div>
         </div>
 
         <div className="mt-6 border-t pt-5">
           <FactList
             items={[
-              ["Mining rate", rateText],
-              ...((poolName ? [["Pool", poolName]] : []) as [string, string][]),
-              ["Cycle", `#${session.cycleNumber} · started ${dateText(session.startedAt)}`],
-              ["Window ends", dateText(session.endsAt)],
-              ["Maximum this cycle", currency(session.totalAccrued)],
+              [t("active.facts.rate"), rateText],
+              ...((poolName
+                ? [[t("active.facts.pool"), poolName]]
+                : []) as [string, string][]),
+              [
+                t("active.facts.cycle"),
+                t("active.facts.cycleValue", {
+                  number: session.cycleNumber,
+                  date: dateText(session.startedAt),
+                }),
+              ],
+              [t("active.facts.windowEnds"), dateText(session.endsAt)],
+              [t("active.facts.maximum"), currency(session.totalAccrued)],
             ]}
           />
         </div>
@@ -121,49 +137,41 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
         {needsCollection && session.canSettle && (
           <div className="mt-5">
             <MiningBusyButton
-              label="Collect reward"
+              label={page("actions.collect")}
               icon={Coins01Icon}
               busy={busy === "settle"}
               onAction={collect}
               disabled={busy !== null}
-              busyLabel="Collecting reward"
+              busyLabel={page("actions.collectBusy")}
             />
           </div>
         )}
         {needsCollection && !session.canSettle && (
-          <p className="mt-5 text-sm text-muted-foreground">
-            Settlement is paused on this network, so collection is unavailable right now. Your
-            earned reward stays on your account and nothing is lost.
-          </p>
+          <p className="mt-5 text-sm text-muted-foreground">{t("active.settlementPaused")}</p>
         )}
         {!needsCollection && session.status !== "active" && (
-          <p className="mt-5 text-sm text-muted-foreground">
-            This cycle is fully collected. Start a new one to keep mining.
-          </p>
+          <p className="mt-5 text-sm text-muted-foreground">{t("active.fullyCollected")}</p>
         )}
         {!actionsEnabled && (
-          <p className="mt-5 text-sm text-muted-foreground">
-            Mining is paused on this network, so actions are unavailable. Your earned reward stays
-            on your account and nothing is lost.
-          </p>
+          <p className="mt-5 text-sm text-muted-foreground">{t("active.miningPaused")}</p>
         )}
         {actionsEnabled && mining.data?.canStart && session.status !== "active" && (
           <div className="mt-5">
             <Button onClick={() => void start()} disabled={busy !== null}>
               <Icon icon={BitcoinCpuIcon} size={17} />
-              {busy === "start" ? "Starting…" : "Start next cycle"}
+              {busy === "start" ? t("active.starting") : page("actions.startNext")}
             </Button>
           </div>
         )}
         {!needsCollection && session.status === "active" && (
           <div className="mt-5">
             <MiningBusyButton
-              label="Collect reward"
+              label={page("actions.collect")}
               icon={Coins01Icon}
               busy={busy === "settle"}
               onAction={collect}
               disabled={busy !== null || !needsCollection}
-              busyLabel="Collecting reward"
+              busyLabel={page("actions.collectBusy")}
             />
           </div>
         )}
@@ -171,11 +179,9 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
 
       <div className="grid gap-4">
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
-          <p className="text-sm text-muted-foreground">Mining rate</p>
+          <p className="text-sm text-muted-foreground">{t("active.rateCard")}</p>
           <p className="mt-3 font-display text-xl font-bold tabular-nums">{rateText}</p>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Drawn by the server for this cycle and fixed until it ends.
-          </p>
+          <p className="mt-3 text-xs text-muted-foreground">{t("active.rateNote")}</p>
         </section>
         {session.status === "active" ? <MiningLiveLog events={feed} /> : <MiningInfoCard />}
       </div>

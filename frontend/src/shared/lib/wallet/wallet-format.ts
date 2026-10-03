@@ -1,3 +1,5 @@
+import { currentLocale } from "@/shared/i18n";
+
 /** Louma's ticker; every amount the wallet shows goes through here. */
 const CURRENCY = "LMA";
 const MONEY_DECIMALS = 4;
@@ -89,7 +91,12 @@ export function transferNet(amount: string | number): string {
   return moneyFromMinorUnits(moneyToMinorUnits(amount) - moneyToMinorUnits(transferTax(amount)));
 }
 
+/**
+ * A timestamp, written the way the reader's language writes one: Arabic month names in Arabic, and
+ * the same Latin digits the amounts use. `currentLocale()` follows the language the screen is being
+ * rendered in, so a switch re-renders every date without a single call site passing a locale.
+ */
 export const dateText = (date: string) =>
-  new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(
+  new Intl.DateTimeFormat(currentLocale(), { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(date),
   );

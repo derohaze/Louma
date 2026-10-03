@@ -9,6 +9,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { Icon, PageHeader } from "@/shared/ui/page";
 import { Input } from "@/shared/ui/input";
+import { useT } from "@/shared/i18n";
 import { useWallet } from "@/shared/hooks";
 import { LIMITS } from "@/shared/lib/platform";
 import {
@@ -22,6 +23,7 @@ import { dateText } from "@/shared/lib/wallet";
 
 /** The Recipients page: saved shortcuts plus everyone this wallet paid. */
 export function RecipientsPage() {
+  const t = useT("transfer.recipients");
   const { transactions, userId } = useWallet();
   const [saved, setSaved] = useState<SavedAddress[]>(() => loadAddressBook(userId));
   /** Unsaved label edits, keyed by address: renaming never writes until it is saved. */
@@ -55,15 +57,12 @@ export function RecipientsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Recipients"
-        subtitle="Everyone this wallet paid, plus the saved shortcut into the transfer form."
-      />
+      <PageHeader title={t("title")} subtitle={t("description")} />
       {saved.length > 0 && (
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
           <div className="flex items-center gap-2">
             <Icon icon={FavouriteIcon} size={19} className="text-primary-soft" />
-            <h2 className="font-display font-semibold">Saved</h2>
+            <h2 className="font-display font-semibold">{t("saved")}</h2>
           </div>
           <div className="mt-4">
             {saved.map((entry) => {
@@ -79,7 +78,7 @@ export function RecipientsPage() {
                       value={draft}
                       onChange={(event) => setDraft(entry.address, event.target.value)}
                       maxLength={LIMITS.maxDisplayNameLength}
-                      aria-label={`Label for ${entry.address}`}
+                      aria-label={t("labelAria", { address: entry.address })}
                       className="h-8 text-sm font-semibold"
                     />
                     <code className="mt-1 block break-all text-xs text-muted-foreground">
@@ -89,7 +88,7 @@ export function RecipientsPage() {
                   <Link to="/transfer" onClick={() => prefillTransfer(entry.address)}>
                     <Button className="rounded-full">
                       <Icon icon={ArrowUpRight01Icon} size={15} />
-                      Send
+                      {t("send")}
                     </Button>
                   </Link>
                   {dirty && (
@@ -102,14 +101,14 @@ export function RecipientsPage() {
                         clearDraft(entry.address);
                       }}
                     >
-                      Save label
+                      {t("saveLabel")}
                     </Button>
                   )}
                   <Button
                     variant="ghost"
                     size="icon"
-                    title="Remove address"
-                    aria-label={`Remove ${entry.label}`}
+                    title={t("remove")}
+                    aria-label={t("removeAria", { label: entry.label })}
                     onClick={() => setSaved(removeAddress(userId, entry.address))}
                   >
                     <Icon icon={Delete02Icon} size={17} />
@@ -123,11 +122,9 @@ export function RecipientsPage() {
       <section className="mt-4 rounded-[22px] border bg-card p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <Icon icon={Clock01Icon} size={19} />
-          <h2 className="font-display font-semibold">Recent</h2>
+          <h2 className="font-display font-semibold">{t("recent")}</h2>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Paid before, unsaved. Save one to give it a name and a shortcut chip.
-        </p>
+        <p className="mt-2 text-xs text-muted-foreground">{t("recentNote")}</p>
         <div className="mt-4">
           {recent.length ? (
             recent.map((item) => {
@@ -140,8 +137,8 @@ export function RecipientsPage() {
                   <div className="min-w-0 flex-1">
                     <code className="break-all text-sm font-semibold">{item.address}</code>
                     <p className="text-xs text-muted-foreground">
-                      Last paid {dateText(item.at)}
-                      {isSaved ? " · saved" : ""}
+                      {t("lastPaid", { date: dateText(item.at) })}
+                      {isSaved ? t("savedTag") : ""}
                     </p>
                   </div>
                   {!isSaved && (
@@ -150,8 +147,8 @@ export function RecipientsPage() {
                         value={labelDrafts[item.address] ?? ""}
                         onChange={(event) => setDraft(item.address, event.target.value)}
                         maxLength={LIMITS.maxDisplayNameLength}
-                        placeholder="Label (optional)"
-                        aria-label={`Label for ${item.address}`}
+                        placeholder={t("labelPlaceholder")}
+                        aria-label={t("labelAria", { address: item.address })}
                         className="h-8 w-36 text-xs"
                       />
                       <Button
@@ -166,14 +163,14 @@ export function RecipientsPage() {
                         }}
                       >
                         <Icon icon={FavouriteIcon} size={15} />
-                        Save
+                        {t("saveLabel")}
                       </Button>
                     </>
                   )}
                   <Link to="/transfer" onClick={() => prefillTransfer(item.address)}>
                     <Button variant="outline" size="sm" className="rounded-full">
                       <Icon icon={ArrowUpRight01Icon} size={15} />
-                      Send
+                      {t("send")}
                     </Button>
                   </Link>
                 </div>
@@ -181,7 +178,7 @@ export function RecipientsPage() {
             })
           ) : (
             <p className="rounded-xl bg-secondary/60 px-4 py-3 text-xs text-muted-foreground">
-              No outgoing transfers yet. Paid addresses will appear here for one-tap resending.
+              {t("empty")}
             </p>
           )}
         </div>

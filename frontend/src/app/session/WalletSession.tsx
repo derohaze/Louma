@@ -145,15 +145,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * working wallet with an error page.
    */
   /**
-   * True when the API has refused this session or cannot answer for it at all. A 401 is the API
-   * saying "no session"; a 404 means the request never reached it (a backend that is not proxied),
-   * which is equally not a session worth rendering. Both send the visitor to the auth page instead
-   * of leaving them on a wallet-shaped error. A 5xx or transport fault is deliberately excluded: a
-   * working session can be behind one, and the screen's own error reports it.
+   * True when the API refused this session. A 401 is the API saying "no session" and is the only
+   * answer that ends one. A 404 is deliberately not a rejection: it means the request never reached
+   * the API (a deployment whose `/api/*` is not proxied to the backend), which is a routing fault,
+   * not a refused session — clearing the token and sending the customer to log in would end a
+   * session the server never ended. A 404 therefore falls through to the screen's own error state,
+   * like a 5xx or a transport fault. See the effect below.
    */
-  const sessionRejected =
-    profile.error instanceof ApiError &&
-    (profile.error.status === 401 || profile.error.status === 404);
+  const sessionRejected = profile.error instanceof ApiError && profile.error.status === 401;
   const loading = !profile.data && (profile.isPending || sessionRejected);
   const failure = [profile, transactions, security].find(
     (query) => query.error && !query.data,
@@ -257,11 +256,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    */
   const handledRejection = useRef(false);
   useEffect(() => {
-    if (
-      !(profile.error instanceof ApiError) ||
-      (profile.error.status !== 401 && profile.error.status !== 404)
-    )
-      return;
+    // Only a 401 is the API refusing the session. A 404 (and any other status) leaves the token and
+    // the hint in place, and the shell reports the failure with a retry instead of a redirect.
+    if (!(profile.error instanceof ApiError) || profile.error.status !== 401) return;
     if (handledRejection.current) return;
     handledRejection.current = true;
     // Same ordering as signOut: unmount the wallet screens before dropping their cache, so no

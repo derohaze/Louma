@@ -1,3 +1,4 @@
+import { translate } from "@/shared/i18n";
 import type { IconData } from "@/shared/ui/page";
 import { navSections, type NavHref } from "@/shared/lib/wallet";
 
@@ -16,17 +17,32 @@ export type SearchEntry = {
  * The catalog is derived from the navigation so a new page can never be unreachable by search.
  */
 export type SearchPage = SearchEntry & { category: string; terms: string };
-export const searchPages: SearchPage[] = navSections.flatMap((section) =>
-  section.items.map((item) => ({
-    id: `page:${item.href}`,
-    title: item.title,
-    subtitle: item.title === section.title ? `${section.title} section` : section.title,
-    icon: item.icon,
-    href: item.href,
-    category: section.title,
-    terms: item.searchTerms ?? "",
-  })),
-);
+
+/**
+ * The catalog, in the language current when it is built: the label the reader sees and the words the
+ * dialog matches on both come from the navigation's own translation keys, so someone typing Arabic
+ * finds a page by its Arabic name.
+ */
+export function buildSearchPages(): SearchPage[] {
+  return navSections.flatMap((section) => {
+    const sectionTitle = translate(section.titleKey);
+    return section.items.map((item) => {
+      const title = translate(item.titleKey);
+      return {
+        id: `page:${item.href}`,
+        title,
+        subtitle:
+          title === sectionTitle
+            ? translate("nav.chrome.pageInSection", { section: sectionTitle })
+            : sectionTitle,
+        icon: item.icon,
+        href: item.href,
+        category: sectionTitle,
+        terms: translate(item.searchKey),
+      };
+    });
+  });
+}
 
 /** Order of the dialog's default list, so it opens on the pages an owner reaches for most. */
 const searchPageRank: NavHref[] = [

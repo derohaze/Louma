@@ -1,21 +1,17 @@
 import { HomeLayout } from 'fumadocs-ui/layouts/home';
-import { baseOptions, linkItems } from '@/components/layouts/shared';
+import { baseOptions, translatedLinkItems } from '@/components/layouts/shared';
 import { ResizableHomeHeader } from '@/components/layouts/resizable-home-header';
 import { LandingFooter } from '@/components/layouts/footer';
+import { createT, getRequestLanguage } from '@/lib/i18n';
 import type { ReactNode } from 'react';
 
-export default function Layout({ children }: { children: ReactNode }) {
+export default async function Layout({ children }: { children: ReactNode }) {
+  const t = createT(await getRequestLanguage(), 'common');
+
   return (
     <HomeLayout
       {...baseOptions()}
-      links={[
-        {
-          type: 'main',
-          text: 'Documentation',
-          url: '/docs',
-        },
-        ...linkItems,
-      ]}
+      links={translatedLinkItems(t)}
       slots={{
         header: ResizableHomeHeader,
       }}

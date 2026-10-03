@@ -8,6 +8,7 @@ import { api, messageForError } from "@/shared/api";
 import { displayNote, loadLocalNote, saveLocalNote } from "@/shared/lib/wallet";
 import { currency, dateText, transferNet, transferTax } from "@/shared/lib/wallet";
 import { CopyButton, EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { useT } from "@/shared/i18n";
 import { TransactionDetailSkeleton } from "@/shared/skeletons";
 import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
 
@@ -17,6 +18,8 @@ import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
  * link, or a transfer older than the loaded page).
  */
 export function TransactionDetailContent({ transferId }: { transferId: string }) {
+  const t = useT("transactions.detail");
+  const common = useT("common");
   const { transactions, userId } = useWallet();
   const known = transactions.find((item) => item.transferId === transferId);
   const [fetched, setFetched] = useState<Transaction | null>(null);
@@ -57,18 +60,16 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
 
   const transaction = known ?? fetched;
   if (loading) {
-    return <TransactionDetailSkeleton title="Transaction" />;
+    return <TransactionDetailSkeleton title={t("title")} />;
   }
   if (!transaction) {
     return (
       <EmptyState
-        title="Transaction not found"
-        detail={
-          error || "This transfer is not part of this wallet's history, or the link is out of date."
-        }
+        title={t("notFoundTitle")}
+        detail={error || t("notFoundDetail")}
         action={
           <Link to="/transactions">
-            <Button variant="outline">All transactions</Button>
+            <Button variant="outline">{t("allTransactions")}</Button>
           </Link>
         }
       />
@@ -88,45 +89,47 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
   const movedForThisWallet = sent ? transaction.amount : net;
   const breakdown: [string, ReactNode][] = sent
     ? [
-        ["Amount debited", currency(transaction.amount)],
-        ["Network tax (1%)", currency(tax)],
-        ["Recipient received", currency(net)],
+        [t("breakdown.amountDebited"), currency(transaction.amount)],
+        [t("breakdown.tax"), currency(tax)],
+        [t("breakdown.recipientReceived"), currency(net)],
         // `balanceAfter` is the sender's own balance, so it only means something on this side.
-        ["Balance after", transaction.balanceAfter ? currency(transaction.balanceAfter) : "—"],
+        [
+          t("breakdown.balanceAfter"),
+          transaction.balanceAfter ? currency(transaction.balanceAfter) : common("state.none"),
+        ],
       ]
     : [
-        ["Amount credited", currency(net)],
-        ["Network tax (1%)", `${currency(tax)} — paid by the sender`],
-        ["Sender paid", currency(transaction.amount)],
+        [t("breakdown.amountCredited"), currency(net)],
+        [t("breakdown.tax"), t("breakdown.taxPaidBySender", { amount: currency(tax) })],
+        [t("breakdown.senderPaid"), currency(transaction.amount)],
       ];
   return (
     <>
       <PageHeader
-        title={`${sent ? "Sent" : "Received"} ${currency(movedForThisWallet)}`}
+        title={t(sent ? "heading.sent" : "heading.received", {
+          amount: currency(movedForThisWallet),
+        })}
         subtitle={`${transaction.transferId} · ${dateText(transaction.createdAt)}`}
       />
       <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
         <div className="space-y-4">
-          <Panel
-            title="Breakdown"
-            description="The 1% network tax is taken from the amount before the recipient is credited."
-          >
+          <Panel title={t("breakdown.title")} description={t("breakdown.description")}>
             <FactList
               items={[
                 ...breakdown,
-                ["Status", "Completed"],
-                ["Note", transaction.note || "—"],
+                [t("breakdown.status"), common("state.completed")],
+                [t("breakdown.note"), transaction.note || common("state.none")],
                 [
-                  "Transfer ID",
+                  t("breakdown.transferId"),
                   <code key="id" className="break-all">
                     {transaction.transferId}
                   </code>,
                 ],
-                ["Recorded", dateText(transaction.createdAt)],
+                [t("breakdown.recorded"), dateText(transaction.createdAt)],
               ]}
             />
           </Panel>
-          <Panel title="Counterparty" description="The wallet on the other side of the transfer.">
+          <Panel title={t("counterparty.title")} description={t("counterparty.description")}>
             <div className="flex items-center gap-2 rounded-xl bg-secondary p-3">
               <code className="min-w-0 flex-1 break-all text-sm">
                 {transaction.counterpartyAddress}
@@ -134,26 +137,24 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
               <CopyButton text={transaction.counterpartyAddress} />
             </div>
             <p className="mt-4 text-sm text-muted-foreground">
-              {sent
-                ? "This is the address the LMA was sent to."
-                : "This is the address the LMA was sent from."}
+              {sent ? t("counterparty.sentTo") : t("counterparty.sentFrom")}
             </p>
             {transaction.correlationId && (
               <div className="mt-4">
                 <FormMessage tone="ok">
-                  Reference for support: {transaction.correlationId}
+                  {t("counterparty.supportReference", { reference: transaction.correlationId })}
                 </FormMessage>
               </div>
             )}
           </Panel>
-          <Panel
-            title="Notes"
-            description="The record's note was written at send time; yours lives on this device."
-          >
+          <Panel title={t("notes.title")} description={t("notes.description")}>
             <FactList
               items={[
-                ["On record", transaction.note || "—"],
-                ["Personal · this device", displayNote("", personalNote) || "—"],
+                [t("notes.onRecord"), transaction.note || common("state.none")],
+                [
+                  t("notes.personal"),
+                  displayNote("", personalNote) || common("state.none"),
+                ],
               ]}
             />
             {editingNote ? (
@@ -168,8 +169,8 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
               >
                 <Input
                   autoFocus
-                  aria-label="Personal note"
-                  placeholder="e.g. March rent"
+                  aria-label={t("notes.personalAria")}
+                  placeholder={t("notes.personalPlaceholder")}
                   autoComplete="off"
                   maxLength={240}
                   value={noteDraft}
@@ -177,7 +178,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit" size="sm" className="rounded-full">
-                    Save note
+                    {t("notes.save")}
                   </Button>
                   <Button
                     type="button"
@@ -189,7 +190,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
                       setEditingNote(false);
                     }}
                   >
-                    Cancel
+                    {common("actions.cancel")}
                   </Button>
                 </div>
               </form>
@@ -201,23 +202,23 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
                 onClick={() => setEditingNote(true)}
               >
                 <Icon icon={NoteEditIcon} size={16} />
-                {personalNote ? "Edit personal note" : "Add personal note"}
+                {personalNote ? t("notes.edit") : t("notes.add")}
               </Button>
             )}
           </Panel>
         </div>
         <div className="space-y-4 no-print">
-          <Panel title="What next" description="Where this transfer leads.">
+          <Panel title={t("next.title")} description={t("next.description")}>
             <div className="flex flex-wrap gap-2">
               <Link to="/transactions">
-                <Button variant="outline">All transactions</Button>
+                <Button variant="outline">{t("allTransactions")}</Button>
               </Link>
               <Link to="/transfer">
-                <Button variant="outline">New transfer</Button>
+                <Button variant="outline">{t("next.newTransfer")}</Button>
               </Link>
               <Button variant="outline" onClick={() => window.print()}>
                 <Icon icon={PrinterIcon} size={17} />
-                Print receipt
+                {t("next.print")}
               </Button>
             </div>
           </Panel>

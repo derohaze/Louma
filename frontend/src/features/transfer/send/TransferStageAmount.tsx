@@ -11,12 +11,15 @@ import { Input } from "@/shared/ui/input";
 import { Icon } from "@/shared/ui/page";
 import { FormMessage } from "@/shared/ui/panels";
 import { LIMITS } from "@/shared/lib/platform";
+import { useT } from "@/shared/i18n";
 import { isSavedAddress, saveAddress } from "@/shared/lib/wallet";
 import { currency } from "@/shared/lib/wallet";
 import type { TransferFlow } from "@/features/transfer/send/useTransferFlow";
 
 /** Stage two: the amount, priced by the ledger, against the verified recipient. */
 export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
+  const t = useT("transfer.send");
+  const common = useT("common");
   const {
     userId,
     recipient,
@@ -57,10 +60,12 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-success/40 bg-success/10 p-3">
         <Icon icon={CheckmarkCircle01Icon} size={18} className="text-success" />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">Address verified</p>
+          <p className="text-sm font-semibold">{t("amount.verified")}</p>
           <code className="break-all text-xs">{recipient.address}</code>
           {recipient.displayName && (
-            <p className="text-xs text-muted-foreground">Wallet owner · {recipient.displayName}</p>
+            <p className="text-xs text-muted-foreground">
+              {t("amount.owner", { name: recipient.displayName })}
+            </p>
           )}
         </div>
         <Button
@@ -73,12 +78,12 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
             setError("");
           }}
         >
-          Change
+          {t("amount.change")}
         </Button>
         {isSavedAddress(userId, verifiedAddress) ? (
           <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary-soft">
             <Icon icon={FavouriteIcon} size={15} />
-            Saved
+            {t("amount.saved")}
           </span>
         ) : (
           <span className="flex w-full min-w-0 flex-wrap items-center gap-2">
@@ -86,8 +91,8 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
               value={label}
               onChange={(event) => setLabel(event.target.value)}
               maxLength={LIMITS.maxDisplayNameLength}
-              placeholder="Label for this recipient (optional)"
-              aria-label="Label for this recipient"
+              placeholder={t("amount.labelPlaceholder")}
+              aria-label={t("amount.labelAria")}
               className="h-8 min-w-0 flex-1 text-xs"
             />
             <Button
@@ -100,13 +105,13 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
               }}
             >
               <Icon icon={FavouriteIcon} size={15} />
-              Save
+              {t("amount.saveLabel")}
             </Button>
           </span>
         )}
       </div>
       <label className="block text-sm font-semibold">
-        Amount (LMA)
+        {t("amount.label")}
         <Input
           autoFocus
           className="mt-2"
@@ -130,28 +135,23 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
         <div className="flex items-start gap-2 rounded-xl bg-secondary/60 p-3 text-xs">
           <Icon icon={PercentCircleIcon} size={17} className="mt-0.5 shrink-0" />
           <div>
-            <p>
-              Network tax (1%): <strong>{currency(tax)}</strong>
-            </p>
+            <p>{t("amount.tax", { amount: currency(tax) })}</p>
             <p className="mt-1 text-muted-foreground">
-              {currency(decimalAmount)} leaves your wallet and {currency(net)} reaches the
-              recipient.
+              {t("amount.leaves", { sent: currency(decimalAmount), received: currency(net) })}
             </p>
           </div>
         </div>
       )}
       {balanceMinor <= 0 && (
-        <p className="text-sm text-muted-foreground">
-          No funds available. Share your receiving address to receive LMA first.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("amount.noFunds")}</p>
       )}
       <label className="block text-sm font-semibold">
-        Note (optional)
+        {t("amount.noteLabel")}
         <Input
           className="mt-2"
           autoComplete="off"
           maxLength={LIMITS.maxNoteLength}
-          placeholder="What is this transfer for?"
+          placeholder={t("amount.notePlaceholder")}
           value={note}
           onChange={(event) => {
             setNote(event.target.value);
@@ -171,10 +171,10 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
           }}
         >
           <Icon icon={ArrowLeft01Icon} size={16} />
-          Back
+          {common("actions.back")}
         </Button>
         <Button type="submit" disabled={busy !== null || !amountValid || frozen}>
-          {busy === "amount" ? "Checking the ledger…" : "Continue"}
+          {busy === "amount" ? t("amount.checking") : common("actions.continue")}
           <Icon icon={ArrowRight01Icon} size={16} />
         </Button>
       </div>

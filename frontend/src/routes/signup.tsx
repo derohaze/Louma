@@ -1,15 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { SignupContent } from "@/features/auth";
+import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/signup")({
-  head: () => ({
-    meta: [
-      { title: "Sign up" },
-      { name: "description", content: "Create your Louma wallet account in seconds." },
-      { property: "og:title", content: "Sign up" },
-      { property: "og:description", content: "Create your Louma wallet account in seconds." },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
+  head: () => pageHead("auth.signup.title", "auth.signup.description"),
   component: SignupContent,
 });

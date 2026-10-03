@@ -1,4 +1,5 @@
 import { ProgressBar } from "react-aria-components/ProgressBar";
+import { useT } from "@/shared/i18n";
 import { cn } from "@/shared/lib/platform";
 
 const Ring = ({ className, ...props }: React.SVGProps<SVGSVGElement>) => (
@@ -75,13 +76,14 @@ export interface LoaderProps extends Omit<
 }
 
 export function Loader({ isIndeterminate = true, ref, ...props }: LoaderProps) {
+  const t = useT("common");
   const { className, variant = DEFAULT_SPINNER, formatOptions, ...spinnerProps } = props;
   const LoaderPrimitive = LOADERS[variant in LOADERS ? variant : DEFAULT_SPINNER];
 
   return (
     <ProgressBar
       data-slot={props["data-slot"] ?? "loader"}
-      aria-label={props["aria-label"] ?? "Pending..."}
+      aria-label={props["aria-label"] ?? t("loading.pending")}
       {...(formatOptions ? { formatOptions } : {})}
       isIndeterminate={isIndeterminate}
     >

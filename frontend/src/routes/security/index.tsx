@@ -5,9 +5,9 @@ import { securityCenter } from "@/shared/lib/security";
 import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/security/")({
-  head: () => pageHead(securityCenter.title, securityCenter.description),
+  head: () => pageHead(securityCenter.titleKey, securityCenter.descriptionKey),
   component: () => (
-    <WalletPage title={securityCenter.title}>
+    <WalletPage titleKey={securityCenter.titleKey}>
       <SecurityCenterContent />
     </WalletPage>
   ),

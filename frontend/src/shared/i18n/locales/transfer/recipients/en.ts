@@ -1,0 +1,16 @@
+export default {
+  title: "Recipients",
+  description: "Everyone this wallet paid, plus the saved shortcut into the transfer form.",
+  saved: "Saved",
+  recent: "Recent",
+  recentNote: "Paid before, unsaved. Save one to give it a name and a shortcut chip.",
+  lastPaid: "Last paid {date}",
+  savedTag: " · saved",
+  send: "Send",
+  saveLabel: "Save label",
+  remove: "Remove address",
+  removeAria: "Remove {label}",
+  labelAria: "Label for {address}",
+  labelPlaceholder: "Label (optional)",
+  empty: "No outgoing transfers yet. Paid addresses will appear here for one-tap resending.",
+};

@@ -20,8 +20,9 @@ import {
   securityScore,
   securityStateText,
 } from "@/shared/lib/security";
-import { securityControls, securityFeatures } from "@/shared/lib/security";
+import { securityCenter, securityControls, securityFeatures } from "@/shared/lib/security";
 import { dateText } from "@/shared/lib/wallet";
+import { useT, useTranslate } from "@/shared/i18n";
 import { Icon, PageHeader } from "@/shared/ui/page";
 import { Panel, StatusPill } from "@/shared/ui/panels";
 
@@ -46,34 +47,35 @@ const scoreTone = (score: number) => {
  * change, because enabling 2FA or setting a transfer password needs more than a toggle.
  */
 export function SecurityCenterContent() {
+  const t = useT("security.center");
+  const common = useT("common");
+  const state = useT("security.state");
+  const translate = useTranslate();
+  const page = securityCenter;
   const { security, refreshSecurity } = useWallet();
   const navigate = useNavigate();
   const score = securityScore(security);
   const frozen = security?.wallet.status === "frozen";
+  const sessions = security?.activeSessions ?? 0;
   const events = (security?.events ?? []).slice(0, 6);
   /** One line of state for the controls, which hold no switch of their own. */
   const controlState: Record<string, string> = {
-    "/security/freeze": frozen ? "Frozen" : "Active",
-    "/security/devices": `${security?.activeSessions ?? 0} signed-in ${
-      (security?.activeSessions ?? 0) === 1 ? "device" : "devices"
-    }`,
+    "/security/freeze": state(frozen ? "wallet.frozen" : "wallet.active"),
+    "/security/devices": state(sessions === 1 ? "devices.one" : "devices.other", {
+      count: sessions,
+    }),
   };
 
   return (
     <>
-      <PageHeader
-        title="Security Center"
-        subtitle="Layered sign-in and transfer controls for your wallet."
-      />
+      <PageHeader title={translate(page.titleKey)} subtitle={translate(page.descriptionKey)} />
       {frozen && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-warning bg-warning/10 px-4 py-3 text-sm">
           <Icon icon={SnowIcon} size={18} className="shrink-0" />
-          <p className="min-w-0 flex-1">
-            The wallet is frozen, so every transfer is refused until you unfreeze it.
-          </p>
+          <p className="min-w-0 flex-1">{t("frozen.banner")}</p>
           <Link to="/security/freeze">
             <Button variant="outline" size="sm">
-              Unfreeze wallet
+              {t("frozen.unfreeze")}
             </Button>
           </Link>
         </div>
@@ -82,7 +84,7 @@ export function SecurityCenterContent() {
         <section className="rounded-[22px] border bg-card p-5 shadow-sm">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Icon icon={ShieldEnergyIcon} size={18} className="text-muted-foreground" />
-            Security score
+            {t("score.title")}
           </div>
           <p className={`mt-4 font-display text-4xl font-bold ${scoreTone(score.score)}`}>
             {score.score}
@@ -90,40 +92,36 @@ export function SecurityCenterContent() {
           </p>
           <Progress value={score.score} className="mt-4" />
           <p className="mt-3 text-sm text-muted-foreground">
-            {score.enabledCount} of {score.total} protections are on.{" "}
-            {score.score < score.max
-              ? "Enable the remaining controls to close the gaps."
-              : "Every available control is enabled."}
+            {t("score.summary", {
+              enabled: score.enabledCount,
+              total: score.total,
+              hint: t(score.score < score.max ? "score.hintPartial" : "score.hintFull"),
+            })}
           </p>
         </section>
         <Panel
-          title="Signed-in devices"
-          description={`${security?.activeSessions ?? 0} active ${
-            (security?.activeSessions ?? 0) === 1 ? "session" : "sessions"
-          } on this wallet.`}
+          title={t("devices.title")}
+          description={state(sessions === 1 ? "sessions.one" : "sessions.other", {
+            count: sessions,
+          })}
           action={
             <Link to="/security/devices">
               <Button variant="outline" size="sm">
-                All devices
+                {t("devices.all")}
               </Button>
             </Link>
           }
         >
           <div className="flex items-center gap-3">
             <Icon icon={ComputerIcon} size={19} className="shrink-0 text-muted-foreground" />
-            <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-              A device stays signed in until its session expires or you revoke it. Revoking ends the
-              session on that device's next request.
-            </p>
+            <p className="min-w-0 flex-1 text-sm text-muted-foreground">{t("devices.body")}</p>
           </div>
         </Panel>
       </div>
       <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
         <div className="border-b px-5 py-4">
-          <h2 className="font-display font-semibold">Protections</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Open a control to turn it on or off; the change is applied by the backend.
-          </p>
+          <h2 className="font-display font-semibold">{t("protections.title")}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{t("protections.description")}</p>
         </div>
         {securityFeatures.map((feature) => {
           const enabled = score.enabled[feature.id];
@@ -140,7 +138,7 @@ export function SecurityCenterContent() {
                   to={feature.href}
                   className="text-sm font-semibold transition-colors hover:text-primary-soft"
                 >
-                  {feature.title}
+                  {translate(feature.titleKey)}
                 </Link>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {securityStateText(feature.id, security)}
@@ -150,7 +148,7 @@ export function SecurityCenterContent() {
               <Switch
                 checked={enabled}
                 onCheckedChange={() => void navigate({ to: feature.href })}
-                aria-label={`Open ${feature.title} settings`}
+                aria-label={t("protections.toggle", { title: translate(feature.titleKey) })}
               />
             </div>
           );
@@ -158,10 +156,8 @@ export function SecurityCenterContent() {
       </section>
       <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
         <div className="border-b px-5 py-4">
-          <h2 className="font-display font-semibold">Wallet controls</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The emergency freeze and the list of signed-in devices.
-          </p>
+          <h2 className="font-display font-semibold">{t("controls.title")}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{t("controls.description")}</p>
         </div>
         {securityControls.map((control) => (
           <div
@@ -176,9 +172,11 @@ export function SecurityCenterContent() {
                 to={control.href}
                 className="text-sm font-semibold transition-colors hover:text-primary-soft"
               >
-                {control.title}
+                {translate(control.titleKey)}
               </Link>
-              <p className="mt-1 text-xs text-muted-foreground">{control.description}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {translate(control.descriptionKey)}
+              </p>
             </div>
             <span className="shrink-0 text-xs text-muted-foreground">
               {controlState[control.href] ?? ""}
@@ -189,8 +187,8 @@ export function SecurityCenterContent() {
       {/* The alerts below are a copy of the API's answer with a freshness window on it, so a refresh
           that fails leaves the previous copy on screen and the failure has to be said out loud. */}
       <Panel
-        title="Security alerts"
-        description="What the wallet recorded on this account, most recent first."
+        title={t("alerts.title")}
+        description={t("alerts.description")}
         bodyClassName="p-0"
         action={
           <Button
@@ -198,13 +196,13 @@ export function SecurityCenterContent() {
             size="sm"
             onClick={() =>
               void refreshSecurity().catch((cause: unknown) =>
-                toast.error("Security alerts could not be refreshed", {
+                toast.error(t("alerts.refreshFailed"), {
                   description: messageForError(cause),
                 }),
               )
             }
           >
-            Refresh
+            {common("actions.refresh")}
           </Button>
         }
       >
@@ -221,7 +219,7 @@ export function SecurityCenterContent() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold">{securityEventTitle(event.type)}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {event.outcome === "failure" ? "The request was refused" : "Completed"}
+                    {common(event.outcome === "failure" ? "state.refused" : "state.completed")}
                   </p>
                 </div>
                 <span className="shrink-0 text-xs text-muted-foreground">
@@ -231,9 +229,7 @@ export function SecurityCenterContent() {
             );
           })
         ) : (
-          <p className="px-5 py-6 text-sm text-muted-foreground">
-            No security events have been recorded yet.
-          </p>
+          <p className="px-5 py-6 text-sm text-muted-foreground">{t("alerts.empty")}</p>
         )}
       </Panel>
     </>

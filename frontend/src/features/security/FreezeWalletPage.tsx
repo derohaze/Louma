@@ -19,10 +19,14 @@ import { useWallet } from "@/shared/hooks";
 import { api, messageForError } from "@/shared/api";
 import { LIMITS } from "@/shared/lib/platform";
 import { securityFreezeWallet } from "@/shared/lib/security";
+import { useT, useTranslate } from "@/shared/i18n";
 import { SecurityErrorText } from "@/features/security/SecurityMessage";
 
 /** The emergency stop: one switch that holds every transfer until the owner unfreezes the wallet. */
 export function FreezeWalletPage() {
+  const t = useT("security.freeze");
+  const common = useT("common");
+  const translate = useTranslate();
   const page = securityFreezeWallet;
   const { security, refresh, refreshSecurity } = useWallet();
   const [password, setPassword] = useState("");
@@ -52,11 +56,7 @@ export function FreezeWalletPage() {
       }
       setPassword("");
       setCode("");
-      setMessage(
-        value
-          ? "Wallet frozen. Nothing leaves it until you unfreeze."
-          : "Wallet unfrozen. Transfers work again.",
-      );
+      setMessage(t(value ? "messages.frozen" : "messages.unfrozen"));
       if (!value) setUnfreezeOpen(false);
       await Promise.all([refresh(), refreshSecurity()]);
     } catch (cause) {
@@ -67,36 +67,32 @@ export function FreezeWalletPage() {
   };
   return (
     <>
-      <PageHeader title={page.title} subtitle={page.description} />
+      <PageHeader title={translate(page.titleKey)} subtitle={translate(page.descriptionKey)} />
       <div className="space-y-4">
         <Panel
-          title={frozen ? "The wallet is frozen" : "The wallet is active"}
-          description={
-            frozen
-              ? "Every transfer is refused until you unfreeze it."
-              : "Freezing takes effect on the next transfer, without a delay."
-          }
+          title={t(frozen ? "title.frozen" : "title.active")}
+          description={t(frozen ? "description.frozen" : "description.active")}
           action={
             frozen ? (
               <AlertDialog open={unfreezeOpen} onOpenChange={setUnfreezeOpen}>
                 <AlertDialogTrigger asChild>
                   <Button disabled={busy}>
                     <Icon icon={CheckmarkCircle02Icon} size={17} />
-                    Unfreeze wallet
+                    {t("unfreeze.button")}
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>Unfreeze this wallet?</AlertDialogTitle>
+                    <AlertDialogTitle>{t("unfreeze.confirmTitle")}</AlertDialogTitle>
                     <AlertDialogDescription>
-                      Confirm with your account password
-                      {requiresCode ? " and a current authenticator code" : ""}. Transfers work
-                      again as soon as the wallet is active.
+                      {t("unfreeze.confirmBody", {
+                        andCode: requiresCode ? t("unfreeze.andCode") : "",
+                      })}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <div className="space-y-3 px-1">
                     <label className="block text-sm font-semibold">
-                      Account password
+                      {t("unfreeze.password")}
                       <Input
                         className="mt-2"
                         type="password"
@@ -108,7 +104,7 @@ export function FreezeWalletPage() {
                     </label>
                     {requiresCode && (
                       <label className="block text-sm font-semibold">
-                        Authenticator or recovery code
+                        {t("unfreeze.code")}
                         <Input
                           className="mt-2"
                           maxLength={64}
@@ -120,7 +116,7 @@ export function FreezeWalletPage() {
                     {error && <SecurityErrorText error={error} />}
                   </div>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>Keep it frozen</AlertDialogCancel>
+                    <AlertDialogCancel>{t("unfreeze.keep")}</AlertDialogCancel>
                     <AlertDialogAction
                       disabled={busy || !password || (requiresCode && code.length < 6)}
                       onClick={(event) => {
@@ -130,7 +126,7 @@ export function FreezeWalletPage() {
                         void apply(false);
                       }}
                     >
-                      {busy ? "Unfreezing…" : "Unfreeze wallet"}
+                      {t(busy ? "unfreeze.busy" : "unfreeze.button")}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -140,21 +136,18 @@ export function FreezeWalletPage() {
                 <AlertDialogTrigger asChild>
                   <Button variant="destructive" disabled={busy}>
                     <Icon icon={SnowIcon} size={17} />
-                    Freeze wallet
+                    {t("freeze.button")}
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>Freeze this wallet?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Every transfer and every new sign-in stops immediately. LMA that is already on
-                      its way still arrives, and you can unfreeze from this page at any time.
-                    </AlertDialogDescription>
+                    <AlertDialogTitle>{t("freeze.confirmTitle")}</AlertDialogTitle>
+                    <AlertDialogDescription>{t("freeze.confirmBody")}</AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogCancel>{common("actions.cancel")}</AlertDialogCancel>
                     <AlertDialogAction onClick={() => void apply(true)}>
-                      Freeze wallet
+                      {t("freeze.button")}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -166,11 +159,7 @@ export function FreezeWalletPage() {
             className={`flex items-start gap-3 rounded-xl border p-4 text-sm ${frozen ? "border-warning bg-warning/10" : "bg-secondary/50"}`}
           >
             <Icon icon={frozen ? SnowIcon : CheckmarkCircle02Icon} size={19} className="mt-0.5" />
-            <p>
-              {frozen
-                ? "The wallet is frozen. The transfer form refuses every amount, and the wallet is locked on other pages too."
-                : "No freeze is active. Use it when a device is lost or you suspect someone else has your credentials."}
-            </p>
+            <p>{t(frozen ? "note.frozen" : "note.active")}</p>
           </div>
           {error && !frozen && (
             <div className="mt-4">
@@ -183,16 +172,12 @@ export function FreezeWalletPage() {
             </div>
           )}
         </Panel>
-        <Panel
-          title="What freezing does"
-          description="Freezing stops the wallet, not your access to it: Security stays open so you can undo it."
-          bodyClassName="p-0"
-        >
+        <Panel title={t("impact.title")} description={t("impact.description")} bodyClassName="p-0">
           {[
-            ["Transfers out", "Refused by the backend before they are submitted"],
-            ["Sign-in on a new device", "Blocked"],
-            ["LMA sent to you", "Still arrives and shows in Transactions"],
-            ["Unfreezing", "Any time from this page, or from Security Center"],
+            [t("impact.transfersOut"), t("impact.transfersOutDetail")],
+            [t("impact.signIn"), t("impact.signInDetail")],
+            [t("impact.incoming"), t("impact.incomingDetail")],
+            [t("impact.unfreezing"), t("impact.unfreezingDetail")],
           ].map(([label, value]) => (
             <div
               key={label}

@@ -15,23 +15,20 @@ import {
   NavItems,
 } from '@/components/ui/resizable-navbar';
 import { cn } from '@/lib/cn';
+import { useT } from '@/lib/i18n';
 
+/** The two links in the bar, named by translation key so a language switch redraws the header. */
 const navItems = [
-  {
-    name: 'Pricing',
-    link: '/pricing',
-  },
-  {
-    name: 'Blog',
-    link: '/blog',
-  },
-];
+  { labelKey: 'footer.links.pricing', link: '/pricing' },
+  { labelKey: 'footer.links.blog', link: '/blog' },
+] as const;
 
 // "Sign in" goes straight to the app's sign-in page. The app sends an already-authenticated
 // visitor on to the dashboard (/ ), so a signed-in customer never sits on the form.
 const signInUrl = 'https://app.loumapay.com/login';
 
 function ThemeModeToggle() {
+  const t = useT('common');
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
@@ -46,7 +43,7 @@ function ThemeModeToggle() {
     <div className="inline-flex h-9 items-center rounded-full border bg-white p-1 shadow-sm dark:bg-neutral-950">
       <button
         type="button"
-        aria-label="Switch to light mode"
+        aria-label={t('shell.theme.switchToLight')}
         aria-pressed={isLight}
         onClick={() => setTheme('light')}
         className={cn(
@@ -58,7 +55,7 @@ function ThemeModeToggle() {
       </button>
       <button
         type="button"
-        aria-label="Switch to dark mode"
+        aria-label={t('shell.theme.switchToDark')}
         aria-pressed={isDark}
         onClick={() => setTheme('dark')}
         className={cn(
@@ -73,6 +70,7 @@ function ThemeModeToggle() {
 }
 
 export function ResizableHomeHeader({ className }: ComponentProps<'header'>) {
+  const t = useT('common');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   return (
@@ -80,13 +78,13 @@ export function ResizableHomeHeader({ className }: ComponentProps<'header'>) {
       <Navbar>
         <NavBody>
           <NavbarLogo />
-          <NavItems items={navItems} />
+          <NavItems items={navItems.map((item) => ({ name: t(item.labelKey), link: item.link }))} />
           <div className="relative z-20 flex items-center gap-4">
             <a
               href={signInUrl}
               className="text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-950 dark:text-neutral-300 dark:hover:text-white"
             >
-              Sign in
+              {t('shell.signIn')}
             </a>
             <ThemeModeToggle />
           </div>
@@ -100,11 +98,12 @@ export function ResizableHomeHeader({ className }: ComponentProps<'header'>) {
                 href={signInUrl}
                 className="text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-950 dark:text-neutral-300 dark:hover:text-white"
               >
-                Sign in
+                {t('shell.signIn')}
               </a>
               <ThemeModeToggle />
               <MobileNavToggle
                 isOpen={isMobileMenuOpen}
+                label={isMobileMenuOpen ? t('shell.menu.close') : t('shell.menu.open')}
                 onClick={() => setIsMobileMenuOpen((isOpen) => !isOpen)}
               />
             </div>
@@ -118,7 +117,7 @@ export function ResizableHomeHeader({ className }: ComponentProps<'header'>) {
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="relative text-neutral-600 dark:text-neutral-300"
               >
-                <span className="block">{item.name}</span>
+                <span className="block">{t(item.labelKey)}</span>
               </a>
             ))}
           </MobileNavMenu>

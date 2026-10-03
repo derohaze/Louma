@@ -4,11 +4,14 @@ import { Input } from "@/shared/ui/input";
 import { Icon } from "@/shared/ui/page";
 import { FormMessage } from "@/shared/ui/panels";
 import { LIMITS } from "@/shared/lib/platform";
+import { useT } from "@/shared/i18n";
 import { QrScanner } from "@/features/transfer/send/TransferQrScanner";
 import type { TransferFlow } from "@/features/transfer/send/useTransferFlow";
 
 /** Stage one: the recipient address, checked against the ledger before an amount is asked for. */
 export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
+  const t = useT("transfer.send");
+  const common = useT("common");
   const {
     address,
     busy,
@@ -32,7 +35,7 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
     >
       {hasShortcuts && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground">Saved recipients</p>
+          <p className="text-xs font-semibold text-muted-foreground">{t("address.savedRecipients")}</p>
           <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {savedShortcuts.map((entry) => (
               <button
@@ -50,7 +53,7 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
         </div>
       )}
       <label className="block text-sm font-semibold">
-        Recipient wallet address
+        {t("address.label")}
         <Input
           autoFocus
           className="mt-2"
@@ -58,20 +61,17 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
           autoComplete="off"
           spellCheck={false}
           maxLength={LIMITS.maxRecipientLength}
-          placeholder="LMA-XXXX-XXXX-XXXX or @handle"
+          placeholder={t("address.placeholder")}
           value={address}
           onChange={(event) => changeAddress(event.target.value)}
         />
       </label>
-      {looksLikeOwnAddress && <p className="text-xs text-destructive">This is your own address.</p>}
-      <p className="text-xs text-muted-foreground">
-        Nothing leaves your wallet at this step: the address is checked against the ledger before an
-        amount is even asked for.
-      </p>
+      {looksLikeOwnAddress && <p className="text-xs text-destructive">{t("address.own")}</p>}
+      <p className="text-xs text-muted-foreground">{t("address.note")}</p>
       {error && <FormMessage tone="error">{error}</FormMessage>}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" disabled={busy !== null || frozen || !address.trim()}>
-          {busy === "address" ? "Checking the address…" : "Continue"}
+          {busy === "address" ? t("address.checking") : common("actions.continue")}
           <Icon icon={ArrowRight01Icon} size={16} />
         </Button>
         <Button
@@ -81,7 +81,7 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
           onClick={() => setScannerOpen((open) => !open)}
         >
           <Icon icon={QrCodeScanIcon} size={16} />
-          {scannerOpen ? "Hide scanner" : "Scan QR"}
+          {scannerOpen ? t("address.hideScanner") : t("address.scan")}
         </Button>
       </div>
       {scannerOpen && (

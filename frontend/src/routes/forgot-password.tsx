@@ -1,15 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ForgotPasswordContent } from "@/features/auth";
+import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/forgot-password")({
-  head: () => ({
-    meta: [
-      { title: "Reset password" },
-      { name: "description", content: "Reset your Louma wallet password." },
-      { property: "og:title", content: "Reset password" },
-      { property: "og:description", content: "Reset your Louma wallet password." },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
+  head: () => pageHead("auth.forgot.title", "auth.forgot.description"),
   component: ForgotPasswordContent,
 });

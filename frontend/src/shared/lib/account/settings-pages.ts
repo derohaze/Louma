@@ -1,24 +1,26 @@
 import type { HugeiconsIcon } from "@hugeicons/react";
 import { UserSettings01Icon } from "@hugeicons/core-free-icons";
+import type { TranslationPath } from "@/shared/i18n";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 export type SettingsHref = "/settings";
 
+/** Names are translation keys; the page translates them when it renders (see security-catalog). */
 export interface SettingsPage {
-  title: string;
-  label: string;
+  titleKey: TranslationPath;
+  labelKey: TranslationPath;
   href: SettingsHref;
   icon: IconData;
-  description: string;
+  descriptionKey: TranslationPath;
 }
 
 export const settingsPages: readonly SettingsPage[] = [
   {
-    title: "Account Management",
-    label: "Account",
+    titleKey: "settings.account.title",
+    labelKey: "nav.pages.account.label",
     href: "/settings",
     icon: UserSettings01Icon,
-    description: "Your wallet identity and the account lifecycle.",
+    descriptionKey: "settings.account.description",
   },
 ];
 
