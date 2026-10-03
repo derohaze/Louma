@@ -5,6 +5,7 @@ import {
   ChartIncreaseIcon,
   FavouriteIcon,
   Home04Icon,
+  Notification01Icon,
   QrCodeIcon,
   Settings01Icon,
   TransactionHistoryIcon,
@@ -12,6 +13,7 @@ import {
   UserGroupIcon,
   Wallet01Icon,
 } from "@hugeicons/core-free-icons";
+import type { TranslationPath } from "@/shared/i18n";
 import { settingsPages, type SettingsHref } from "@/shared/lib/account";
 import { securityCenter, securityPages, type SecurityHref } from "@/shared/lib/security";
 
@@ -20,6 +22,7 @@ type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 export type NavHref =
   | "/"
   | "/analytics"
+  | "/notifications"
   | "/transfer"
   | "/transfer/recipients"
   | "/mining"
@@ -33,13 +36,16 @@ export type NavHref =
   | SettingsHref;
 
 /**
- * `searchTerms` is what the search dialog matches on top of the visible label: the page's full
- * title plus the words an owner would type to find it. The panel keeps showing the short label.
+ * `titleKey` and `searchKey` are translation keys rather than text: this catalog is read at module
+ * load, before a language is known, so the label is resolved by whoever renders it — the rail, the
+ * panel, the search dialog — with the language current at that moment. `searchKey` is what the
+ * search dialog matches on top of the visible label: the page's full title plus the words an owner
+ * would type to find it, in their own language. The panel keeps showing the short label.
  */
-type NavItem = { title: string; href: NavHref; icon: IconData; searchTerms?: string };
+type NavItem = { titleKey: TranslationPath; href: NavHref; icon: IconData; searchKey: TranslationPath };
 /** A section always owns at least one page, so the rail can link to its landing page. */
 export type NavSection = {
-  title: string;
+  titleKey: TranslationPath;
   icon: IconData;
   items: [NavItem, ...NavItem[]];
   /**
@@ -59,6 +65,15 @@ const sectionItems = (items: readonly NavItem[]): [NavItem, ...NavItem[]] => {
   return items as [NavItem, ...NavItem[]];
 };
 
+/** The words the search dialog matches for each security page, in the order the catalog lists them. */
+const securitySearchKeys: Record<SecurityHref, TranslationPath> = {
+  "/security": "nav.pages.securityCenter.search",
+  "/security/two-factor": "nav.pages.twoFactor.search",
+  "/security/transfer-password": "nav.pages.transferPassword.search",
+  "/security/freeze": "nav.pages.freeze.search",
+  "/security/devices": "nav.pages.devices.search",
+};
+
 /**
  * Every page belongs to exactly one section. The rail lists the wallet's own sections, and the
  * sidebar panel renders only the pages of the section the current route belongs to, so one section
@@ -69,126 +84,137 @@ const sectionItems = (items: readonly NavItem[]): [NavItem, ...NavItem[]] => {
  */
 export const navSections: readonly [NavSection, ...NavSection[]] = [
   {
-    title: "Home",
+    titleKey: "nav.sections.home",
     icon: Home04Icon,
     items: [
-      { title: "Overview", href: "/", icon: Home04Icon, searchTerms: "balance dashboard home overview" },
       {
-        title: "Analytics",
+        titleKey: "nav.pages.overview.label",
+        href: "/",
+        icon: Home04Icon,
+        searchKey: "nav.pages.overview.search",
+      },
+      {
+        titleKey: "nav.pages.analytics.label",
         href: "/analytics",
         icon: ChartIncreaseIcon,
-        searchTerms: "analytics charts insights income expenses mining transfers activity",
+        searchKey: "nav.pages.analytics.search",
+      },
+      {
+        titleKey: "nav.pages.notifications.label",
+        href: "/notifications",
+        icon: Notification01Icon,
+        searchKey: "nav.pages.notifications.search",
       },
     ],
   },
   {
-    title: "Wallet",
+    titleKey: "nav.sections.wallet",
     icon: Wallet01Icon,
     items: [
       {
-        title: "Wallet",
+        titleKey: "nav.pages.wallet.label",
         href: "/wallet",
         icon: Wallet01Icon,
-        searchTerms: "balance receiving address",
+        searchKey: "nav.pages.wallet.search",
       },
       {
-        title: "Custom Address",
+        titleKey: "nav.pages.customAddress.label",
         href: "/custom-address",
         icon: QrCodeIcon,
-        searchTerms: "receiving address qr code",
+        searchKey: "nav.pages.customAddress.search",
       },
     ],
   },
   {
-    title: "Transfer",
+    titleKey: "nav.sections.transfer",
     icon: ArrowUpRight01Icon,
     items: [
       {
-        title: "Transfer",
+        titleKey: "nav.pages.transfer.label",
         href: "/transfer",
         icon: ArrowUpRight01Icon,
-        searchTerms: "send transfer receive funds",
+        searchKey: "nav.pages.transfer.search",
       },
       {
-        title: "Recipients",
+        titleKey: "nav.pages.recipients.label",
         href: "/transfer/recipients",
         icon: FavouriteIcon,
-        searchTerms: "saved recent recipients favorites addresses",
+        searchKey: "nav.pages.recipients.search",
       },
     ],
   },
   {
-    title: "Mining",
+    titleKey: "nav.sections.mining",
     icon: BitcoinCpuIcon,
     items: [
       {
-        title: "Mining",
+        titleKey: "nav.pages.mining.label",
         href: "/mining",
         icon: BitcoinCpuIcon,
-        searchTerms: "mining rewards rate cycle earn lma earn",
+        searchKey: "nav.pages.mining.search",
       },
       {
-        title: "Mining Pools",
+        titleKey: "nav.pages.miningPools.label",
         href: "/mining/pools",
         icon: UserGroupIcon,
-        searchTerms: "mining pools join room community low medium",
+        searchKey: "nav.pages.miningPools.search",
       },
       {
-        title: "History",
+        titleKey: "nav.pages.miningHistory.label",
         href: "/mining/history",
         icon: ChartIncreaseIcon,
-        searchTerms: "mining cycles history earnings collected past",
+        searchKey: "nav.pages.miningHistory.search",
       },
     ],
   },
   {
-    title: "Transactions",
+    titleKey: "nav.sections.transactions",
     icon: TransactionHistoryIcon,
     items: [
       {
-        title: "Transactions",
+        titleKey: "nav.pages.transactions.label",
         href: "/transactions",
         icon: TransactionHistoryIcon,
-        searchTerms: "transactions history transfers search filter",
+        searchKey: "nav.pages.transactions.search",
       },
     ],
   },
   {
-    title: "Profile",
+    titleKey: "nav.sections.profile",
     icon: UserCircleIcon,
     accountLevel: true,
     items: [
       {
-        title: "Profile",
+        titleKey: "nav.pages.profile.label",
         href: "/profile",
         icon: UserCircleIcon,
-        searchTerms: "account details identity",
+        searchKey: "nav.pages.profile.search",
       },
     ],
   },
   {
-    title: "Security",
+    titleKey: "nav.sections.security",
     icon: securityCenter.icon,
     accountLevel: true,
     items: sectionItems(
       securityPages.map((page) => ({
-        title: page.label,
+        titleKey: page.labelKey,
         href: page.href,
         icon: page.icon,
-        searchTerms: `${page.title} ${page.description}`,
+        searchKey: securitySearchKeys[page.href],
       })),
     ),
   },
   {
-    title: "Settings",
+    titleKey: "nav.sections.settings",
     icon: Settings01Icon,
     accountLevel: true,
     items: sectionItems(
       settingsPages.map((page) => ({
-        title: page.label,
+        titleKey: page.labelKey,
         href: page.href,
         icon: page.icon,
-        searchTerms: `${page.title} ${page.description}`,
+        searchKey: "nav.pages.account.search",
       })),
     ),
   },

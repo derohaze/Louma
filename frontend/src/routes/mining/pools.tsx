@@ -1,25 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/app/shell";
 import { MiningPools } from "@/features/mining";
+import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/mining/pools")({
-  head: () => ({
-    meta: [
-      { title: "Mining Pools" },
-      {
-        name: "description",
-        content: "Join one of the two system mining pools before starting a cycle.",
-      },
-      { property: "og:title", content: "Mining Pools" },
-      {
-        property: "og:description",
-        content: "Join one of the two system mining pools before starting a cycle.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
+  head: () => pageHead("mining.pools.title", "mining.pools.description"),
   component: () => (
-    <WalletPage title="Mining Pools">
+    <WalletPage titleKey="mining.pools.title">
       <MiningPools />
     </WalletPage>
   ),

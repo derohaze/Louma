@@ -8,10 +8,14 @@ import { useWallet } from "@/shared/hooks";
 import { api, messageForError } from "@/shared/api";
 import { LIMITS, newPasswordError, passwordRules } from "@/shared/lib/platform";
 import { securityFeature } from "@/shared/lib/security";
+import { useT, useTranslate } from "@/shared/i18n";
 import { SecurityErrorText } from "@/features/security/SecurityMessage";
 
 /** The Transfer Password page: the spend credential, separate from the sign-in password. */
 export function TransferPasswordPage() {
+  const t = useT("security.transferPassword");
+  const common = useT("common");
+  const translate = useTranslate();
   const feature = securityFeature("transfer-password");
   const { security, refreshSecurity } = useWallet();
   const enabled = security?.transferPassword.enabled ?? false;
@@ -28,7 +32,7 @@ export function TransferPasswordPage() {
     setMessage("");
     setError("");
     if (enabled && !current) {
-      setError("Enter your current transfer password.");
+      setError(t("errors.currentRequired"));
       return;
     }
     const problem = newPasswordError(next, confirm);
@@ -45,7 +49,7 @@ export function TransferPasswordPage() {
       setCurrent("");
       setNext("");
       setConfirm("");
-      setMessage("Transfer password updated.");
+      setMessage(t("messages.saved"));
       await refreshSecurity();
     } catch (cause) {
       setError(messageForError(cause));
@@ -55,27 +59,23 @@ export function TransferPasswordPage() {
   };
   return (
     <>
-      <PageHeader title={feature.title} subtitle={feature.description} />
+      <PageHeader
+        title={translate(feature.titleKey)}
+        subtitle={translate(feature.descriptionKey)}
+      />
       <div className="space-y-4">
         <Panel
-          title={enabled ? "Transfer password is set" : "No transfer password is set"}
-          description={feature.description}
+          title={t(enabled ? "set.title" : "unset.title")}
+          description={translate(feature.descriptionKey)}
           action={<StatusPill enabled={enabled} />}
         >
-          <p className="text-sm text-muted-foreground">
-            {enabled
-              ? "Every transfer asks for it before any LMA leaves the wallet."
-              : "Without it, a signed-in session can move funds on its own."}
-          </p>
+          <p className="text-sm text-muted-foreground">{t(enabled ? "set.body" : "unset.body")}</p>
         </Panel>
-        <Panel
-          title={enabled ? "Change transfer password" : "Set transfer password"}
-          description="Separate from your wallet password, so a leaked sign-in cannot move funds."
-        >
+        <Panel title={t(enabled ? "set.action" : "unset.action")} description={t("description")}>
           <form onSubmit={(event) => void submit(event)} className="max-w-xl space-y-4">
             {enabled && (
               <label className="block text-sm font-semibold">
-                Current transfer password
+                {t("current")}
                 <Input
                   className="mt-2"
                   type="password"
@@ -88,7 +88,7 @@ export function TransferPasswordPage() {
               </label>
             )}
             <label className="block text-sm font-semibold">
-              New transfer password
+              {t("next")}
               <Input
                 className="mt-2"
                 type="password"
@@ -96,11 +96,11 @@ export function TransferPasswordPage() {
                 maxLength={LIMITS.maxPasswordLength}
                 value={next}
                 onChange={(event) => setNext(event.target.value)}
-                placeholder="At least 8 characters"
+                placeholder={t("nextHint")}
               />
             </label>
             <label className="block text-sm font-semibold">
-              Repeat new transfer password
+              {t("repeat")}
               <Input
                 className="mt-2"
                 type="password"
@@ -119,17 +119,17 @@ export function TransferPasswordPage() {
             </ul>
             <Button type="submit" disabled={busy}>
               <Icon icon={LockIcon} size={16} />
-              {busy ? "Saving…" : enabled ? "Update password" : "Set password"}
+              {busy ? common("actions.saving") : t(enabled ? "set.submit" : "unset.submit")}
             </Button>
             {error && <SecurityErrorText error={error} />}
             {message && <FormMessage tone="ok">{message}</FormMessage>}
           </form>
         </Panel>
-        <Panel title="When it applies" description="Rules the wallet follows on every transfer.">
+        <Panel title={t("rules.title")} description={t("rules.description")}>
           <FactList
             items={[
-              ["Every transfer", enabled ? "This password is required" : "Not required"],
-              ["Wrong password", "The transfer is refused before any LMA leaves the wallet"],
+              [t("rules.everyTransfer"), t(enabled ? "rules.required" : "rules.notRequired")],
+              [t("rules.wrongPassword"), t("rules.wrongPasswordDetail")],
             ]}
           />
         </Panel>

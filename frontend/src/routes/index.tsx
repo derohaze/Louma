@@ -1,25 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/app/shell";
 import { OverviewContent } from "@/features/overview";
+import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/")({
-  head: () => ({
-    meta: [
-      { title: "Overview" },
-      {
-        name: "description",
-        content: "Balance and activity at a glance, with a link into every LMA wallet section.",
-      },
-      { property: "og:title", content: "Overview" },
-      {
-        property: "og:description",
-        content: "Balance and activity at a glance, with a link into every LMA wallet section.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
+  head: () => pageHead("overview.title", "overview.description"),
   component: () => (
-    <WalletPage title="Overview">
+    <WalletPage titleKey="overview.title">
       <OverviewContent />
     </WalletPage>
   ),

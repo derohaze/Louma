@@ -16,11 +16,8 @@ import {
   BitcoinCpuIcon,
 } from "@hugeicons/core-free-icons";
 import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
-import {
-  moneyChartValue,
-  shortAddress,
-  sumMoney,
-} from "@/shared/lib/wallet";
+import { currentLocale, useT } from "@/shared/i18n";
+import { moneyChartValue, shortAddress, sumMoney } from "@/shared/lib/wallet";
 import {
   accountFetchers,
   cn,
@@ -40,10 +37,15 @@ import { Icon } from "@/shared/ui/page";
  * Everything reads the same shared queries the overview reads, so the two
  * pages can never disagree — only the cut is different.
  */
-const RANGES: readonly { id: string; label: string; days: number; buckets: number }[] = [
-  { id: "7", label: "Last 7 days", days: 7, buckets: 7 },
-  { id: "30", label: "Last 30 days", days: 30, buckets: 15 },
-  { id: "90", label: "Last 90 days", days: 90, buckets: 30 },
+const RANGES: readonly {
+  id: string;
+  labelKey: "range.last7" | "range.last30" | "range.last90";
+  days: number;
+  buckets: number;
+}[] = [
+  { id: "7", labelKey: "range.last7", days: 7, buckets: 7 },
+  { id: "30", labelKey: "range.last30", days: 30, buckets: 15 },
+  { id: "90", labelKey: "range.last90", days: 90, buckets: 30 },
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -60,7 +62,9 @@ function amount(value: string | number): string {
 }
 
 function dayLabel(at: number): string {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(new Date(at));
+  return new Intl.DateTimeFormat(currentLocale(), { day: "numeric", month: "short" }).format(
+    new Date(at),
+  );
 }
 
 /**
@@ -68,17 +72,12 @@ function dayLabel(at: number): string {
  * desktop/mobile variants), so the chart and the totals always describe the
  * same window.
  */
-function RangePills({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-}) {
+function RangePills({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const t = useT("analytics");
   return (
     <div
       role="group"
-      aria-label="Time range"
+      aria-label={t("range.label")}
       className="flex flex-wrap gap-1.5 rounded-full bg-secondary p-1"
     >
       {RANGES.map((range) => {
@@ -95,7 +94,7 @@ function RangePills({
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {range.days}d
+            {t("range.days", { days: range.days })}
           </button>
         );
       })}
@@ -116,8 +115,12 @@ function FlowTooltip({
   active?: boolean;
   payload?: ReadonlyArray<{ dataKey?: string | number; value?: number | string }>;
 }) {
+  const t = useT("analytics");
   if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0]?.dataKey !== undefined ? (payload[0] as { payload?: ChartPoint }).payload : undefined;
+  const point =
+    payload[0]?.dataKey !== undefined
+      ? (payload[0] as { payload?: ChartPoint }).payload
+      : undefined;
   const income = Number(payload.find((p) => p.dataKey === "income")?.value ?? 0);
   const expense = Number(payload.find((p) => p.dataKey === "expense")?.value ?? 0);
   return (
@@ -125,15 +128,15 @@ function FlowTooltip({
       <p className="font-bold">{point?.full ?? ""}</p>
       <p className="mt-1 flex items-center gap-1.5 tabular-nums">
         <span aria-hidden className="size-2 rounded-full bg-primary" />
-        In {amount(income.toFixed(4))}
+        {t("tooltip.in")} {amount(income.toFixed(4))}
       </p>
       <p className="mt-0.5 flex items-center gap-1.5 tabular-nums">
         <span aria-hidden className="size-2 rounded-full bg-chart-2" />
-        Out {amount(expense.toFixed(4))}
+        {t("tooltip.out")} {amount(expense.toFixed(4))}
       </p>
       {(point?.mined ?? 0) > 0 && (
         <p className="mt-0.5 tabular-nums text-muted-foreground">
-          Mined {amount((point?.mined ?? 0).toFixed(4))}
+          {t("tooltip.mined")} {amount((point?.mined ?? 0).toFixed(4))}
         </p>
       )}
     </div>
@@ -143,11 +146,12 @@ function FlowTooltip({
 type ChartPoint = { label: string; full: string; income: number; expense: number; mined: number };
 
 function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
+  const t = useT("analytics");
   const data = useMemo<ChartPoint[]>(
     () =>
       buckets.map((b) => ({
         label: dayLabel(b.start),
-        full: new Intl.DateTimeFormat("en-GB", {
+        full: new Intl.DateTimeFormat(currentLocale(), {
           day: "numeric",
           month: "short",
         }).format(new Date(b.start)),
@@ -157,17 +161,14 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
       })),
     [buckets],
   );
-  const peak = useMemo(
-    () => Math.max(...buckets.map((b) => b.income + b.expense), 1),
-    [buckets],
-  );
+  const peak = useMemo(() => Math.max(...buckets.map((b) => b.income + b.expense), 1), [buckets]);
 
   return (
     <div className="min-w-0 overflow-hidden">
       <div
         className="h-[250px] w-full min-w-0 overflow-hidden [&_.recharts-wrapper:focus]:outline-none"
         role="img"
-        aria-label="Money in and out across the selected period"
+        aria-label={t("flow.chartAria")}
       >
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 12, right: 12, bottom: 0, left: 12 }}>
@@ -227,14 +228,14 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
       <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1 text-[12px] font-semibold text-muted-foreground">
         <span className="flex shrink-0 items-center gap-2">
           <span aria-hidden className="size-2 rounded-full bg-primary" />
-          Income
+          {t("flow.income")}
         </span>
         <span className="flex shrink-0 items-center gap-2">
           <span aria-hidden className="size-2 rounded-full bg-chart-2" />
-          Expenses
+          {t("flow.expenses")}
         </span>
         <span className="ml-auto min-w-0 truncate text-right tabular-nums">
-          Peak {amount(peak.toFixed(4))} LMA / bucket
+          {t("flow.peak", { amount: amount(peak.toFixed(4)) })}
         </span>
       </div>
     </div>
@@ -242,6 +243,7 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
 }
 
 export function AnalyticsContent() {
+  const t = useT("analytics");
   const { transactions, wallet } = useWallet();
   const history = useInfiniteQuery<
     MiningHistoryPage,
@@ -311,7 +313,10 @@ export function AnalyticsContent() {
     for (const t of transactions) {
       const time = at(t);
       if (time < window.from || time >= window.to) continue;
-      const i = Math.min(range.buckets - 1, Math.floor(((time - window.from) / span) * range.buckets));
+      const i = Math.min(
+        range.buckets - 1,
+        Math.floor(((time - window.from) / span) * range.buckets),
+      );
       const bucket = list[i]!;
       if (t.direction === "received") bucket.income += moneyChartValue(t.netAmount);
       else bucket.expense += moneyChartValue(t.amount);
@@ -367,9 +372,7 @@ export function AnalyticsContent() {
         byAddress.set(t.counterpartyAddress, { volume, last: t });
       }
     }
-    return [...byAddress.entries()]
-      .sort((a, b) => b[1].volume - a[1].volume)
-      .slice(0, 4);
+    return [...byAddress.entries()].sort((a, b) => b[1].volume - a[1].volume).slice(0, 4);
   }, [transactions, window]);
 
   const settledSessions = sessions.filter(
@@ -386,9 +389,9 @@ export function AnalyticsContent() {
       <section className={`${CARD} p-6`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="font-display text-[22px] font-semibold">Flow</h2>
+            <h2 className="font-display text-[22px] font-semibold">{t("flow.title")}</h2>
             <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-              Money in vs money out · {range.label.toLowerCase()}
+              {t("flow.subtitle", { range: t(range.labelKey).toLowerCase() })}
             </p>
           </div>
           <RangePills value={rangeId} onChange={setRangeId} />
@@ -409,13 +412,13 @@ export function AnalyticsContent() {
         >
           <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
             <span aria-hidden className="size-2 rounded-full bg-primary" />
-            Income
+            {t("totals.income")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
             {show(totals.income)}
           </p>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            LMA received · {range.label.toLowerCase()}
+            {t("totals.incomeDetail", { range: t(range.labelKey).toLowerCase() })}
           </p>
         </section>
         <section
@@ -427,13 +430,13 @@ export function AnalyticsContent() {
         >
           <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
             <span aria-hidden className="size-2 rounded-full bg-chart-2" />
-            Expenses
+            {t("totals.expenses")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
             {show(totals.expense)}
           </p>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            LMA sent · {range.label.toLowerCase()}
+            {t("totals.expensesDetail", { range: t(range.labelKey).toLowerCase() })}
           </p>
         </section>
         <section
@@ -443,13 +446,16 @@ export function AnalyticsContent() {
             cardsIn ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
           )}
         >
-          <p className="text-[12px] font-semibold tracking-wide opacity-70">Transfers</p>
+          <p className="text-[12px] font-semibold tracking-wide opacity-70">
+            {t("totals.transfers")}
+          </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
             {totals.count}
           </p>
           <p className="mt-2 text-[11px] opacity-70">
-            Net {totals.net >= 0 ? "+" : "−"}
-            {show(Math.abs(totals.net))} LMA
+            {t("totals.net", {
+              amount: `${totals.net >= 0 ? "+" : "−"}${show(Math.abs(totals.net))}`,
+            })}
           </p>
         </section>
         <Link
@@ -462,13 +468,15 @@ export function AnalyticsContent() {
         >
           <p className="flex items-center gap-2 text-[12px] font-semibold opacity-80">
             <Icon icon={BitcoinCpuIcon} size={15} />
-            Mined
+            {t("totals.mined")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
             {amount(minedTotal)}
           </p>
           <p className="mt-2 text-[11px] opacity-70">
-            {settledSessions.length} {settledSessions.length === 1 ? "cycle" : "cycles"} collected
+            {settledSessions.length === 1
+              ? t("totals.cycleOne", { count: settledSessions.length })
+              : t("totals.cycles", { count: settledSessions.length })}
           </p>
         </Link>
       </div>
@@ -477,9 +485,9 @@ export function AnalyticsContent() {
       <div className="grid gap-4 lg:grid-cols-2">
         <section className={`${CARD} overflow-hidden`}>
           <div className="p-5 pb-2">
-            <h2 className="font-display text-[18px] font-semibold">Top counterparties</h2>
+            <h2 className="font-display text-[18px] font-semibold">{t("counterparties.title")}</h2>
             <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-              By volume · {range.label.toLowerCase()}
+              {t("counterparties.subtitle", { range: t(range.labelKey).toLowerCase() })}
             </p>
           </div>
           <ul>
@@ -500,7 +508,8 @@ export function AnalyticsContent() {
                         {entry.last.note || shortAddress(address)}
                       </span>
                       <span className="block truncate text-[11px] text-muted-foreground">
-                        {received ? "Received" : "Sent"} · {shortAddress(address)}
+                        {received ? t("counterparties.received") : t("counterparties.sent")} ·{" "}
+                        {shortAddress(address)}
                       </span>
                     </span>
                     <span className="shrink-0 text-[13px] font-bold tabular-nums">
@@ -512,20 +521,20 @@ export function AnalyticsContent() {
             })}
             {topCounterparties.length === 0 && (
               <li className="px-5 py-8 text-center text-[13px] text-muted-foreground">
-                Nothing moved in this period yet.
+                {t("counterparties.empty")}
               </li>
             )}
           </ul>
         </section>
         <section className={`${CARD} flex flex-col p-5`}>
-          <h2 className="font-display text-[18px] font-semibold">Mining inside the window</h2>
+          <h2 className="font-display text-[18px] font-semibold">{t("mining.title")}</h2>
           <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-            Collected mining against transfers in the same {range.days} days
+            {t("mining.subtitle", { days: range.days })}
           </p>
           <div className="mt-5 space-y-4">
             <div>
               <div className="flex items-baseline justify-between gap-2 text-[12px] font-semibold">
-                <span className="text-muted-foreground">Transfers moved</span>
+                <span className="text-muted-foreground">{t("mining.moved")}</span>
                 <span className="tabular-nums">{show(totals.income + totals.expense)} LMA</span>
               </div>
               <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-secondary">
@@ -539,7 +548,7 @@ export function AnalyticsContent() {
             </div>
             <div>
               <div className="flex items-baseline justify-between gap-2 text-[12px] font-semibold">
-                <span className="text-muted-foreground">Mining collected</span>
+                <span className="text-muted-foreground">{t("mining.collected")}</span>
                 <span className="tabular-nums">{show(totals.mined)} LMA</span>
               </div>
               <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-secondary">
@@ -556,7 +565,7 @@ export function AnalyticsContent() {
             to="/mining"
             className="mt-auto inline-flex items-center gap-1.5 pt-5 text-[13px] font-semibold text-primary-soft"
           >
-            Open mining
+            {t("mining.open")}
             <Icon icon={ArrowUpRight01Icon} size={14} />
           </Link>
         </section>

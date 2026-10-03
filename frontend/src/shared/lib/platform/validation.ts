@@ -1,8 +1,12 @@
+import { translate } from "@/shared/i18n";
 import { MAX_TRANSFER_MINOR, moneyFromMinorUnits, moneyToMinorUnits } from "@/shared/lib/wallet";
 
 /**
  * Every rule the wallet applies to what someone types, in one module with no UI imports. The forms
  * read these rules, and the backend re-checks the same limits, so the two never drift apart.
+ *
+ * The messages are translation keys resolved when the rule runs — the same validator answers the
+ * transfer form and the security pages, and each of them renders the message in its own language.
  */
 
 /** Upper bounds for every free-text field, so nothing unbounded can reach a request body. */
@@ -95,22 +99,24 @@ export const parseAmount = (
 ): AmountCheck => {
   const { minMinor = LIMITS.minAmountMinor, maxMinor = MAX_TRANSFER_MINOR } = options;
   const text = raw.trim();
-  if (!text) return { ok: false, value: "0", error: "Enter an amount." };
+  if (!text) return { ok: false, value: "0", error: translate("validation.amount.empty") };
   if (!new RegExp(`^\\d+(\\.\\d{1,${LIMITS.amountDecimals}})?$`).test(text)) {
-    return { ok: false, value: "0", error: "Enter a positive amount, with up to four decimals." };
+    return { ok: false, value: "0", error: translate("validation.amount.invalid") };
   }
   let minor: number;
   try {
     minor = moneyToMinorUnits(text);
   } catch {
-    return { ok: false, value: "0", error: "Enter a positive amount, with up to four decimals." };
+    return { ok: false, value: "0", error: translate("validation.amount.invalid") };
   }
-  if (minor <= 0) return { ok: false, value: "0", error: "Enter an amount greater than zero." };
+  if (minor <= 0) {
+    return { ok: false, value: "0", error: translate("validation.amount.zero") };
+  }
   if (minor < minMinor) {
-    return { ok: false, value: "0", error: "That amount is too small to send." };
+    return { ok: false, value: "0", error: translate("validation.amount.tooSmall") };
   }
   if (minor > maxMinor) {
-    return { ok: false, value: "0", error: "That amount is more than you can send." };
+    return { ok: false, value: "0", error: translate("validation.amount.tooLarge") };
   }
   return { ok: true, value: moneyFromMinorUnits(minor), error: "" };
 };
@@ -125,11 +131,19 @@ interface PasswordRule {
 export const passwordRules = (value: string): PasswordRule[] => [
   {
     id: "length",
-    label: `At least ${LIMITS.minPasswordLength} characters`,
+    label: translate("validation.password.minLength", { min: LIMITS.minPasswordLength }),
     met: value.length >= LIMITS.minPasswordLength,
   },
-  { id: "letter", label: "Contains a letter", met: /[A-Za-z]/.test(value) },
-  { id: "number", label: "Contains a number", met: /\d/.test(value) },
+  {
+    id: "letter",
+    label: translate("validation.password.letter"),
+    met: /[A-Za-z]/.test(value),
+  },
+  {
+    id: "number",
+    label: translate("validation.password.number"),
+    met: /\d/.test(value),
+  },
 ];
 
 /** True when a password satisfies every rule and stays inside the length cap. */
@@ -142,9 +156,11 @@ const isStrongPassword = (value: string): boolean =>
  */
 export const newPasswordError = (value: string, confirmation: string): string | null => {
   if (value.length > LIMITS.maxPasswordLength) {
-    return `Use at most ${LIMITS.maxPasswordLength} characters.`;
+    return translate("validation.password.tooLong", { max: LIMITS.maxPasswordLength });
   }
-  if (!isStrongPassword(value)) return "Use at least 8 characters with both letters and numbers.";
-  if (value !== confirmation) return "The two passwords do not match.";
+  if (!isStrongPassword(value)) {
+    return translate("validation.password.weak", { min: LIMITS.minPasswordLength });
+  }
+  if (value !== confirmation) return translate("validation.password.mismatch");
   return null;
 };

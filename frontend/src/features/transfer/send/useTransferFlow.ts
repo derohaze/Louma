@@ -5,8 +5,13 @@ import { isTransferTarget, normalizeTransferTarget, parseAmount } from "@/shared
 import { loadAddressBook } from "@/shared/lib/wallet";
 import { consumeTransferPrefill } from "@/shared/lib/wallet";
 import { moneyToMinorUnits, transferNet, transferTax } from "@/shared/lib/wallet";
+import { translate } from "@/shared/i18n";
 
 /**
+ * Every message this flow raises is translated where it is raised (`translate()` reads the language
+ * current at that moment), which keeps the state machine free of React and of the label list: the
+ * six-stage rules read exactly as the sentence the sender sees.
+ *
  * The send-flow state machine: three stages (address → amount → confirm), the server's quote and
  * approval for the intent on screen, and the idempotency key that makes a retry safe.
  *
@@ -98,11 +103,11 @@ export function useTransferFlow() {
     setError("");
     const target = address.trim();
     if (!isTransferTarget(target)) {
-      setError("Enter a Louma wallet address (LMA-XXXX-XXXX-XXXX) or a @handle.");
+      setError(translate("transfer.send.errors.invalidTarget"));
       return;
     }
     if (target.toLowerCase() === wallet?.address.toLowerCase()) {
-      setError("This is your own address. Use another wallet.");
+      setError(translate("transfer.send.errors.ownAddress"));
       return;
     }
     setBusy("address");
@@ -136,10 +141,12 @@ export function useTransferFlow() {
         { recipientAddress: verifiedAddress, amount: amountCheck.value, note },
       );
       if (!preview.quote || !preview.authorization) {
-        throw new Error("The amount could not be quoted. Try again.");
+        throw new Error(translate("transfer.send.errors.quoteFailed"));
       }
       if (!preview.quote.sufficient) {
-        setError(`That is more than this wallet holds. ${preview.quote.balance} is available.`);
+        setError(
+          translate("transfer.send.errors.insufficient", { balance: preview.quote.balance }),
+        );
         return;
       }
       setQuote(preview.quote);
@@ -159,7 +166,7 @@ export function useTransferFlow() {
   const completeTransfer = async () => {
     setError("");
     if (!quote || !recipient) {
-      setError("Confirm the recipient and the amount first.");
+      setError(translate("transfer.send.errors.confirmFirst"));
       return;
     }
     // An approval that belongs to a different intent than the card is showing is not carried
@@ -172,27 +179,29 @@ export function useTransferFlow() {
       setAuthorization(null);
       setQuote(null);
       setStage(2);
-      setError("Confirm the amount again so the server can approve it.");
+      setError(translate("transfer.send.errors.reapprove"));
       return;
     }
     if (frozen) {
-      setError("The wallet is frozen, so transfers are refused.");
+      setError(translate("transfer.send.errors.frozen"));
       return;
     }
     if (!authorization) {
-      setError("Confirm the amount again so the server can approve it.");
+      setError(translate("transfer.send.errors.reapprove"));
       setStage(2);
       return;
     }
     const proof = credential.trim();
     if (needsCredential && !proof) {
       setError(
-        usingCode ? "Enter a code from your authenticator app." : "Enter your transfer password.",
+        translate(
+          usingCode ? "transfer.send.errors.enterCode" : "transfer.send.errors.enterPassword",
+        ),
       );
       return;
     }
     if (usingCode && proof.length < 6) {
-      setError("That code is too short. Enter the six digits, or a recovery code.");
+      setError(translate("transfer.send.errors.shortCode"));
       return;
     }
     setBusy("send");

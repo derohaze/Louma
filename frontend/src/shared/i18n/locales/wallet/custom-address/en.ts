@@ -1,0 +1,20 @@
+export default {
+  title: "Custom Address",
+  description: "Set a memorable receiving address for your wallet.",
+  current: "Current address",
+  cadence: "You can change your custom address once every 30 days.",
+  nextChange: "Next change available on {date}.",
+  newAddress: "New address",
+  placeholder: "your_name",
+  save: "Save address",
+  updated: "Address updated.",
+  how: {
+    title: "How it works",
+    description: "What the custom address changes.",
+    handle: "Handle",
+    usedFor: "Used for",
+    usedForValue: "Receiving LMA as an alternative to the wallet address",
+    changes: "Changes",
+    changesValue: "Once every 30 days",
+  },
+};

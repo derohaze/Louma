@@ -1,4 +1,5 @@
 import type { ApiSecurityOverview } from "@/shared/api";
+import { currentLocale, translate } from "@/shared/i18n";
 import { securityFeatures, securityScoreMax, type SecurityFeatureId } from "./security-catalog";
 
 /**
@@ -30,45 +31,59 @@ export function securityStateText(
 ): string {
   switch (id) {
     case "two-factor": {
-      if (!overview?.twoFactor.enabled) return "Authenticator codes are not required";
-      return `${overview.twoFactor.recoveryCodesRemaining} recovery codes remaining`;
+      if (!overview?.twoFactor.enabled) return translate("security.state.twoFactor.off");
+      const remaining = overview.twoFactor.recoveryCodesRemaining;
+      return translate(
+        remaining === 1
+          ? "security.state.twoFactor.codesRemainingOne"
+          : "security.state.twoFactor.codesRemaining",
+        { count: remaining },
+      );
     }
     case "transfer-password": {
-      if (!overview?.transferPassword.enabled) return "No separate transfer password is set";
+      if (!overview?.transferPassword.enabled) {
+        return translate("security.state.transferPassword.off");
+      }
       const changedAt = overview.transferPassword.changedAt;
       return changedAt
-        ? `Last changed ${new Date(changedAt).toLocaleDateString()}`
-        : "Transfer password is set";
+        ? translate("security.state.transferPassword.lastChanged", {
+            date: new Date(changedAt).toLocaleDateString(currentLocale()),
+          })
+        : translate("security.state.transferPassword.set");
     }
   }
 }
 
-const eventLabels: Record<string, string> = {
-  login: "Successful sign-in",
-  login_failed: "Failed sign-in attempt",
-  logout: "Signed out",
-  password_changed: "Password changed",
-  two_factor_enabled: "Two-factor authentication enabled",
-  two_factor_disabled: "Two-factor authentication disabled",
-  two_factor_login_failed: "Failed authenticator check",
-  two_factor_login_succeeded: "Signed in with a second factor",
-  two_factor_setup_failed: "Authenticator setup failed",
-  recovery_codes_regenerated: "Recovery codes regenerated",
-  session_revoked: "Session revoked",
-  transfer_completed: "Transfer completed",
-  transfer_failed: "Transfer failed",
-  wallet_frozen: "Wallet frozen",
-  wallet_unfrozen: "Wallet unfrozen",
-  profile_updated: "Profile updated",
-  transfer_password_set: "Transfer password set",
-  transfer_password_changed: "Transfer password changed",
-  wallet_unfreeze_authorized: "Unfreeze authorized",
-  wallet_address_changed: "Receiving address changed",
-  refresh_token_reuse_detected: "Suspicious session reuse detected",
+/** Which string each recorded event type reads as; an unknown type falls back to the generic one. */
+const eventKeys: Record<string, string> = {
+  login: "login",
+  login_failed: "loginFailed",
+  logout: "logout",
+  password_changed: "passwordChanged",
+  two_factor_enabled: "twoFactorEnabled",
+  two_factor_disabled: "twoFactorDisabled",
+  two_factor_login_failed: "twoFactorLoginFailed",
+  two_factor_login_succeeded: "twoFactorLoginSucceeded",
+  two_factor_setup_failed: "twoFactorSetupFailed",
+  recovery_codes_regenerated: "recoveryCodesRegenerated",
+  session_revoked: "sessionRevoked",
+  transfer_completed: "transferCompleted",
+  transfer_failed: "transferFailed",
+  wallet_frozen: "walletFrozen",
+  wallet_unfrozen: "walletUnfrozen",
+  profile_updated: "profileUpdated",
+  transfer_password_set: "transferPasswordSet",
+  transfer_password_changed: "transferPasswordChanged",
+  wallet_unfreeze_authorized: "walletUnfreezeAuthorized",
+  wallet_address_changed: "walletAddressChanged",
+  refresh_token_reuse_detected: "refreshTokenReuseDetected",
 };
 
 export function securityEventTitle(eventType: string): string {
-  return eventLabels[eventType] ?? "Security activity";
+  const key = eventKeys[eventType];
+  return key
+    ? translate(`security.state.events.${key}`)
+    : translate("security.state.events.unknown");
 }
 
 /** Outcome of the recorded event, mapped to the tone the alert list renders. */
@@ -76,20 +91,18 @@ export function securityEventLevel(outcome: "success" | "failure"): "success" | 
   return outcome === "success" ? "success" : "warning";
 }
 
+/**
+ * A country code as the reader's language writes it (the platform's own region names), so the list
+ * is not a second dictionary to keep translated.
+ */
 export function countryName(code: string | null): string {
-  if (!code) return "Not set";
+  if (!code) return translate("common.state.notSet");
   try {
-    return new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code;
+    return new Intl.DisplayNames([currentLocale()], { type: "region" }).of(code) ?? code;
   } catch {
     return code;
   }
 }
 
-export const geoCountries: readonly { code: string; name: string }[] = [
-  { code: "EG", name: "Egypt" },
-  { code: "AE", name: "United Arab Emirates" },
-  { code: "SA", name: "Saudi Arabia" },
-  { code: "DE", name: "Germany" },
-  { code: "GB", name: "United Kingdom" },
-  { code: "US", name: "United States" },
-];
+/** The regions offered in the profile form; their names come from `countryName`. */
+export const geoCountries: readonly string[] = ["EG", "AE", "SA", "DE", "GB", "US"];

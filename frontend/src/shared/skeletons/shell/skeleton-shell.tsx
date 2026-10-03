@@ -1,10 +1,12 @@
+import { useT } from "@/shared/i18n";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 export function Shell({ title, children }: { title: string; children: React.ReactNode }) {
+  const t = useT("common");
   return (
     <div aria-busy="true">
       <p role="status" className="sr-only">
-        Loading {title}…
+        {t("loading.page", { title })}
       </p>
       {children}
     </div>

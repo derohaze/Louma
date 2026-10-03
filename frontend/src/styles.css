@@ -235,6 +235,18 @@
   --color-magenta: var(--magenta);
 }
 
+/*
+ * Arabic typography: Manrope and Sora carry no Arabic glyphs, so an Arabic document would fall back
+ * to whatever the operating system happens to have. IBM Plex Sans Arabic is loaded with them (see
+ * the font stylesheet in `__root.tsx`) and becomes the first family whenever the document is
+ * Arabic — the Latin families stay behind it, so an address, an amount, or a ticker keeps the
+ * dashboard's own face inside an Arabic sentence.
+ */
+html[lang="ar"] {
+  --font-sans: "IBM Plex Sans Arabic", "Manrope", sans-serif;
+  --font-display: "IBM Plex Sans Arabic", "Sora", sans-serif;
+}
+
 @utility dotted-canvas {
   background-color: var(--background);
   background-image: radial-gradient(
@@ -296,7 +308,9 @@
   .t-badge {
     position: absolute;
     top: -6px;
-    right: -8px;
+    /* Logical edge, so the notification dot follows the reading direction: the bell's corner in
+       Arabic is the other side of the button. */
+    inset-inline-end: -8px;
     pointer-events: none;
     will-change: transform;
   }

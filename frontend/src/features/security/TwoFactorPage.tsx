@@ -11,10 +11,14 @@ import { api, messageForError } from "@/shared/api";
 import { LIMITS, isOneTimeCode, oneTimeCodeDigits } from "@/shared/lib/platform";
 import { securityFeature } from "@/shared/lib/security";
 import { dateText } from "@/shared/lib/wallet";
+import { useT, useTranslate } from "@/shared/i18n";
 import { SecurityErrorText } from "@/features/security/SecurityMessage";
 
 /** The Two-Factor page: authenticator enrolment, recovery codes, and disable flow. */
 export function TwoFactorPage() {
+  const t = useT("security.twoFactor");
+  const common = useT("common");
+  const translate = useTranslate();
   const feature = securityFeature("two-factor");
   const { security, refreshSecurity } = useWallet();
   const enabled = security?.twoFactor.enabled ?? false;
@@ -58,7 +62,7 @@ export function TwoFactorPage() {
       setSetup({ secret: response.secret, otpauthUri: response.otpauthUri });
       setStartingSetup(false);
       setPassword("");
-      return "Scan the key in your authenticator app, then enter the six-digit code it shows.";
+      return t("messages.started");
     });
 
   const cancelSetup = () => {
@@ -97,7 +101,7 @@ export function TwoFactorPage() {
       setSetup(null);
       setCode("");
       await refreshSecurity();
-      return "Two-factor authentication is on. Store your recovery codes now.";
+      return t("messages.enabled");
     });
 
   const disable = () =>
@@ -108,7 +112,7 @@ export function TwoFactorPage() {
       setCodes([]);
       setConfirmingOff(false);
       await refreshSecurity();
-      return "Two-factor authentication is off.";
+      return t("messages.disabled");
     });
 
   const regenerate = () =>
@@ -121,33 +125,33 @@ export function TwoFactorPage() {
       setCode("");
       setPassword("");
       await refreshSecurity();
-      return "New recovery codes generated. The old set no longer works.";
+      return t("messages.regenerated");
     });
 
   return (
     <>
-      <PageHeader title={feature.title} subtitle={feature.description} />
+      <PageHeader
+        title={translate(feature.titleKey)}
+        subtitle={translate(feature.descriptionKey)}
+      />
       <div className="space-y-4">
         <Panel
-          title={enabled ? "Two-factor authentication is on" : "Two-factor authentication is off"}
-          description={feature.description}
+          title={t(enabled ? "on.title" : "off.title")}
+          description={translate(feature.descriptionKey)}
           action={
             <Switch
               checked={confirmingOff ? false : enabled || setup !== null || startingSetup}
               onCheckedChange={toggle}
               disabled={busy}
-              aria-label="Two-factor authentication"
+              aria-label={t("switchLabel")}
             />
           }
         >
           {enabled && confirmingOff ? (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Enter your account password and a current authenticator or recovery code to turn
-                two-factor off.
-              </p>
+              <p className="text-sm text-muted-foreground">{t("disable.body")}</p>
               <label className="block max-w-xs text-sm font-semibold">
-                Account password
+                {t("fields.password")}
                 <Input
                   className="mt-2"
                   type="password"
@@ -158,7 +162,7 @@ export function TwoFactorPage() {
                 />
               </label>
               <label className="block max-w-xs text-sm font-semibold">
-                Authenticator or recovery code
+                {t("fields.code")}
                 <Input
                   className="mt-2"
                   autoComplete="one-time-code"
@@ -173,7 +177,7 @@ export function TwoFactorPage() {
                   disabled={busy || !password || code.length < 6}
                   onClick={() => void disable()}
                 >
-                  {busy ? "Turning off…" : "Turn off two-factor"}
+                  {t(busy ? "disable.busy" : "disable.action")}
                 </Button>
                 <Button
                   variant="outline"
@@ -186,15 +190,19 @@ export function TwoFactorPage() {
                     setCode("");
                   }}
                 >
-                  Cancel
+                  {common("actions.cancel")}
                 </Button>
               </div>
             </div>
           ) : enabled ? (
             <p className="text-sm text-muted-foreground">
-              {security?.twoFactor.recoveryCodesRemaining ?? 0} recovery codes remaining
+              {(security?.twoFactor.recoveryCodesRemaining ?? 0) === 1
+                ? t("enabled.remainingOne", { count: 1 })
+                : t("enabled.remaining", {
+                    count: security?.twoFactor.recoveryCodesRemaining ?? 0,
+                  })}
               {security?.twoFactor.enabledAt
-                ? ` · enabled ${dateText(security.twoFactor.enabledAt)}`
+                ? t("enabled.enabledAt", { date: dateText(security.twoFactor.enabledAt) })
                 : ""}
               .
             </p>
@@ -209,11 +217,11 @@ export function TwoFactorPage() {
                     marginSize={1}
                     fgColor="#20123A"
                     bgColor="#FFFFFF"
-                    aria-label="Authenticator setup QR code"
+                    aria-label={t("setup.qrLabel")}
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs text-muted-foreground">Authenticator key</p>
+                  <p className="text-xs text-muted-foreground">{t("setup.key")}</p>
                   <div className="mt-1 flex items-center gap-2 rounded-xl bg-secondary p-3">
                     <code className="min-w-0 flex-1 break-all text-sm font-semibold">
                       {setup.secret}
@@ -223,7 +231,7 @@ export function TwoFactorPage() {
                 </div>
               </div>
               <label className="block max-w-xs text-sm font-semibold">
-                Six-digit code
+                {t("setup.code")}
                 <Input
                   className="mt-2"
                   inputMode="numeric"
@@ -237,20 +245,18 @@ export function TwoFactorPage() {
               <div className="flex flex-wrap gap-2">
                 <Button disabled={busy || !isOneTimeCode(code)} onClick={() => void confirmSetup()}>
                   <Icon icon={LockIcon} size={16} />
-                  {busy ? "Checking…" : "Turn on two-factor"}
+                  {t(busy ? "setup.checking" : "setup.confirm")}
                 </Button>
                 <Button variant="outline" onClick={cancelSetup}>
-                  Cancel
+                  {common("actions.cancel")}
                 </Button>
               </div>
             </div>
           ) : startingSetup ? (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Confirm your account password to start setting up an authenticator app.
-              </p>
+              <p className="text-sm text-muted-foreground">{t("start.body")}</p>
               <label className="block max-w-xs text-sm font-semibold">
-                Account password
+                {t("fields.password")}
                 <Input
                   className="mt-2"
                   type="password"
@@ -263,25 +269,19 @@ export function TwoFactorPage() {
               <div className="flex flex-wrap gap-2">
                 <Button disabled={busy || !password} onClick={() => void startSetup()}>
                   <Icon icon={LockIcon} size={16} />
-                  {busy ? "Starting…" : "Start setup"}
+                  {t(busy ? "start.busy" : "start.action")}
                 </Button>
                 <Button variant="outline" onClick={cancelSetup}>
-                  Cancel
+                  {common("actions.cancel")}
                 </Button>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              Turn the switch on to set up an authenticator app: confirm your account password, then
-              scan the secret key and enter the first code it shows.
-            </p>
+            <p className="text-sm text-muted-foreground">{t("off.body")}</p>
           )}
         </Panel>
         {codes.length > 0 && (
-          <Panel
-            title="Recovery codes"
-            description="Each code works once. They are shown only now."
-          >
+          <Panel title={t("recovery.title")} description={t("recovery.description")}>
             <div className="grid gap-2 sm:grid-cols-4">
               {codes.map((code) => (
                 <code
@@ -294,21 +294,16 @@ export function TwoFactorPage() {
             </div>
             <div className="mt-4">
               <CopyButton text={codes.join("\n")} />
-              <FormMessage tone="ok">
-                Copy them somewhere safe before leaving this page.
-              </FormMessage>
+              <FormMessage tone="ok">{t("recovery.copyNote")}</FormMessage>
             </div>
           </Panel>
         )}
         {enabled && (
           <>
-            <Panel
-              title="Regenerate recovery codes"
-              description="Your account password and a current authenticator or recovery code are required."
-            >
+            <Panel title={t("regenerate.title")} description={t("regenerate.description")}>
               <div className="max-w-xs space-y-4">
                 <label className="block text-sm font-semibold">
-                  Account password
+                  {t("fields.password")}
                   <Input
                     className="mt-2"
                     type="password"
@@ -319,7 +314,7 @@ export function TwoFactorPage() {
                   />
                 </label>
                 <label className="block text-sm font-semibold">
-                  Authenticator or recovery code
+                  {t("fields.code")}
                   <Input
                     className="mt-2"
                     maxLength={64}
@@ -335,7 +330,7 @@ export function TwoFactorPage() {
                   onClick={() => void regenerate()}
                 >
                   <Icon icon={RefreshIcon} size={16} />
-                  Generate new codes
+                  {t("regenerate.action")}
                 </Button>
               </div>
             </Panel>

@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
+import { translate, useT } from "@/shared/i18n";
 import { Button } from "@/shared/ui/button";
 import { CopyButton, Icon, PageHeader } from "@/shared/ui/page";
 import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
@@ -39,7 +40,7 @@ type Slice = { start: number; income: number; expense: number };
 function FlowBars({ slices }: { slices: readonly Slice[] }) {
   const peak = Math.max(...slices.map((s) => s.income + s.expense), 1);
   return (
-    <div role="img" aria-label="Money in and out across the last 30 days">
+    <div role="img" aria-label={translate("wallet.page.flow.chartAria")}>
       <div className="flex h-[110px] items-end gap-2">
         {slices.map((slice, index) => (
           <div key={index} className="flex h-full min-w-0 flex-1 flex-col items-center gap-1.5">
@@ -110,21 +111,21 @@ function BreakdownRows({ rows }: { rows: readonly Row[] }) {
       {rows.map((row) => {
         const filled = Math.round(row.share * DOT_COUNT);
         return (
-          <div key={row.label} className="flex items-center gap-3">
+          <div key={row.label} className="flex items-center gap-2 sm:gap-3">
             <span
-              className={`w-24 shrink-0 rounded-full px-3 py-1.5 text-center text-[12px] font-bold ${row.pill}`}
+              className={`w-[74px] shrink-0 rounded-full px-2 py-1.5 text-center text-[11px] font-bold sm:w-24 sm:px-3 sm:text-[12px] ${row.pill}`}
             >
               {row.label}
             </span>
-            <span className="flex min-w-0 flex-1 gap-1.5" aria-hidden>
+            <span className="flex min-w-0 flex-1 gap-1 sm:gap-1.5" aria-hidden>
               {Array.from({ length: DOT_COUNT }, (_, i) => (
                 <span
                   key={i}
-                  className={`size-2.5 shrink-0 rounded-full ${i < filled ? row.dot : "bg-secondary"}`}
+                  className={`size-2 shrink-0 rounded-full sm:size-2.5 ${i < filled ? row.dot : "bg-secondary"}`}
                 />
               ))}
             </span>
-            <span className="w-11 shrink-0 text-right text-[13px] font-bold tabular-nums">
+            <span className="w-9 shrink-0 text-right text-[12px] font-bold tabular-nums sm:w-11 sm:text-[13px]">
               {Math.round(row.share * 100)}%
             </span>
           </div>
@@ -140,6 +141,8 @@ function BreakdownRows({ rows }: { rows: readonly Row[] }) {
  * other page, with the primary address kept in one slim strip on top.
  */
 export function WalletContent() {
+  const t = useT("wallet.page");
+  const common = useT("common");
   const { wallet, transactions } = useWallet();
   const history = useInfiniteQuery<
     MiningHistoryPage,
@@ -256,19 +259,19 @@ export function WalletContent() {
   const deltaUp = (stats.deltaPct ?? 0) >= 0;
   const rows: Row[] = [
     {
-      label: "Received",
+      label: common("direction.received"),
       share: stats.total > 0 ? stats.income / stats.total : 0,
       pill: "bg-primary text-primary-foreground",
       dot: "bg-primary",
     },
     {
-      label: "Sent",
+      label: common("direction.sent"),
       share: stats.total > 0 ? stats.expense / stats.total : 0,
       pill: "bg-chart-2 text-primary-foreground",
       dot: "bg-chart-2",
     },
     {
-      label: "Mined",
+      label: t("breakdown.mined"),
       share: stats.total > 0 ? stats.mined / stats.total : 0,
       pill: "bg-primary/20 text-primary",
       dot: "bg-primary/40",
@@ -278,13 +281,13 @@ export function WalletContent() {
   return (
     <>
       <PageHeader
-        title="Wallet"
-        subtitle="Your wallet balance and receiving address."
+        title={t("title")}
+        subtitle={t("description")}
         action={
           <Link to="/transfer">
             <Button>
               <Icon icon={ArrowUpRight01Icon} size={17} />
-              Transfer
+              {t("transfer")}
             </Button>
           </Link>
         }
@@ -305,11 +308,11 @@ export function WalletContent() {
               marginSize={1}
               fgColor="#20123A"
               bgColor="#FFFFFF"
-              aria-label="Receiving address QR code"
+              aria-label={t("qrAria")}
             />
           </div>
         )}
-        <span className="text-[12px] font-semibold text-muted-foreground">Primary address</span>
+        <span className="text-[12px] font-semibold text-muted-foreground">{t("primaryAddress")}</span>
         <code className="min-w-0 flex-1 break-all text-sm font-semibold tabular-nums">
           {wallet?.address ?? "—"}
         </code>
@@ -321,7 +324,7 @@ export function WalletContent() {
             aria-hidden
             className={`size-2 rounded-full ${frozen ? "bg-destructive" : "bg-success"}`}
           />
-          {frozen ? "Frozen" : "Active"}
+          {frozen ? common("state.frozen") : common("state.active")}
         </span>
         <span className="text-[12px] text-muted-foreground tabular-nums">
           {wallet?.createdAt ? dateText(wallet.createdAt) : ""}
@@ -336,9 +339,9 @@ export function WalletContent() {
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="font-display font-semibold">Balance &amp; Flow</h2>
+              <h2 className="font-display font-semibold">{t("flow.title")}</h2>
               <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-                Money in vs money out
+                {t("flow.subtitle")}
               </p>
             </div>
             <p className="text-right font-display text-xl font-bold tabular-nums">
@@ -368,7 +371,7 @@ export function WalletContent() {
           style={{ animationDelay: "150ms" }}
           className="card-enter card-enter-hover flex flex-col rounded-[22px] border bg-card p-5 shadow-sm"
         >
-          <h2 className="font-display font-semibold">Volume Growth</h2>
+          <h2 className="font-display font-semibold">{t("growth.title")}</h2>
           <p className="mt-4 flex items-baseline gap-2">
             <span
               className={`font-display text-3xl font-bold tabular-nums ${stats.deltaPct === null ? "" : deltaUp ? "text-success" : "text-destructive"}`}
@@ -376,7 +379,7 @@ export function WalletContent() {
               {stats.deltaPct === null ? "—" : `${deltaUp ? "+" : ""}${stats.deltaPct}%`}
             </span>
             <span className="text-[12px] font-semibold text-muted-foreground tabular-nums">
-              (prev {show(stats.prevVolume)})
+              {t("growth.prev", { amount: show(stats.prevVolume) })}
             </span>
           </p>
           <div className="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-secondary">
@@ -386,8 +389,12 @@ export function WalletContent() {
             />
           </div>
           <p className="mt-auto pt-4 text-[12px] leading-relaxed text-muted-foreground">
-            {stats.count} {stats.count === 1 ? "transfer" : "transfers"} moved {show(stats.volume)}{" "}
-            LMA in the last {WINDOW_DAYS} days.
+            {t("growth.summary", {
+              count: stats.count,
+              unit: stats.count === 1 ? common("units.transferOne") : common("units.transferOther"),
+              volume: show(stats.volume),
+              days: WINDOW_DAYS,
+            })}
           </p>
         </section>
 
@@ -395,12 +402,12 @@ export function WalletContent() {
           style={{ animationDelay: "225ms" }}
           className="card-enter card-enter-hover flex flex-col items-center rounded-[22px] border bg-card p-5 text-center shadow-sm"
         >
-          <h2 className="font-display font-semibold">Income Share</h2>
+          <h2 className="font-display font-semibold">{t("income.title")}</h2>
           <div className="py-2">
             <IncomeRing share={stats.incomeShare} />
           </div>
           <p className="mt-auto text-[12px] text-muted-foreground">
-            Share of the flow coming in · last {WINDOW_DAYS} days
+            {t("income.note", { days: WINDOW_DAYS })}
           </p>
         </section>
       </div>
@@ -411,9 +418,9 @@ export function WalletContent() {
           style={{ animationDelay: "300ms" }}
           className="card-enter card-enter-hover rounded-[22px] border bg-card p-5 shadow-sm"
         >
-          <h2 className="font-display font-semibold">Flow Breakdown</h2>
+          <h2 className="font-display font-semibold">{t("breakdown.title")}</h2>
           <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-            Where the money sits · last {WINDOW_DAYS} days
+            {t("breakdown.subtitle", { days: WINDOW_DAYS })}
           </p>
           <BreakdownRows rows={rows} />
         </section>
@@ -424,7 +431,7 @@ export function WalletContent() {
             className="card-enter card-enter-hover rounded-[22px] bg-foreground p-5 text-background shadow-sm"
           >
             <p className="font-display text-3xl font-bold tabular-nums">+{stats.count}</p>
-            <p className="mt-1 text-[12px] opacity-70">Transfers · last {WINDOW_DAYS} days</p>
+            <p className="mt-1 text-[12px] opacity-70">{t("totals.transfers", { days: WINDOW_DAYS })}</p>
           </section>
           <section
             style={{ animationDelay: "450ms" }}
@@ -434,8 +441,12 @@ export function WalletContent() {
               className={`text-[15px] font-bold tabular-nums ${stats.deltaPct === null ? "" : deltaUp ? "text-success" : "text-destructive"}`}
             >
               {stats.deltaPct === null
-                ? "—"
-                : `${deltaUp ? "↑" : "↓"} ${Math.abs(stats.deltaPct)}% vs prev (${stats.prevCount})`}
+                ? common("state.none")
+                : t("totals.vsPrev", {
+                    arrow: deltaUp ? "↑" : "↓",
+                    percent: Math.abs(stats.deltaPct),
+                    count: stats.prevCount,
+                  })}
             </p>
             <div className="mt-3 h-px w-full bg-border" />
           </section>
@@ -445,7 +456,7 @@ export function WalletContent() {
           >
             <p className="font-display text-xl font-bold tabular-nums">{show(stats.volume)} LMA</p>
             <p className="mt-1 text-[12px] opacity-70 tabular-nums">
-              moved out of {show(stats.total)} total volume
+              {t("totals.movedOut", { total: show(stats.total) })}
             </p>
           </section>
         </div>

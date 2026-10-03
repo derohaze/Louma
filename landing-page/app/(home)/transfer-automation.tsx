@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useT } from '@/lib/i18n';
 
 type Stage = 'review' | 'processing' | 'success';
 
@@ -53,6 +54,7 @@ const layerClass = (visible: boolean, reduced: boolean) =>
   );
 
 export function TransferAutomationHero() {
+  const t = useT('home');
   const reducedMotion = usePrefersReducedMotion();
   const [stage, setStage] = useState<Stage>('review');
   const [dragX, setDragX] = useState(0);
@@ -156,42 +158,42 @@ export function TransferAutomationHero() {
       {/* Formal copy on a solid panel: readable in light and dark mode */}
       <div className="min-w-0 rounded-[2.5rem] border border-black/10 bg-white p-6 text-neutral-900 shadow-sm sm:p-8 dark:border-white/10 dark:bg-neutral-950 dark:text-neutral-50">
         <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500 dark:text-neutral-400">
-          Louma · Digital wallet for LMA
+          {t('hero.eyebrow')}
         </p>
         <h2 className="mt-3 text-3xl font-medium tracking-tight sm:text-4xl lg:text-[2.75rem] lg:leading-[1.08]">
-          Send LMA like sending a message.
+          {t('hero.title')}
         </h2>
         <p className="mt-4 max-w-xl text-[15px] leading-7 text-neutral-600 dark:text-neutral-300">
-          Choose a recipient, confirm the amount, and Louma settles the transfer — verified,
-          confirmed, and receipted. Every movement is balanced in the ledger and available for
-          audit at any time.
+          {t('hero.body')}
         </p>
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <a
             href="https://app.loumapay.com"
             className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
           >
-            Open your wallet
+            {t('hero.primaryAction')}
             <ArrowRight className="size-4" />
           </a>
           <Link
             href="/features"
             className="inline-flex min-h-[44px] cursor-pointer items-center rounded-full border border-neutral-300 px-5 py-3 text-sm font-medium transition-colors hover:bg-neutral-100 dark:border-white/20 dark:hover:bg-white/10"
           >
-            How settlement works
+            {t('hero.secondaryAction')}
           </Link>
         </div>
         <dl className="mt-6 flex flex-wrap gap-x-8 gap-y-3 border-t border-neutral-200 pt-5 text-sm dark:border-white/10">
-          {[
-            { id: 'fee', term: 'Network fee', value: '1%' },
-            { id: 'time', term: 'Median settlement', value: '2.4 seconds' },
-            { id: 'receipt', term: 'Receipt', value: 'With every transfer' },
-          ].map((fact) => (
-            <div key={fact.id}>
+          {(['fee', 'time', 'receipt'] as const).map((id) => {
+            const fact = {
+              term: t(`hero.facts.${id}.term` as 'hero.facts.fee.term'),
+              value: t(`hero.facts.${id}.value` as 'hero.facts.fee.value'),
+            };
+            return (
+            <div key={id}>
               <dt className="text-xs text-neutral-500 dark:text-neutral-400">{fact.term}</dt>
               <dd className="mt-0.5 font-semibold tabular-nums">{fact.value}</dd>
             </div>
-          ))}
+            );
+          })}
         </dl>
       </div>
 
@@ -199,7 +201,7 @@ export function TransferAutomationHero() {
       <div className="mx-auto flex h-[500px] w-[300px] max-w-full flex-col rounded-[2.5rem] bg-white p-4 text-neutral-900 shadow-2xl shadow-black/25 lg:justify-self-end dark:bg-neutral-950 dark:text-neutral-50 dark:shadow-black/60">
         {/* Card header — brand only */}
         <div className="flex h-7 shrink-0 items-center justify-center">
-          <span className="text-[15px] font-semibold tracking-tight">Louma Pay</span>
+          <span className="text-[15px] font-semibold tracking-tight">{t('hero.card.brand')}</span>
         </div>
 
         {/* Viewport — fixed, stages stack on top of each other */}
@@ -207,7 +209,7 @@ export function TransferAutomationHero() {
           {/* REVIEW layer */}
           <div aria-hidden={stage !== 'review'} className={layerClass(stage === 'review', reducedMotion)}>
             <p className="pt-6 text-center text-[11px] text-neutral-500 dark:text-neutral-400">
-              Sending payment to {RECIPIENT.name}
+              {t('hero.card.sendingTo', { name: RECIPIENT.name })}
             </p>
             <div className="mt-4 flex flex-col items-center">
               <span className="relative flex size-20 items-center justify-center overflow-hidden rounded-full bg-white dark:bg-neutral-800">
@@ -254,7 +256,7 @@ export function TransferAutomationHero() {
                   className="stroke-neutral-900 dark:stroke-neutral-100"
                 />
               </svg>
-              <p className="mt-5 text-sm font-semibold">Processing…</p>
+              <p className="mt-5 text-sm font-semibold">{t('hero.card.processing')}</p>
             </div>
           </div>
 
@@ -275,9 +277,7 @@ export function TransferAutomationHero() {
                 </svg>
               </span>
               <p className="mt-4 text-center text-lg leading-snug font-semibold">
-                Payment
-                <br />
-                Successful!
+                {t('hero.card.success')}
               </p>
               <p className="mt-3 text-xl font-bold tracking-tight whitespace-nowrap tabular-nums">
                 {AMOUNT} <span className="text-sm font-semibold text-neutral-500 dark:text-neutral-400">LMA</span>
@@ -294,7 +294,7 @@ export function TransferAutomationHero() {
               ref={trackRef}
               role="slider"
               tabIndex={0}
-              aria-label={`Swipe to pay ${AMOUNT} LMA to ${RECIPIENT.name}`}
+              aria-label={t('hero.card.swipeAria', { amount: AMOUNT, name: RECIPIENT.name })}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={Math.round(dragRatio * 100)}
@@ -338,7 +338,7 @@ export function TransferAutomationHero() {
                   transform: `translateX(${dragRatio * 10}px)`,
                 }}
               >
-                Swipe to pay
+                {t('hero.card.swipeToPay')}
               </span>
             </div>
           </div>
@@ -351,7 +351,7 @@ export function TransferAutomationHero() {
               tabIndex={stage === 'success' ? 0 : -1}
               className="min-h-[44px] cursor-pointer rounded-full border border-neutral-300 px-5 py-2 text-xs font-semibold transition-colors hover:bg-neutral-100 dark:border-white/20 dark:hover:bg-white/10"
             >
-              Send another transfer
+              {t('hero.card.another')}
             </button>
           </div>
         </div>

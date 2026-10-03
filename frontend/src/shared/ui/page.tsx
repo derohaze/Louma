@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CheckmarkCircle01Icon, Copy01Icon } from "@hugeicons/core-free-icons";
+import { useT } from "@/shared/i18n";
 import { Button } from "@/shared/ui/button";
 
 export type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
@@ -56,6 +57,7 @@ export function EmptyState({
 }
 
 export function CopyButton({ text }: { text: string }) {
+  const t = useT("common");
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
   useEffect(
@@ -68,8 +70,8 @@ export function CopyButton({ text }: { text: string }) {
     <Button
       variant="ghost"
       size="icon"
-      title="Copy address"
-      aria-label="Copy address"
+      title={t("actions.copyAddress")}
+      aria-label={t("actions.copyAddress")}
       onClick={async () => {
         let copySucceeded = false;
         try {
@@ -106,7 +108,7 @@ export function CopyButton({ text }: { text: string }) {
           {...(copied ? { className: "text-success" } : {})}
         />
       </span>
-      <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
+      <span className="sr-only">{t(copied ? "actions.copied" : "actions.copy")}</span>
     </Button>
   );
 }

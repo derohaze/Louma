@@ -7,6 +7,7 @@ import {
   setSessionCsrfToken,
 } from "@/shared/api/session/session";
 import { clearSessionHint, writeSessionHint } from "@/shared/api/session/session-hint";
+import { translate } from "@/shared/i18n";
 import {
   CSRF_HEADER,
   forgetPreauthCsrfToken,
@@ -40,7 +41,7 @@ async function decodeResponse<T>(response: Response): Promise<T> {
         ? (payload as { error?: { code?: unknown; message?: unknown } }).error
         : undefined;
     throw new ApiError(
-      typeof error?.message === "string" ? error.message : "The request could not be completed.",
+      typeof error?.message === "string" ? error.message : translate("common.errors.requestFailed"),
       response.status,
       typeof error?.code === "string" ? error.code : "request_failed",
     );
@@ -231,5 +232,5 @@ export const api = {
 };
 
 export function messageForError(error: unknown): string {
-  return error instanceof Error ? error.message : "The request could not be completed. Try again.";
+  return error instanceof Error ? error.message : translate("common.errors.requestFailedRetry");
 }

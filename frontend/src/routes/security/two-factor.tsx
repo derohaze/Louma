@@ -7,9 +7,9 @@ import { pageHead } from "@/shared/lib/platform";
 const feature = securityFeature("two-factor");
 
 export const Route = createFileRoute("/security/two-factor")({
-  head: () => pageHead(feature.title, feature.description),
+  head: () => pageHead(feature.titleKey, feature.descriptionKey),
   component: () => (
-    <WalletPage title={feature.title}>
+    <WalletPage titleKey={feature.titleKey}>
       <TwoFactorPage />
     </WalletPage>
   ),

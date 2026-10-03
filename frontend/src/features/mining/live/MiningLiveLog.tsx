@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useT } from "@/shared/i18n";
 import { Panel } from "@/shared/ui/panels";
 
 /**
@@ -23,6 +24,7 @@ const MAX_VISIBLE = 6;
 const CHAR_TICK_MS = 28;
 
 export function MiningLiveLog({ events }: { events: FeedLine[] }) {
+  const t = useT("mining.cycle");
   const visible = events.slice(-MAX_VISIBLE);
   const done = visible.slice(0, -1);
   const current = visible.length > 0 ? visible[visible.length - 1] : undefined;
@@ -55,13 +57,13 @@ export function MiningLiveLog({ events }: { events: FeedLine[] }) {
     enterClass ? { animationDelay: `${line.delay}ms` } : undefined;
 
   return (
-    <Panel title="Live mining activity">
-      <p className="sr-only">Mining activity. This feed is decorative and changes nothing.</p>
+    <Panel title={t("live.title")}>
+      <p className="sr-only">{t("live.srNote")}</p>
       <div
         aria-hidden
         className="flex h-36 flex-col justify-end gap-1 overflow-hidden font-mono text-[11px] leading-5 text-[#9898A0] select-none [mask-image:linear-gradient(to_bottom,transparent,black_28px)]"
       >
-        {visible.length === 0 && <p>Waiting for cycle events…</p>}
+        {visible.length === 0 && <p>{t("live.waiting")}</p>}
         {done.map((line) => (
           <p key={line.id} className={`truncate ${enterClass ?? ""}`} style={delayOf(line)}>
             {line.text}

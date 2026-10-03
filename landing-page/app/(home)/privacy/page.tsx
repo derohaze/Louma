@@ -1,21 +1,30 @@
+import type { Metadata } from 'next';
 import { LegalPage } from '@/components/layouts/legal-page';
-import { privacySections } from './sections';
 import { createMetadata } from '@/lib/metadata';
+import { createT, getRequestLanguage, sectionIn } from '@/lib/i18n';
 
-export const metadata = createMetadata({
-  title: 'Privacy Policy',
-  description:
-    'How Louma collects, uses, protects, and shares data across the wallet.',
-  path: '/privacy',
-});
-export default function PrivacyPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const t = createT(await getRequestLanguage(), 'legal.privacy');
+
+  return createMetadata({
+    title: t('seo.title'),
+    description: t('seo.description'),
+    path: '/privacy',
+  });
+}
+
+export default async function PrivacyPage() {
+  const language = await getRequestLanguage();
+  const t = createT(language, 'common');
+  const privacy = sectionIn(language, 'legal.privacy');
+
   return (
     <LegalPage
-      eyebrow="Legal"
-      title="Privacy Policy"
-      description="How Louma collects, uses, protects, and shares data across the wallet."
-      lastUpdated="June 1, 2026"
-      sections={privacySections}
+      eyebrow={t('legal.eyebrow')}
+      title={privacy.title}
+      description={privacy.seo.description}
+      lastUpdated={privacy.lastUpdated}
+      sections={privacy.sections}
     />
   );
-}
+}

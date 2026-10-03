@@ -13,6 +13,7 @@ import {
 } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/platform";
 import { EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { translate, useT } from "@/shared/i18n";
 import { MiningHistorySkeleton } from "@/shared/skeletons";
 import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
 
@@ -26,7 +27,19 @@ import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
  * never issuance. Every number on the cards (members, cap, speed, share) comes
  * from the same endpoint, so the page can never disagree with the gate.
  */
+/**
+ * The two system rooms are named and described by the server, but their copy is part of the screen:
+ * a translated dashboard names them in its own language. An unknown pool id — a room added later —
+ * keeps whatever the server sent rather than showing a blank card.
+ */
+const poolName = (id: string, fallback: string): string =>
+  id === "low" || id === "medium" ? translate(`mining.pools.names.${id}`) : fallback;
+
+const poolDescription = (id: string, fallback: string): string =>
+  id === "low" || id === "medium" ? translate(`mining.pools.descriptions.${id}`) : fallback;
+
 export function MiningPools() {
+  const t = useT("mining.pools");
   const { refresh } = useWallet();
   const queryClient = useQueryClient();
   const pools = useQuery<ApiMiningPoolsState>({
@@ -61,18 +74,18 @@ export function MiningPools() {
   if (pools.isError && !pools.data) {
     return (
       <>
-        <PageHeader title="Mining Pools" subtitle="Join a pool to start mining." />
+        <PageHeader title={t("title")} subtitle={t("shortDescription")} />
         <EmptyState
-          title="Couldn't load mining pools"
+          title={t("loadError")}
           detail={messageForError(pools.error)}
-          action={<Button onClick={() => void pools.refetch()}>Try again</Button>}
+          action={<Button onClick={() => void pools.refetch()}>{t("retry")}</Button>}
         />
       </>
     );
   }
 
   if (pools.isPending && !pools.data) {
-    return <MiningHistorySkeleton title="Mining Pools" />;
+    return <MiningHistorySkeleton title={t("title")} />;
   }
 
   const state = pools.data;
@@ -81,14 +94,14 @@ export function MiningPools() {
   return (
     <>
       <PageHeader
-        title="Mining Pools"
-        subtitle="Join a pool first — mining is only possible from inside one."
+        title={t("title")}
+        subtitle={t("description")}
         action={
           joinedPool ? (
             <Link to="/mining">
               <Button>
                 <Icon icon={BitcoinCpuIcon} size={17} />
-                Go to mining
+                {t("goToMining")}
               </Button>
             </Link>
           ) : undefined
@@ -103,9 +116,11 @@ export function MiningPools() {
 
       {joinedPool && (
         <p className="mb-4 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm">
-          You are mining in <strong>{joinedPool.name}</strong> · your speed{" "}
-          {joinedPool.effectivePower.toFixed(2)} H ({joinedPool.mySharePercent.toFixed(1)}% of the
-          room). Switch rooms anytime — the running cycle keeps the room it started in.
+          {t("joined", {
+            pool: poolName(joinedPool.id, joinedPool.name),
+            power: joinedPool.effectivePower.toFixed(2),
+            share: joinedPool.mySharePercent.toFixed(1),
+          })}
         </p>
       )}
 
@@ -117,7 +132,7 @@ export function MiningPools() {
               <div className="flex items-center justify-between gap-3">
                 <h2 className="flex items-center gap-2 font-display text-lg font-semibold">
                   <Icon icon={UserGroupIcon} size={20} className="text-primary-soft" />
-                  {pool.name}
+                  {poolName(pool.id, pool.name)}
                 </h2>
                 <span
                   className={cn(
@@ -129,14 +144,20 @@ export function MiningPools() {
                         : "bg-success/10 text-success",
                   )}
                 >
-                  {pool.full ? "Full" : pool.riskLevel === "medium" ? "Higher variance" : "Steady"}
+                  {pool.full
+                    ? t("badges.full")
+                    : pool.riskLevel === "medium"
+                      ? t("badges.variance")
+                      : t("badges.steady")}
                 </span>
               </div>
-              <p className="mt-2 text-sm text-muted-foreground">{pool.description}</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {poolDescription(pool.id, pool.description)}
+              </p>
 
               <div
                 role="progressbar"
-                aria-label={`${pool.name} occupancy`}
+                aria-label={t("occupancyAria", { pool: poolName(pool.id, pool.name) })}
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={Math.round(fullness)}
@@ -148,48 +169,52 @@ export function MiningPools() {
                 />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                {pool.activeMiners} / {pool.maxMembers} miners
+                {t("miners", { active: pool.activeMiners, max: pool.maxMembers })}
                 {pool.joined &&
                   pool.activeMiners > 0 &&
-                  ` · your share ${(100 / pool.activeMiners).toFixed(1)}%`}
+                  t("yourShare", { share: (100 / pool.activeMiners).toFixed(1) })}
               </p>
 
               <div className="mt-4 border-t pt-4">
                 <FactList
                   items={[
-                    ["Reward range", pool.rewardRangeText],
-                    ["Room power", `${pool.baseHashrate} H`],
-                    ["Your speed", `${pool.effectivePower.toFixed(2)} H`],
-                    ["Cycle", "24 hours · tagged with this room"],
+                    [t("facts.rewardRange"), pool.rewardRangeText],
+                    [t("facts.roomPower"), `${pool.baseHashrate} H`],
+                    [t("facts.yourSpeed"), `${pool.effectivePower.toFixed(2)} H`],
+                    [t("facts.cycle"), t("facts.cycleValue")],
                   ]}
                 />
               </div>
               <p className="mt-3 text-xs text-muted-foreground">
-                Speed splits across members: {pool.baseHashrate} H ÷{" "}
-                {Math.max(pool.activeMiners, 1)} miner
-                {Math.max(pool.activeMiners, 1) === 1 ? "" : "s"}. Both rooms average the same
-                reward over time.
+                {t("split", {
+                  power: pool.baseHashrate,
+                  miners: Math.max(pool.activeMiners, 1),
+                  unit:
+                    Math.max(pool.activeMiners, 1) === 1
+                      ? t("units.minerOne")
+                      : t("units.minerOther"),
+                })}
               </p>
 
               <div className="mt-4">
                 {pool.joined ? (
                   <Button variant="outline" disabled>
                     <Icon icon={UserGroupIcon} size={17} />
-                    Current room
+                    {t("actions.currentRoom")}
                   </Button>
                 ) : pool.full ? (
                   <Button disabled>
                     <Icon icon={UserGroupIcon} size={17} />
-                    Room full
+                    {t("actions.roomFull")}
                   </Button>
                 ) : (
                   <Button onClick={() => void join(pool.id)} disabled={joining !== null}>
                     <Icon icon={UserGroupIcon} size={17} />
                     {joining === pool.id
-                      ? "Joining…"
+                      ? t("actions.joining")
                       : joinedPool
-                        ? `Switch to ${pool.name}`
-                        : `Join ${pool.name}`}
+                        ? t("actions.switchTo", { pool: poolName(pool.id, pool.name) })
+                        : t("actions.join", { pool: poolName(pool.id, pool.name) })}
                   </Button>
                 )}
               </div>
@@ -199,13 +224,13 @@ export function MiningPools() {
       </div>
 
       <div className="mt-4">
-        <Panel title="How rooms work" description="The rules both rooms share.">
+        <Panel title={t("how.title")} description={t("how.description")}>
           <FactList
             items={[
-              ["Membership", "One room at a time — join or switch anytime"],
-              ["Mining gate", "Start is refused until you join a room"],
-              ["Cycle length", "Exactly 24 hours, tagged with its room"],
-              ["Rewards", "Bounded random factor per cycle, same average in both rooms"],
+              [t("how.membership"), t("how.membershipValue")],
+              [t("how.gate"), t("how.gateValue")],
+              [t("how.cycleLength"), t("how.cycleLengthValue")],
+              [t("how.rewards"), t("how.rewardsValue")],
             ]}
           />
         </Panel>

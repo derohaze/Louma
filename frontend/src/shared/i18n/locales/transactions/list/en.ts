@@ -1,0 +1,42 @@
+export default {
+  title: "Transactions",
+  description: "Search and filter your transactions.",
+  exportShown: "Export shown ({count})",
+  searchAria: "Search transactions",
+  searchPlaceholder: "Search address, note, or transfer ID",
+  filters: {
+    all: "All",
+    sent: "Sent",
+    received: "Received",
+  },
+  advanced: {
+    label: "Advanced",
+    on: "Advanced · on",
+  },
+  fields: {
+    fromDate: "From date",
+    toDate: "To date",
+    minAmount: "Min amount (LMA)",
+    maxAmount: "Max amount (LMA)",
+  },
+  amountsError: "Amounts must be positive numbers with up to four decimals.",
+  stats: {
+    loaded: "Loaded transactions",
+    sent: "Sent",
+    received: "Received",
+    tax: "Network tax paid",
+  },
+  listHeading: "Transactions · {count} shown",
+  empty: {
+    noMatchTitle: "No matching transactions",
+    noMatchDetail: "Try another search or filter.",
+    clear: "Clear filters",
+    noneTitle: "No transactions yet",
+    noneDetail: "Send or receive LMA to see your transactions here.",
+    transfer: "Transfer",
+  },
+  loadOlder: "Load older transactions",
+  loading: "Loading…",
+  previous: "Previous",
+  next: "Next",
+};

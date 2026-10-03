@@ -9,12 +9,15 @@ import { Input } from "@/shared/ui/input";
 import { Icon } from "@/shared/ui/page";
 import { FormMessage } from "@/shared/ui/panels";
 import { LIMITS } from "@/shared/lib/platform";
+import { useT } from "@/shared/i18n";
 import { currency } from "@/shared/lib/wallet";
 import { cn } from "@/shared/lib/platform";
 import type { TransferFlow } from "@/features/transfer/send/useTransferFlow";
 
 /** Stage three: the server-approved summary plus the credential proof. Nothing moves until here. */
 export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
+  const t = useT("transfer.send");
+  const common = useT("common");
   const {
     recipient,
     quote,
@@ -39,12 +42,12 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
     <div className="space-y-4">
       <div className="overflow-hidden rounded-xl border">
         {[
-          ["Recipient", verifiedAddress],
-          ["Network tax (1%)", currency(quote.fee)],
-          ["Amount (LMA)", currency(quote.amount)],
-          ["Recipient receives", currency(quote.netAmount)],
-          ["Balance after", currency(quote.balanceAfter)],
-          ...(note.trim() ? ([["Note", note.trim()]] as [string, string][]) : []),
+          [t("confirm.recipient"), verifiedAddress],
+          [t("confirm.tax"), currency(quote.fee)],
+          [t("confirm.amount"), currency(quote.amount)],
+          [t("confirm.receives"), currency(quote.netAmount)],
+          [t("confirm.balanceAfter"), currency(quote.balanceAfter)],
+          ...(note.trim() ? ([[t("confirm.note"), note.trim()]] as [string, string][]) : []),
         ].map(([label, value]) => (
           <div
             key={label}
@@ -54,7 +57,7 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
             <span
               className={cn(
                 "min-w-0 text-end text-sm font-semibold",
-                label === "Recipient" && "break-all",
+                label === t("confirm.recipient") && "break-all",
               )}
             >
               {value}
@@ -64,22 +67,21 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
       </div>
       {recipient.displayName && (
         <p className="text-xs text-muted-foreground">
-          Paying the wallet held by {recipient.displayName}. Check both sides of the address before
-          sending: a transfer cannot be reversed.
+          {t("confirm.paying", { name: recipient.displayName })}
         </p>
       )}
       {needsCredential && (
         <div className="space-y-3 rounded-xl border p-4">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Icon icon={usingCode ? Key01Icon : SquareLock02Icon} size={18} />
-            {usingCode ? "Authenticator code" : "Transfer password"}
+            {usingCode ? t("confirm.authenticatorCode") : t("confirm.transferPassword")}
           </div>
           {passwordSet && authenticatorSet && (
             <div className="flex w-fit gap-1 rounded-full border bg-secondary/60 p-1">
               {(
                 [
-                  ["password", "Transfer password"],
-                  ["code", "Authenticator"],
+                  ["password", t("confirm.methodPassword")],
+                  ["code", t("confirm.methodCode")],
                 ] as const
               ).map(([value, label]) => (
                 <Button
@@ -113,20 +115,17 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
               setCredential(event.target.value);
               setError("");
             }}
-            placeholder={usingCode ? "6-digit code or a recovery code" : "Your transfer password"}
+            placeholder={
+              usingCode ? t("confirm.codePlaceholder") : t("confirm.passwordPlaceholder")
+            }
           />
           <p className="text-xs text-muted-foreground">
-            {usingCode
-              ? "The code proves the transfer with your authenticator; a recovery code works too."
-              : "Proved by the API before the ledger moves, never stored by this page."}
+            {usingCode ? t("confirm.codeNote") : t("confirm.passwordNote")}
           </p>
         </div>
       )}
       {!needsCredential && (
-        <p className="text-xs text-muted-foreground">
-          This wallet has no transfer password and no authenticator, so it sends as soon as you
-          confirm. A credential can be set from the Security section.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("confirm.noCredential")}</p>
       )}
       {error && <FormMessage tone="error">{error}</FormMessage>}
       <div className="flex flex-wrap items-center gap-3">
@@ -139,11 +138,13 @@ export function TransferStageConfirm({ flow }: { flow: TransferFlow }) {
           }}
         >
           <Icon icon={ArrowLeft01Icon} size={16} />
-          Back
+          {common("actions.back")}
         </Button>
         <Button disabled={busy !== null} onClick={() => void completeTransfer()}>
           <Icon icon={ArrowUpRight01Icon} size={17} />
-          {busy === "send" ? "Sending…" : `Send ${currency(quote.amount)}`}
+          {busy === "send"
+            ? t("confirm.sending")
+            : t("confirm.send", { amount: currency(quote.amount) })}
         </Button>
       </div>
     </div>

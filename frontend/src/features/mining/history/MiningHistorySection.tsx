@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/ui/page";
+import { useT } from "@/shared/i18n";
 import { messageForError, type ApiMiningSession } from "@/shared/api";
 import { accountFetchers } from "@/shared/lib/platform";
 import { currency, dateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
@@ -13,6 +14,8 @@ import { cn } from "@/shared/lib/platform";
  * hold a list only this section renders.
  */
 export function MiningHistorySection() {
+  const t = useT("mining.history");
+  const common = useT("common");
   const [sessions, setSessions] = useState<ApiMiningSession[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,25 +70,20 @@ export function MiningHistorySection() {
   return (
     <section className="mt-4 overflow-hidden rounded-[22px] border bg-card shadow-sm">
       <div className="border-b px-5 py-4">
-        <h2 className="font-display text-base font-semibold">Cycle history</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Every 24-hour cycle this account ran, newest first
-        </p>
+        <h2 className="font-display text-base font-semibold">{t("heading")}</h2>
+        <p className="mt-1 text-xs text-muted-foreground">{t("headingNote")}</p>
       </div>
       {loading ? (
-        <p className="px-5 py-8 text-center text-sm text-muted-foreground">Loading cycles…</p>
+        <p className="px-5 py-8 text-center text-sm text-muted-foreground">{t("loading")}</p>
       ) : sessions.length === 0 ? (
-        <EmptyState
-          title="No cycles yet"
-          detail="Start your first 24-hour cycle above — it will be remembered here once it ends."
-        />
+        <EmptyState title={t("empty.title")} detail={t("empty.detail")} />
       ) : (
         <>
           <div className="grid gap-px border-b bg-border sm:grid-cols-3">
             {[
-              ["Collected", collected],
-              ["Cycles", cursor ? `${sessions.length}+` : String(sessions.length)],
-              ["Average rate", `${avgRate.toFixed(4)} LMA / hour`],
+              [t("stats.collected"), collected],
+              [t("stats.cycles"), cursor ? `${sessions.length}+` : String(sessions.length)],
+              [t("stats.averageRate"), `${avgRate.toFixed(4)} LMA / hour`],
             ].map(([label, value]) => (
               <div key={label} className="bg-card px-5 py-4">
                 <p className="text-xs text-muted-foreground">{label}</p>
@@ -107,21 +105,23 @@ export function MiningHistorySection() {
                 )}
               >
                 {item.status === "active"
-                  ? "Running"
+                  ? t("status.active")
                   : item.status === "completed"
-                    ? "Ready to collect"
-                    : "Collected"}
+                    ? t("status.completed")
+                    : t("status.settled")}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">Cycle #{item.cycleNumber}</p>
+                <p className="text-sm font-semibold">
+                  {t("cycle", { number: item.cycleNumber })}
+                </p>
                 <p className="text-xs text-muted-foreground">
-                  {item.rate} LMA/h · ended {dateText(item.endsAt)}
+                  {t("cycleMeta", { rate: item.rate, date: dateText(item.endsAt) })}
                 </p>
               </div>
               <div className="text-end">
                 <strong className="block text-sm tabular-nums">+{currency(item.settled)}</strong>
                 <span className="text-xs text-muted-foreground">
-                  earned {currency(item.accrued)}
+                  {t("earned", { amount: currency(item.accrued) })}
                 </span>
               </div>
             </div>
@@ -132,7 +132,7 @@ export function MiningHistorySection() {
       {cursor && (
         <div className="px-5 py-4">
           <Button variant="outline" disabled={loadingMore} onClick={loadOlder}>
-            {loadingMore ? "Loading…" : "Load older cycles"}
+            {loadingMore ? common("actions.loading") : t("loadOlder")}
           </Button>
         </div>
       )}

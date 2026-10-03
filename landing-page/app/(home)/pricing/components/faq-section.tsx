@@ -3,17 +3,19 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import type { FaqItem } from '../data';
-import { faqItems } from '../data';
+import { useSection, useT } from '@/lib/i18n';
+import { faqKeys } from '../data';
 
 function FaqRow({
   index,
-  item,
+  question,
+  answer,
   isOpen,
   onToggle,
 }: {
   index: number;
-  item: FaqItem;
+  question: string;
+  answer: string;
   isOpen: boolean;
   onToggle: () => void;
 }) {
@@ -28,7 +30,7 @@ function FaqRow({
         onClick={onToggle}
         className="flex w-full items-center justify-between gap-6 text-start text-sm font-semibold"
       >
-        <span>{item.question}</span>
+        <span>{question}</span>
         <ChevronDown
           className={cn(
             'size-4 shrink-0 text-fd-muted-foreground transition-transform duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]',
@@ -54,7 +56,7 @@ function FaqRow({
               transitionDelay: isOpen ? `${index * 75}ms` : '0ms',
             }}
           >
-            {item.answer}
+            {answer}
           </p>
         </div>
       </div>
@@ -63,21 +65,28 @@ function FaqRow({
 }
 
 export function FaqSection() {
+  const t = useT('pricing');
+  const pricing = useSection('pricing');
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   return (
     <section className="mx-auto mt-24 grid w-full max-w-[1180px] grid-cols-1 gap-12 border-t border-fd-border pt-14 dark:border-[#262626] lg:grid-cols-[0.85fr_1.15fr]">
-      <h2 className="text-2xl font-medium tracking-normal md:text-3xl">Questions & Answers</h2>
+      <h2 className="text-2xl font-medium tracking-normal md:text-3xl">{t('faq.title')}</h2>
       <div className="divide-y divide-fd-border dark:divide-[#262626]">
-        {faqItems.map((item, index) => (
-          <FaqRow
-            key={item.question}
-            index={index}
-            item={item}
-            isOpen={openIndex === index}
-            onToggle={() => setOpenIndex((current) => (current === index ? null : index))}
-          />
-        ))}
+        {faqKeys.map((key, index) => {
+          const item = pricing.faq[key];
+
+          return (
+            <FaqRow
+              key={key}
+              index={index}
+              question={item.question}
+              answer={item.answer}
+              isOpen={openIndex === index}
+              onToggle={() => setOpenIndex((current) => (current === index ? null : index))}
+            />
+          );
+        })}
       </div>
     </section>
   );

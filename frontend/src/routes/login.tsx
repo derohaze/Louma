@@ -1,15 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { LoginContent } from "@/features/auth";
+import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/login")({
-  head: () => ({
-    meta: [
-      { title: "Log in" },
-      { name: "description", content: "Log in to your Louma wallet." },
-      { property: "og:title", content: "Log in" },
-      { property: "og:description", content: "Log in to your Louma wallet." },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
+  head: () => pageHead("auth.login.title", "auth.login.description"),
   component: LoginContent,
 });

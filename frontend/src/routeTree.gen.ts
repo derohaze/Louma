@@ -16,6 +16,7 @@ import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MiningRouteRouteImport } from './routes/mining/route'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TransactionsRouteRouteImport } from './routes/transactions/route'
 import { Route as TransferRouteRouteImport } from './routes/transfer/route'
@@ -71,6 +72,11 @@ const LoginRoute = LoginRouteImport.update({
 const MiningRouteRoute = MiningRouteRouteImport.update({
   id: '/mining',
   path: '/mining',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignupRoute = SignupRouteImport.update({
@@ -191,6 +197,7 @@ export interface FileRoutesByFullPath {
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
@@ -216,6 +223,7 @@ export interface FileRoutesByTo {
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
@@ -247,6 +255,7 @@ export interface FileRoutesById {
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
@@ -279,6 +288,7 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/signup'
     | '/history/$transferId'
     | '/mining/history'
@@ -304,6 +314,7 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/signup'
     | '/history/$transferId'
     | '/mining/history'
@@ -334,6 +345,7 @@ export interface FileRouteTypes {
     | '/custom-address'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/signup'
     | '/history/$transferId'
     | '/mining/history'
@@ -365,6 +377,7 @@ export interface RootRouteChildren {
   CustomAddressRoute: typeof CustomAddressRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
+  NotificationsRoute: typeof NotificationsRoute
   SignupRoute: typeof SignupRoute
   SecurityDevicesRoute: typeof SecurityDevicesRoute
   SecurityFreezeRoute: typeof SecurityFreezeRoute
@@ -424,6 +437,13 @@ declare module '@tanstack/react-router' {
       path: '/mining'
       fullPath: '/mining'
       preLoaderRoute: typeof MiningRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signup': {
@@ -656,6 +676,7 @@ const rootRouteChildren: RootRouteChildren = {
   CustomAddressRoute: CustomAddressRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
+  NotificationsRoute: NotificationsRoute,
   SignupRoute: SignupRoute,
   SecurityDevicesRoute: SecurityDevicesRoute,
   SecurityFreezeRoute: SecurityFreezeRoute,

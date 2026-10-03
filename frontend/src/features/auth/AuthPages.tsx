@@ -14,10 +14,13 @@ import {
   clearAccessToken,
   clearSessionHint,
   completeTwoFactor,
+  hasSessionHint,
   login,
   messageForError,
   register,
 } from "@/shared/api";
+import { useIsomorphicLayoutEffect } from "@/shared/hooks";
+import { useT } from "@/shared/i18n";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
@@ -43,9 +46,19 @@ function AuthIcon({
  * form. The probe therefore always runs; a failed probe is still caught and ignored, and only an
  * authoritative 401 clears the session — a transport or server fault keeps the hint so the next
  * visit probes again.
+ *
+ * Returns whether the form should be held back. The server render has no session to read, so the
+ * first client render is the server's (the form) and the layout effect decides before the browser
+ * paints: a browser that has held a session shows `AuthSessionCheck` while the probe runs instead
+ * of the form that is about to be navigated away from, while a first-time visitor gets the form at
+ * once — no session can exist for them, so there is nothing to wait for.
  */
-function useRedirectWhenAuthed() {
+function useRedirectWhenAuthed(): boolean {
   const navigate = useNavigate();
+  const [checking, setChecking] = useState(false);
+  useIsomorphicLayoutEffect(() => {
+    if (hasSessionHint()) setChecking(true);
+  }, []);
   useEffect(() => {
     let active = true;
     void api
@@ -58,11 +71,43 @@ function useRedirectWhenAuthed() {
           clearAccessToken();
           clearSessionHint();
         }
+      })
+      .finally(() => {
+        if (active) setChecking(false);
       });
     return () => {
       active = false;
     };
   }, [navigate]);
+  return checking;
+}
+
+/**
+ * What a returning visitor sees while the probe confirms their session: the brand, and a status the
+ * screen reader reads, so the redirect that follows is not preceded by a form that asks them to
+ * sign in again.
+ */
+function AuthSessionCheck() {
+  const t = useT("auth");
+  return (
+    <div className="grid min-h-dvh place-items-center bg-background">
+      <div role="status" className="flex flex-col items-center gap-4">
+        <img
+          src="/Louma_Brand_logos/png/louma-logo-256x256.png"
+          alt={t("logoAlt")}
+          width={64}
+          height={64}
+          draggable={false}
+          className="size-16 shrink-0 border-0 bg-transparent object-contain shadow-none"
+        />
+        <span
+          aria-hidden
+          className="size-6 animate-spin rounded-full border-2 border-muted border-t-foreground"
+        />
+        <p className="text-sm text-muted-foreground">{t("session.checking")}</p>
+      </div>
+    </div>
+  );
 }
 
 function AuthField({
@@ -92,6 +137,7 @@ function PasswordField({
   onChange: (value: string) => void;
   autoComplete: string;
 }) {
+  const t = useT("auth");
   const [visible, setVisible] = useState(false);
   return (
     <label className="block">
@@ -109,7 +155,7 @@ function PasswordField({
         />
         <button
           type="button"
-          aria-label={visible ? "Hide password" : "Show password"}
+          aria-label={t(visible ? "hidePassword" : "showPassword")}
           aria-pressed={visible}
           onClick={() => setVisible((v) => !v)}
           className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full text-[#6E6E77] transition-colors hover:bg-black/5 hover:text-[#1B1B21] dark:text-muted-foreground dark:hover:bg-white/10 dark:hover:text-foreground"
@@ -176,13 +222,14 @@ function AuthShell({
   children: ReactNode;
   footer: ReactNode;
 }) {
+  const t = useT("auth");
   return (
     <div className="grid min-h-dvh bg-background lg:grid-cols-2">
       <div className="flex flex-col items-center justify-center px-6 py-10 sm:px-12">
         <span className="flex items-center gap-2.5">
           <img
             src="/Louma_Brand_logos/png/louma-logo-128x128.png"
-            alt="Louma logo"
+            alt={t("logoAlt")}
             width={44}
             height={44}
             draggable={false}
@@ -219,7 +266,8 @@ function SubmitButton({ children, disabled = false }: { children: ReactNode; dis
 }
 
 export function LoginContent() {
-  useRedirectWhenAuthed();
+  const t = useT("auth");
+  const checkingSession = useRedirectWhenAuthed();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -249,15 +297,17 @@ export function LoginContent() {
     }
   };
 
+  if (checkingSession) return <AuthSessionCheck />;
+
   return (
     <AuthShell
-      title="Welcome back"
-      subtitle="Log in to your Louma wallet."
+      title={t("login.title")}
+      subtitle={t("login.subtitle")}
       footer={
         <>
-          New to Louma?{" "}
+          {t("login.footerQuestion")}{" "}
           <Link to="/signup" className="font-bold text-foreground hover:underline">
-            Create account
+            {t("login.footerAction")}
           </Link>
         </>
       }
@@ -265,7 +315,7 @@ export function LoginContent() {
       <form className="space-y-3" onSubmit={(event) => void submit(event)}>
         {pendingSessionId ? (
           <AuthField
-            label="Authenticator or recovery code"
+            label={t("fields.code")}
             type="text"
             inputMode="numeric"
             maxLength={64}
@@ -277,16 +327,16 @@ export function LoginContent() {
         ) : (
           <>
             <AuthField
-              label="Email"
+              label={t("fields.email")}
               type="email"
-              placeholder="Email"
+              placeholder={t("fields.email")}
               required
               value={email}
               autoComplete="email"
               onChange={(event) => setEmail(event.target.value)}
             />
             <PasswordField
-              label="Password"
+              label={t("fields.password")}
               value={password}
               onChange={setPassword}
               autoComplete="current-password"
@@ -299,12 +349,12 @@ export function LoginContent() {
               to="/forgot-password"
               className="text-xs font-semibold text-muted-foreground hover:underline"
             >
-              Forgot password?
+              {t("login.forgot")}
             </Link>
           </div>
         )}
         <SubmitButton disabled={busy}>
-          {busy ? "Signing in…" : pendingSessionId ? "Verify code" : "Log in"}
+          {busy ? t("login.busy") : t(pendingSessionId ? "login.verify" : "login.submit")}
         </SubmitButton>
         {error && (
           <p role="alert" className="text-sm text-destructive">
@@ -317,7 +367,8 @@ export function LoginContent() {
 }
 
 export function SignupContent() {
-  useRedirectWhenAuthed();
+  const t = useT("auth");
+  const checkingSession = useRedirectWhenAuthed();
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -339,45 +390,47 @@ export function SignupContent() {
     }
   };
 
+  if (checkingSession) return <AuthSessionCheck />;
+
   return (
     <AuthShell
-      title="Start your wallet journey"
-      subtitle="Create your Louma account in seconds."
+      title={t("signup.title")}
+      subtitle={t("signup.subtitle")}
       footer={
         <>
-          Already have an account?{" "}
+          {t("signup.footerQuestion")}{" "}
           <Link to="/login" className="font-bold text-foreground hover:underline">
-            Log in
+            {t("signup.footerAction")}
           </Link>
         </>
       }
     >
       <form className="space-y-3" onSubmit={(event) => void submit(event)}>
         <AuthField
-          label="Full name"
+          label={t("fields.fullName")}
           type="text"
-          placeholder="Full name"
+          placeholder={t("fields.fullName")}
           required
           value={name}
           autoComplete="name"
           onChange={(e) => setName(e.target.value)}
         />
         <AuthField
-          label="Email"
+          label={t("fields.email")}
           type="email"
-          placeholder="Email"
+          placeholder={t("fields.email")}
           required
           value={email}
           autoComplete="email"
           onChange={(e) => setEmail(e.target.value)}
         />
         <PasswordField
-          label="Password"
+          label={t("fields.password")}
           value={password}
           onChange={setPassword}
           autoComplete="new-password"
         />
-        <SubmitButton disabled={busy}>{busy ? "Creating account…" : "Start"}</SubmitButton>
+        <SubmitButton disabled={busy}>{busy ? t("signup.busy") : t("signup.submit")}</SubmitButton>
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -389,21 +442,24 @@ export function SignupContent() {
 }
 
 export function ForgotPasswordContent() {
-  useRedirectWhenAuthed();
+  const t = useT("auth");
+  const checkingSession = useRedirectWhenAuthed();
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  if (checkingSession) return <AuthSessionCheck />;
+
   return (
     <AuthShell
-      title="Reset password"
-      subtitle="Enter your email and we'll send you a reset link."
+      title={t("forgot.title")}
+      subtitle={t("forgot.subtitle")}
       footer={
         <>
-          Remembered it?{" "}
+          {t("forgot.footerQuestion")}{" "}
           <Link to="/login" className="font-bold text-foreground hover:underline">
-            Back to log in
+            {t("forgot.footerAction")}
           </Link>
         </>
       }
@@ -413,10 +469,11 @@ export function ForgotPasswordContent() {
           <span className="mx-auto grid size-12 place-items-center rounded-full bg-success/15 text-[#1F7A5A] dark:text-emerald-400">
             <AuthIcon icon={CheckmarkCircle01Icon} size={24} />
           </span>
-          <p className="mt-4 font-display text-lg font-bold text-foreground">Check your inbox</p>
+          <p className="mt-4 font-display text-lg font-bold text-foreground">
+            {t("forgot.sentTitle")}
+          </p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            If an account exists for <strong className="text-foreground">{email}</strong>, a reset
-            link is on its way.
+            {t("forgot.sentBody", { email })}
           </p>
           <Link
             to="/login"
@@ -426,7 +483,7 @@ export function ForgotPasswordContent() {
             )}
           >
             <AuthIcon icon={ArrowLeft01Icon} size={18} />
-            Back to log in
+            {t("forgot.back")}
           </Link>
         </div>
       ) : (
@@ -451,15 +508,17 @@ export function ForgotPasswordContent() {
           }}
         >
           <AuthField
-            label="Email"
+            label={t("fields.email")}
             type="email"
-            placeholder="Email"
+            placeholder={t("fields.email")}
             required
             value={email}
             autoComplete="email"
             onChange={(e) => setEmail(e.target.value)}
           />
-          <SubmitButton disabled={busy}>{busy ? "Sending…" : "Send reset link"}</SubmitButton>
+          <SubmitButton disabled={busy}>
+            {busy ? t("forgot.busy") : t("forgot.submit")}
+          </SubmitButton>
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}

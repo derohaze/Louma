@@ -12,6 +12,17 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/shared/ui/sonner";
 import { parseTheme, readThemeCookie, useTheme, THEME_COOKIE, type Theme } from "@/shared/hooks";
+import {
+  I18nProvider,
+  LANGUAGE_COOKIE,
+  parseLanguage,
+  readLanguageCookie,
+  setCurrentLanguage,
+  translate,
+  useI18n,
+  useT,
+  type LanguageCode,
+} from "@/shared/i18n";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "@/shared/lib/platform";
@@ -24,23 +35,22 @@ import { reportLovableError } from "@/shared/lib/platform";
  * with system fonts changes nothing visually once the webfonts arrive.
  */
 const FONT_CSS_URL =
-  "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap";
+  "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap";
 
 function NotFoundComponent() {
+  const t = useT("shell");
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
         <h1 className="text-7xl font-bold text-foreground">404</h1>
-        <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          The page you're looking for doesn't exist or has been moved.
-        </p>
+        <h2 className="mt-4 text-xl font-semibold text-foreground">{t("notFound.title")}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">{t("notFound.detail")}</p>
         <div className="mt-6">
           <Link
             to="/"
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
-            Go home
+            {t("notFound.goHome")}
           </Link>
         </div>
       </div>
@@ -51,6 +61,7 @@ function NotFoundComponent() {
 function ErrorComponent({ error, reset }: ErrorComponentProps) {
   console.error(error);
   const router = useRouter();
+  const t = useT("shell");
   useEffect(() => {
     reportLovableError(error, { boundary: "tanstack_root_error_component" });
   }, [error]);
@@ -58,12 +69,8 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          This page didn't load
-        </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Something went wrong on our end. You can try refreshing or head back home.
-        </p>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">{t("fatal.title")}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{t("fatal.detail")}</p>
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {
@@ -72,13 +79,13 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
             }}
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
-            Try again
+            {t("fatal.retry")}
           </button>
           <a
             href="/"
             className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
           >
-            Go home
+            {t("fatal.goHome")}
           </a>
         </div>
       </div>
@@ -110,6 +117,21 @@ async function readDocumentTheme(): Promise<Theme> {
   return readThemeFromRequest();
 }
 
+/**
+ * The language the document is rendered in, read from the same cookie on both sides, exactly like
+ * the theme above: `<html lang dir>` and every translated string in the first paint have to match
+ * the visitor's choice, and only the request knows it.
+ */
+const readLanguageFromRequest = createServerFn({ method: "GET" }).handler(async () => {
+  const { getCookie } = await import("@tanstack/react-start/server");
+  return parseLanguage(getCookie(LANGUAGE_COOKIE) ?? null);
+});
+
+async function readDocumentLanguage(): Promise<LanguageCode> {
+  if (typeof document !== "undefined") return readLanguageCookie();
+  return readLanguageFromRequest();
+}
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   /**
    * Read before anything renders, because it decides `<html>`'s attributes. Doing it in a route load
@@ -117,7 +139,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
    * first client render then uses the very value the server rendered with, instead of reading storage
    * again and disagreeing with it by one attribute.
    */
-  beforeLoad: async () => ({ theme: await readDocumentTheme() }),
+  beforeLoad: async () => {
+    const [theme, language] = await Promise.all([readDocumentTheme(), readDocumentLanguage()]);
+    // Mirrored into the module state here, before any route head is evaluated: the router runs
+    // every route's `head` after all of the `beforeLoad`s, so the browser tab is already named in
+    // the language the page will be painted in, on the server as well as in the browser.
+    setCurrentLanguage(language);
+    return { theme, language };
+  },
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -126,16 +155,16 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       // Private wallet app: never indexed, never followed. Belt and suspenders with
       // robots.txt (Disallow: /) so a mis-served header cannot expose auth routes.
       { name: "robots", content: "noindex, nofollow" },
-      { title: "Louma — Wallet" },
+      { title: translate("shell.document.title") },
       {
         name: "description",
-        content: "Louma wallet: balance, transfers, mining, and transactions.",
+        content: translate("shell.document.description"),
       },
       { name: "author", content: "Louma" },
-      { property: "og:title", content: "Louma — Wallet" },
+      { property: "og:title", content: translate("shell.document.title") },
       {
         property: "og:description",
-        content: "Louma wallet: balance, transfers, mining, and transactions.",
+        content: translate("shell.document.description"),
       },
       // No og:type website / twitter cards: nothing here is shareable public content.
       { name: "twitter:card", content: "none" },
@@ -179,7 +208,26 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
-  const { theme: documentTheme } = Route.useRouteContext();
+  const { theme: documentTheme, language: documentLanguage } = Route.useRouteContext();
+  /**
+   * The language provider wraps the document, because `<html lang dir>` is rendered from it: a
+   * switch re-renders the element's own attributes, and every string below it, in one pass.
+   */
+  return (
+    <I18nProvider initialLanguage={documentLanguage}>
+      <DocumentShell documentTheme={documentTheme}>{children}</DocumentShell>
+    </I18nProvider>
+  );
+}
+
+function DocumentShell({
+  documentTheme,
+  children,
+}: {
+  documentTheme: Theme;
+  children: ReactNode;
+}) {
+  const { language } = useI18n();
   /**
    * The source of truth for these two attributes, on both sides of the wire. `documentTheme` is the
    * value the server rendered with while this is the first client render (so the markup matches),
@@ -193,7 +241,14 @@ function RootShell({ children }: { children: ReactNode }) {
   const { theme } = useTheme(documentTheme);
   return (
     <html
-      lang="en"
+      lang={language}
+      /*
+       * The direction is fixed for every language: a translated dashboard keeps the layout it was
+       * designed in, so only the words change and the rail, grids, and charts never mirror. `lang`
+       * still follows the choice — it is what selects the Arabic font family and tells assistive
+       * technology how to read the text.
+       */
+      dir="ltr"
       suppressHydrationWarning
       className={theme === "dark" ? "dark" : undefined}
       style={{ colorScheme: theme }}

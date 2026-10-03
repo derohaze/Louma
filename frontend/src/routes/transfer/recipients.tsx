@@ -1,25 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { WalletPage } from "@/app/shell";
 import { RecipientsPage } from "@/features/transfer";
+import { pageHead } from "@/shared/lib/platform";
 export const Route = createFileRoute("/transfer/recipients")({
-  head: () => ({
-    meta: [
-      { title: "Recipients" },
-      {
-        name: "description",
-        content: "Saved and recent recipients for one-tap LMA transfers.",
-      },
-      { property: "og:title", content: "Recipients" },
-      {
-        property: "og:description",
-        content: "Saved and recent recipients for one-tap LMA transfers.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
+  head: () => pageHead("transfer.recipients.title", "transfer.recipients.description"),
   component: () => (
-    <WalletPage title="Recipients">
+    <WalletPage titleKey="transfer.recipients.title">
       <RecipientsPage />
     </WalletPage>
   ),

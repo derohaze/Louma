@@ -1,23 +1,30 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import BannerImage from './banner.png';
 import Image from 'next/image';
 import { getBlogPosts } from '@/lib/blog';
 import { createMetadata } from '@/lib/metadata';
+import { createT, getRequestLanguage, languageLocale } from '@/lib/i18n';
 
-export const metadata = {
-  ...createMetadata({
-    title: 'Blog',
-    description:
-      'Practical Louma notes on holding, sending, and receiving LMA, with a focus on clarity and reliability.',
-    path: '/blog',
-  }),
-  alternates: {
-    canonical: '/blog',
-    types: { 'application/rss+xml': '/blog/rss.xml' },
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = createT(await getRequestLanguage(), 'blog');
+
+  return {
+    ...createMetadata({
+      title: t('seo.title'),
+      description: t('seo.description'),
+      path: '/blog',
+    }),
+    alternates: {
+      canonical: '/blog',
+      types: { 'application/rss+xml': '/blog/rss.xml' },
+    },
+  };
+}
 
 export default async function Page() {
+  const language = await getRequestLanguage();
+  const t = createT(language, 'blog');
   const posts = await getBlogPosts();
 
   return (
@@ -26,15 +33,13 @@ export default async function Page() {
         <Image
           src={BannerImage}
           priority
-          alt="banner"
+          alt={t('banner.imageAlt')}
           className="absolute inset-0 size-full -z-1 object-cover"
         />
         <h1 className="mb-4 text-3xl text-landing-foreground font-mono font-medium">
-          Louma Blog
+          {t('banner.title')}
         </h1>
-        <p className="text-sm font-mono text-landing-foreground-200">
-          Practical notes on holding, sending, and receiving LMA, with a focus on clarity and reliability.
-        </p>
+        <p className="text-sm font-mono text-landing-foreground-200">{t('banner.subtitle')}</p>
       </div>
       <div className="grid grid-cols-1 gap-2 md:grid-cols-3 xl:grid-cols-4">
         {posts.map((post) => (
@@ -47,7 +52,11 @@ export default async function Page() {
             <p className="text-sm text-fd-muted-foreground">{post.data.description}</p>
 
             <p className="mt-auto pt-4 text-xs text-brand">
-              {new Date(post.data.date ?? post.slug).toDateString()}
+              {new Date(post.data.date ?? post.slug).toLocaleDateString(languageLocale(language), {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
             </p>
           </Link>
         ))}

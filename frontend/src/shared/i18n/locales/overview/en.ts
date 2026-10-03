@@ -1,0 +1,56 @@
+export default {
+  title: "Overview",
+  description: "Balance and activity at a glance, with a link into every LMA wallet section.",
+  periods: {
+    last7: "Last 7 days",
+    last30: "Last 30 days",
+    last90: "Last 90 days",
+  },
+  periodLabel: "Period",
+  statistics: "Statistics",
+  expenses: "Expenses",
+  incomes: "Incomes",
+  chartAria: "Money in and out across the period",
+  balance: {
+    show: "Show balance",
+    hide: "Hide balance",
+    available: "Available balance",
+    ready: "Ready to transfer",
+    frozen: "Frozen · transfers are refused",
+  },
+  mining: {
+    cardAria: "Mining cycle",
+    progress: "Mining cycle #{number} · {rate} LMA/h",
+    none: "No active cycle · start one to earn",
+    completed: "{percent}% Completed",
+    remaining: "{time} left",
+  },
+  transfers: {
+    label: "Transfers · {period}",
+    empty: "Nothing moved in this period yet.",
+  },
+  relative: {
+    today: "Today",
+    yesterday: "Yesterday",
+    daysAgo: "{days} days ago",
+  },
+  quickSend: {
+    label: "Send money to",
+    newTransfer: "New transfer",
+    none: "No counterparties yet.",
+    receive: "[ RECEIVE ]",
+    transfer: "[ TRANSFER ]",
+  },
+  mined: {
+    label: "Mined · {count} {unit}",
+    lastCollected: "Last collected {time}",
+    nothingCollected: "Nothing collected yet",
+  },
+  account: {
+    label: "Account",
+    twoFactor: "Two-factor",
+    sessions: "Sessions",
+    wallet: "Wallet",
+    securityCenter: "Security center",
+  },
+};

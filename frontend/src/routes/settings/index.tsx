@@ -7,9 +7,9 @@ import { pageHead } from "@/shared/lib/platform";
 const page = settingsPage("/settings");
 
 export const Route = createFileRoute("/settings/")({
-  head: () => pageHead(page.title, page.description),
+  head: () => pageHead(page.titleKey, page.descriptionKey),
   component: () => (
-    <WalletPage title={page.title}>
+    <WalletPage titleKey={page.titleKey}>
       <AccountContent />
     </WalletPage>
   ),

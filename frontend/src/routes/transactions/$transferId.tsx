@@ -4,7 +4,7 @@ import { TransactionDetailContent } from "@/features/transactions";
 import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/transactions/$transferId")({
-  head: () => pageHead("Transaction", "One transfer with its amount, tax, status, and receipt."),
+  head: () => pageHead("transactions.detail.title", "transactions.detail.description"),
   component: TransactionRoute,
 });
 
@@ -12,7 +12,7 @@ export const Route = createFileRoute("/transactions/$transferId")({
 function TransactionRoute() {
   const { transferId } = Route.useParams();
   return (
-    <WalletPage title="Transaction">
+    <WalletPage titleKey="transactions.detail.title">
       <TransactionDetailContent transferId={transferId} />
     </WalletPage>
   );

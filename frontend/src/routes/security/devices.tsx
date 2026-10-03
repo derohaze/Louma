@@ -7,9 +7,9 @@ import { pageHead } from "@/shared/lib/platform";
 const page = securityDevices;
 
 export const Route = createFileRoute("/security/devices")({
-  head: () => pageHead(page.title, page.description),
+  head: () => pageHead(page.titleKey, page.descriptionKey),
   component: () => (
-    <WalletPage title={page.title}>
+    <WalletPage titleKey={page.titleKey}>
       <DevicesPage />
     </WalletPage>
   ),

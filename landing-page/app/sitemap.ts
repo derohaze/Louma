@@ -2,8 +2,6 @@ import type { MetadataRoute } from 'next';
 import { getBlogPosts } from '@/lib/blog';
 import { siteConfig } from '@/lib/site';
 
-const staticLastModified = new Date('2026-07-05');
-
 const staticRoutes: { path: string; changeFrequency: 'weekly' | 'monthly'; priority: number }[] = [
   { path: '',          changeFrequency: 'weekly',  priority: 1.0 },
   { path: '/features', changeFrequency: 'weekly',  priority: 0.9 },
@@ -19,9 +17,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const posts = await getBlogPosts();
 
   return [
+    // No lastModified for marketing pages: these are maintained, not dated content.
+    // A single hardcoded date for all of them reads as stale to crawlers.
     ...staticRoutes.map((route) => ({
       url: `${siteConfig.url}${route.path}`,
-      lastModified: staticLastModified,
       changeFrequency: route.changeFrequency,
       priority: route.priority,
     })),

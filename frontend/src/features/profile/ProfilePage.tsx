@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useWallet } from "@/shared/hooks";
 import { api, messageForError, type ApiUser } from "@/shared/api";
 import { countryName, geoCountries, securityScore } from "@/shared/lib/security";
+import { useT } from "@/shared/i18n";
 import { profileInitials } from "@/shared/lib/account";
 import { currency, dateText } from "@/shared/lib/wallet";
 import { CopyButton, Icon, PageHeader } from "@/shared/ui/page";
@@ -25,6 +26,8 @@ import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
  * rather than from the rail.
  */
 export function ProfileContent() {
+  const t = useT("profile");
+  const common = useT("common");
   const { user, wallet, transactions, security, refresh, refreshSecurity } = useWallet();
   const [draft, setDraft] = useState<{ displayName: string; country: string | null }>({
     displayName: "",
@@ -51,7 +54,7 @@ export function ProfileContent() {
         displayName: sanitizeText(draft.displayName, LIMITS.maxDisplayNameLength),
         country: draft.country,
       });
-      setMessage("Profile saved.");
+      setMessage(t("identity.saved"));
       await Promise.all([refresh(), refreshSecurity()]);
     } catch (cause) {
       setError(messageForError(cause));
@@ -62,19 +65,19 @@ export function ProfileContent() {
   return (
     <>
       <PageHeader
-        title="Profile"
-        subtitle="Your account details and the wallet activity behind them."
+        title={t("title")}
+        subtitle={t("description")}
         action={
           <Link to="/settings">
             <Button variant="outline">
               <Icon icon={Settings01Icon} size={17} />
-              Account settings
+              {t("accountSettings")}
             </Button>
           </Link>
         }
       />
       <div className="space-y-4">
-        <Panel title="Identity" description="How your account is shown inside the wallet.">
+        <Panel title={t("identity.title")} description={t("identity.description")}>
           <div className="flex flex-wrap items-center gap-4">
             <span
               aria-hidden
@@ -94,7 +97,7 @@ export function ProfileContent() {
             onSubmit={(event) => void save(event)}
           >
             <label className="block text-sm font-semibold">
-              Display name
+              {t("identity.displayName")}
               <Input
                 className="mt-2"
                 required
@@ -104,18 +107,18 @@ export function ProfileContent() {
               />
             </label>
             <label className="block text-sm font-semibold">
-              Country
+              {t("identity.country")}
               <Select
                 value={draft.country ?? ""}
                 onValueChange={(country) => setDraft({ ...draft, country })}
               >
-                <SelectTrigger className="mt-2" aria-label="Country">
-                  <SelectValue placeholder="Select a country" />
+                <SelectTrigger className="mt-2" aria-label={t("identity.country")}>
+                  <SelectValue placeholder={t("identity.selectCountry")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {geoCountries.map((country) => (
-                    <SelectItem key={country.code} value={country.code}>
-                      {country.name}
+                  {geoCountries.map((code) => (
+                    <SelectItem key={code} value={code}>
+                      {countryName(code)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -123,7 +126,7 @@ export function ProfileContent() {
             </label>
             <div className="sm:col-span-2">
               <Button type="submit" disabled={busy}>
-                {busy ? "Saving…" : "Save profile"}
+                {busy ? common("actions.saving") : t("identity.save")}
               </Button>
             </div>
           </form>
@@ -139,18 +142,18 @@ export function ProfileContent() {
           )}
         </Panel>
         <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-          <Panel title="Wallet at a glance" description="Figures taken from the wallet itself.">
+          <Panel title={t("glance.title")} description={t("glance.description")}>
             <FactList
               items={[
                 [
-                  "Available balance",
+                  t("glance.balance"),
                   <span key="balance" className="inline-flex items-center gap-2">
                     <Icon icon={Wallet01Icon} size={16} className="text-muted-foreground" />
                     {currency(wallet?.balance ?? "0")}
                   </span>,
                 ],
                 [
-                  "Transfers recorded",
+                  t("glance.transfers"),
                   <span key="transfers" className="inline-flex items-center gap-2">
                     <Icon
                       icon={TransactionHistoryIcon}
@@ -161,41 +164,48 @@ export function ProfileContent() {
                   </span>,
                 ],
                 [
-                  "Protections on",
-                  `${score.enabledCount} of ${score.total} · score ${score.score}/${score.max}`,
+                  t("glance.protections"),
+                  t("glance.protectionsValue", {
+                    enabled: score.enabledCount,
+                    total: score.total,
+                    score: score.score,
+                    max: score.max,
+                  }),
                 ],
-                ["Wallet status", wallet?.status === "frozen" ? "Frozen" : "Active"],
+                [
+                  t("glance.status"),
+                  wallet?.status === "frozen" ? common("state.frozen") : common("state.active"),
+                ],
               ]}
             />
           </Panel>
-          <Panel title="Account" description="Identifiers you may need when contacting support.">
+          <Panel title={t("account.title")} description={t("account.description")}>
             <FactList
               items={[
-                ["Account ID", <code key="id">{user?.id ?? "—"}</code>],
+                [t("account.id"), <code key="id">{user?.id ?? common("state.none")}</code>],
                 [
-                  "Wallet address",
+                  t("account.address"),
                   <span key="address" className="flex items-center gap-1">
                     <code className="min-w-0 break-all">{wallet?.address ?? "—"}</code>
                     {wallet?.address && <CopyButton text={wallet.address} />}
                   </span>,
                 ],
                 [
-                  "Sign-in email",
+                  t("account.email"),
                   <span key="email" className="inline-flex items-center gap-2">
                     <Icon icon={Mail01Icon} size={16} className="text-muted-foreground" />
-                    {user?.email ?? "—"}
+                    {user?.email ?? common("state.none")}
                   </span>,
                 ],
-                ["Member since", user?.createdAt ? dateText(user.createdAt) : "—"],
+                [
+                  t("account.memberSince"),
+                  user?.createdAt ? dateText(user.createdAt) : common("state.none"),
+                ],
               ]}
             />
           </Panel>
         </div>
-        <Panel
-          title="Protection and preferences"
-          description="The two sections also live in the account menu, next to this page."
-          bodyClassName="p-0"
-        >
+        <Panel title={t("links.title")} description={t("links.description")} bodyClassName="p-0">
           <div className="grid sm:grid-cols-2">
             <Link
               to="/security"
@@ -205,10 +215,14 @@ export function ProfileContent() {
                 <Icon icon={Shield01Icon} size={19} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold">Security Center</span>
+                <span className="block text-sm font-semibold">{t("links.security")}</span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  {score.enabledCount} of {score.total} protections on · score {score.score}/
-                  {score.max}
+                  {t("links.securityDetail", {
+                    enabled: score.enabledCount,
+                    total: score.total,
+                    score: score.score,
+                    max: score.max,
+                  })}
                 </span>
               </span>
             </Link>
@@ -220,9 +234,9 @@ export function ProfileContent() {
                 <Icon icon={Settings01Icon} size={19} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold">Settings</span>
+                <span className="block text-sm font-semibold">{t("links.settings")}</span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Account and wallet identity
+                  {t("links.settingsDetail")}
                 </span>
               </span>
             </Link>

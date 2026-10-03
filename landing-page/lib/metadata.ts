@@ -17,7 +17,14 @@ export function createMetadata(page: PageMetadata): Metadata {
     description: page.description,
     url: page.path,
     siteName: siteConfig.name,
-    images: [{ url: siteConfig.socialImage, width: 1200, height: 630, alt: siteConfig.name }],
+    images: [
+      {
+        url: siteConfig.socialImage,
+        width: siteConfig.socialImageWidth,
+        height: siteConfig.socialImageHeight,
+        alt: siteConfig.name,
+      },
+    ],
     ...(page.type === 'article' && {
       publishedTime: page.publishedTime,
       authors: page.authors,

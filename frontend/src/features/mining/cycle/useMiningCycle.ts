@@ -14,6 +14,7 @@ import {
   serverStateFreshness,
   serverStateKeys,
 } from "@/shared/lib/platform";
+import { translate } from "@/shared/i18n";
 import { currency, dateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
 import { countdown, liveSnapshot, nextPaint } from "@/features/mining/cycle/mining-format";
 import type { FeedLine } from "@/features/mining/live/MiningLiveLog";
@@ -109,7 +110,7 @@ export function useMiningCycle() {
     if (session.settledMinor >= accrued) return;
     if (completionAnnounced.current === session.id) return;
     completionAnnounced.current = session.id;
-    toast.success("Mining cycle complete — collect your reward.", { position: "top-center" });
+    toast.success(translate("mining.cycle.toasts.complete"), { position: "top-center" });
     refreshNotifications();
   }, [session, live, refreshNotifications]);
 
@@ -149,8 +150,13 @@ export function useMiningCycle() {
     if (session && !feedAnnounced.current.has(`cycle-${session.id}`)) {
       feedAnnounced.current.add(`cycle-${session.id}`);
       heartbeatBaseline.current = session.accruedMinor;
-      pushFeed(`Cycle #${session.cycleNumber} active · ${session.rate} LMA/h`);
-      pushFeed(`Window ends ${dateText(session.endsAt)}`);
+      pushFeed(
+        translate("mining.cycle.feed.cycleActive", {
+          number: session.cycleNumber,
+          rate: session.rate,
+        }),
+      );
+      pushFeed(translate("mining.cycle.feed.windowEnds", { date: dateText(session.endsAt) }));
     }
   }, [session, pushFeed]);
 
@@ -180,7 +186,10 @@ export function useMiningCycle() {
       const gained = currentLive.accruedMinor - baseline;
       if (gained <= 0) return;
       pushFeed(
-        `+${currency(moneyFromMinorUnits(gained))} · ${countdown(currentLive.elapsedSeconds)} elapsed`,
+        translate("mining.cycle.feed.heartbeat", {
+          amount: currency(moneyFromMinorUnits(gained)),
+          time: countdown(currentLive.elapsedSeconds),
+        }),
       );
     }, 30_000);
     return () => window.clearInterval(id);
@@ -234,14 +243,16 @@ export function useMiningCycle() {
     settleInFlight.current.add(session.id);
     if (!feedAnnounced.current.has(`auto-${session.id}`)) {
       feedAnnounced.current.add(`auto-${session.id}`);
-      pushFeed(`Cycle #${session.cycleNumber} window closed · collecting reward…`);
+      pushFeed(
+        translate("mining.cycle.feed.autoCollecting", { number: session.cycleNumber }),
+      );
     }
     void settle().then((ok) => {
       settleInFlight.current.delete(session.id);
       if (ok) {
         settleRequested.current.add(session.id);
         autoSettleFailedAt.current.delete(session.id);
-        pushFeed("Reward settled · in your wallet");
+        pushFeed(translate("mining.cycle.feed.settled"));
       } else {
         autoSettleFailedAt.current.set(session.id, Date.now());
       }
@@ -253,7 +264,7 @@ export function useMiningCycle() {
   const start = async () => {
     setBusy("start");
     setError("");
-    pushFeed("Starting cycle request…");
+    pushFeed(translate("mining.cycle.feed.startRequest"));
     await nextPaint();
     try {
       await startMiningWithGuard();
@@ -261,7 +272,7 @@ export function useMiningCycle() {
       await refresh();
     } catch (cause) {
       setError(messageForMiningError(cause, messageForError));
-      pushFeed("Start request refused");
+      pushFeed(translate("mining.cycle.feed.startRefused"));
     } finally {
       setBusy(null);
     }
@@ -270,12 +281,12 @@ export function useMiningCycle() {
   const collect = async () => {
     setBusy("settle");
     setError("");
-    pushFeed("Collecting reward…");
+    pushFeed(translate("mining.cycle.feed.collectingRequest"));
     const settledBefore = session?.settledMinor ?? 0;
     try {
       const ok = await settle();
       if (!ok) {
-        pushFeed("Collection not confirmed · try again");
+        pushFeed(translate("mining.cycle.feed.collectionFailed"));
         return;
       }
       // Success is claimed only against fresh server state: the settled total must have advanced
@@ -283,13 +294,15 @@ export function useMiningCycle() {
       const fresh = await refetch();
       const next = fresh.data?.session;
       if (next && (next.settledMinor > settledBefore || next.settledMinor >= next.accruedMinor)) {
-        toast.success("Reward collected into your wallet.", { position: "top-center" });
+        toast.success(translate("mining.cycle.toasts.collected"), { position: "top-center" });
         pushFeed(
-          `Reward collected · ${currency(moneyFromMinorUnits(next.settledMinor - settledBefore))}`,
+          translate("mining.cycle.feed.collected", {
+            amount: currency(moneyFromMinorUnits(next.settledMinor - settledBefore)),
+          }),
         );
       } else {
-        setError("The reward could not be confirmed yet. Try again.");
-        pushFeed("Collection not confirmed · try again");
+        setError(translate("mining.cycle.errors.notConfirmed"));
+        pushFeed(translate("mining.cycle.feed.collectionFailed"));
       }
     } finally {
       setBusy(null);
@@ -304,13 +317,10 @@ export function useMiningCycle() {
   // Pool gate: without membership Start is refused server-side, so the page offers the
   // pools page instead of a button that can only fail.
   const poolRequired = !session && mining.data?.poolRequired === true;
-  const poolName =
-    mining.data?.poolId === "medium" || session?.poolId === "medium"
-      ? "Medium Pool"
-      : mining.data?.poolId === "low" || session?.poolId === "low"
-        ? "Low Pool"
-        : null;
-  const rateText = session ? `${session.rate} LMA / hour` : "—";
+  /** The room's own name, in the language the page is being read in. */
+  const poolId = mining.data?.poolId ?? session?.poolId ?? null;
+  const poolName = poolId ? translate(`mining.cycle.pools.${poolId === "medium" ? "medium" : "low"}`) : null;
+  const rateText = session ? translate("mining.cycle.ratePerHour", { rate: session.rate }) : "—";
   const remaining = live?.remainingSeconds ?? session?.remainingSeconds ?? 0;
   const accruedMinor = live?.accruedMinor ?? session?.accruedMinor ?? 0;
   const progressPercent =

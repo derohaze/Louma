@@ -28,6 +28,7 @@ import {
 } from "@/shared/lib/platform";
 import { securityDevices } from "@/shared/lib/security";
 import { dateText } from "@/shared/lib/wallet";
+import { useT, useTranslate } from "@/shared/i18n";
 import { SecurityErrorText } from "@/features/security/SecurityMessage";
 
 /**
@@ -40,6 +41,9 @@ import { SecurityErrorText } from "@/features/security/SecurityMessage";
  * keeping a private copy in step with it.
  */
 export function DevicesPage() {
+  const t = useT("security.devices");
+  const common = useT("common");
+  const translate = useTranslate();
   const page = securityDevices;
   const { refreshSecurity } = useWallet();
   const queryClient = useQueryClient();
@@ -60,7 +64,7 @@ export function DevicesPage() {
       await api.delete(`/api/v1/sessions/${encodeURIComponent(session.id)}`);
       await load();
       await refreshSecurity();
-      setMessage(`${session.device} signed out.`);
+      setMessage(t("messages.revoked", { device: session.device }));
     } catch (cause) {
       setActionError(messageForError(cause));
     }
@@ -84,41 +88,38 @@ export function DevicesPage() {
       setActionError(messageForError(cause));
       return;
     }
-    setMessage(`${removed} other session(s) signed out.`);
+    setMessage(t("messages.revokedOthers", { count: removed }));
   };
   const loading = sessionsQuery.isPending;
   // An action that failed is reported as it happened; a list that could not be read reports itself.
   const error = actionError || (sessionsQuery.error ? messageForError(sessionsQuery.error) : "");
   return (
     <>
-      <PageHeader title={page.title} subtitle={page.description} />
+      <PageHeader title={translate(page.titleKey)} subtitle={translate(page.descriptionKey)} />
       <div className="space-y-4">
         <Panel
-          title="Signed-in devices"
-          description="Revoking a device ends its session on the next request."
+          title={t("panel.title")}
+          description={t("panel.description")}
           bodyClassName="p-0"
           action={
             otherSessions.length > 0 ? (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button variant="outline" size="sm">
-                    Sign out other devices
+                    {t("signOutOthers")}
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
                     <AlertDialogTitle>
-                      Sign out {otherSessions.length} other device(s)?
+                      {t("confirm.title", { count: otherSessions.length })}
                     </AlertDialogTitle>
-                    <AlertDialogDescription>
-                      They stay signed in until their next request, then need your credentials and a
-                      second factor again. This device is not affected.
-                    </AlertDialogDescription>
+                    <AlertDialogDescription>{t("confirm.body")}</AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogCancel>{common("actions.cancel")}</AlertDialogCancel>
                     <AlertDialogAction onClick={() => void revokeOthers()}>
-                      Sign them out
+                      {t("confirm.action")}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -129,7 +130,7 @@ export function DevicesPage() {
           {loading ? (
             <div aria-busy="true" className="px-5 py-4">
               <p role="status" className="sr-only">
-                Loading devices…
+                {t("loading")}
               </p>
               {Array.from({ length: 3 }, (_, i) => (
                 <div key={i} className="flex items-center gap-3 border-b py-4 last:border-0">
@@ -154,35 +155,35 @@ export function DevicesPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{session.device}</p>
                   <p className="text-xs text-muted-foreground">
-                    Last active {dateText(session.lastActiveAt)} · expires{" "}
-                    {dateText(session.expiresAt)}
+                    {t("lastActive", {
+                      lastActive: dateText(session.lastActiveAt),
+                      expires: dateText(session.expiresAt),
+                    })}
                   </p>
                 </div>
-                {session.current && <StatusPill enabled on="This device" />}
+                {session.current && <StatusPill enabled on={t("thisDevice")} />}
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={session.current}
                   onClick={() => void revoke(session)}
                 >
-                  {session.current ? "Current session" : "Sign out"}
+                  {t(session.current ? "currentSession" : "signOut")}
                 </Button>
               </div>
             ))
           ) : (
-            <p className="px-5 py-6 text-sm text-muted-foreground">
-              No active sessions were found.
-            </p>
+            <p className="px-5 py-6 text-sm text-muted-foreground">{t("empty")}</p>
           )}
         </Panel>
         {error && <SecurityErrorText error={error} />}
         {message && <FormMessage tone="ok">{message}</FormMessage>}
         <div className="text-sm text-muted-foreground">
-          Lost a device?{" "}
+          {t("lostDevice.question")}{" "}
           <Link to="/security/freeze" className="font-semibold text-primary-soft">
-            Freeze the wallet
+            {t("lostDevice.freeze")}
           </Link>{" "}
-          first, then revoke the session.
+          {t("lostDevice.tail")}
         </div>
       </div>
     </>

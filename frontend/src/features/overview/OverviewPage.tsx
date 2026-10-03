@@ -25,6 +25,7 @@ import {
   type TransactionPage,
   type MiningHistoryPage,
 } from "@/shared/lib/platform";
+import { currentLocale, translate, useT } from "@/shared/i18n";
 import { Icon, CopyButton } from "@/shared/ui/page";
 import { Switch } from "@/shared/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
@@ -65,11 +66,14 @@ const BAR_COUNT = 10;
 const FEED_ROWS = 4;
 const COUNTERPARTY_LIMIT = 5;
 
-/** The window every figure on the board describes, chosen once from the statistics card. */
-const PERIODS: readonly { id: string; label: string; days: number }[] = [
-  { id: "7", label: "Last 7 days", days: 7 },
-  { id: "30", label: "Last 30 days", days: 30 },
-  { id: "90", label: "Last 90 days", days: 90 },
+/**
+ * The windows the board can describe, chosen once from the statistics card. The label is a key,
+ * resolved where the card renders, so the same period reads in whichever language is current.
+ */
+const PERIODS: readonly { id: string; labelKey: "periods.last7" | "periods.last30" | "periods.last90"; days: number }[] = [
+  { id: "7", labelKey: "periods.last7", days: 7 },
+  { id: "30", labelKey: "periods.last30", days: 30 },
+  { id: "90", labelKey: "periods.last90", days: 90 },
 ];
 
 /** One slice of the window: what came in and what went out inside it. */
@@ -106,10 +110,12 @@ function initials(address: string): string {
 function relativeTime(iso: string): string {
   const at = new Date(iso).getTime();
   const days = Math.floor((Date.now() - at) / DAY_MS);
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 7) return `${days} days ago`;
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(new Date(at));
+  if (days <= 0) return translate("overview.relative.today");
+  if (days === 1) return translate("overview.relative.yesterday");
+  if (days < 7) return translate("overview.relative.daysAgo", { days });
+  return new Intl.DateTimeFormat(currentLocale(), { day: "2-digit", month: "short" }).format(
+    new Date(at),
+  );
 }
 
 /** A period dropdown, kept as the pill the header uses. */
@@ -154,7 +160,7 @@ function BarChart({ slices }: { slices: readonly Slice[] }) {
   return (
     <div
       role="img"
-      aria-label="Money in and out across the period"
+      aria-label={translate("overview.chartAria")}
       className="flex h-[116px] items-end gap-[9px]"
     >
       {slices.map((slice, index) => (
@@ -223,7 +229,7 @@ function MaskSwitch({ hidden, onToggle }: { hidden: boolean; onToggle: () => voi
     <Switch
       checked={hidden}
       onCheckedChange={onToggle}
-      aria-label={hidden ? "Show balance" : "Hide balance"}
+      aria-label={hidden ? translate("overview.balance.show") : translate("overview.balance.hide")}
       className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-background/20"
     />
   );
@@ -279,7 +285,7 @@ function MiningCycleCard({
     <Link
       to="/mining"
       className={className ? `${FILLED} ${className}` : FILLED}
-      aria-label="Mining cycle"
+      aria-label={translate("overview.mining.cardAria")}
     >
       <div className="flex h-full flex-col p-5">
         <p className="font-display text-[22px] leading-none font-bold">
@@ -296,15 +302,22 @@ function MiningCycleCard({
         </p>
         <p className="mt-1.5 text-[12px] opacity-70">
           {session
-            ? `Mining cycle #${session.cycleNumber} · ${session.rate} LMA/h`
-            : "No active cycle · start one to earn"}
+            ? translate("overview.mining.progress", {
+                number: session.cycleNumber,
+                rate: session.rate,
+              })
+            : translate("overview.mining.none")}
         </p>
         <div className="mt-auto pt-6">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="text-[12px] font-semibold opacity-70">{percent}% Completed</p>
+            <p className="text-[12px] font-semibold opacity-70">
+              {translate("overview.mining.completed", { percent })}
+            </p>
             {live && (
               <p className="text-[12px] font-semibold tabular-nums opacity-70">
-                {countdown(live.remainingSeconds)} left
+                {translate("overview.mining.remaining", {
+                  time: countdown(live.remainingSeconds),
+                })}
               </p>
             )}
           </div>
@@ -321,6 +334,8 @@ function MiningCycleCard({
 }
 
 export function OverviewContent() {
+  const t = useT("overview");
+  const common = useT("common");
   const { wallet, transactions, security } = useWallet();
   const mining = useQuery({
     queryKey: serverStateKeys.mining,
@@ -343,7 +358,9 @@ export function OverviewContent() {
     enabled: hasBrowserSession,
   });
   const [balanceHidden, setBalanceHidden] = useState(readBalanceHidden);
-  const [period, setPeriod] = useState(PERIODS[1]!);
+  const periods = PERIODS.map((entry) => ({ id: entry.id, label: t(entry.labelKey), days: entry.days }));
+  const [periodId, setPeriodId] = useState(PERIODS[1]!.id);
+  const period = periods.find((entry) => entry.id === periodId) ?? periods[1]!;
   const toggleBalanceHidden = () => {
     setBalanceHidden((current) => {
       const next = !current;
@@ -491,21 +508,19 @@ export function OverviewContent() {
       >
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="font-display text-[22px] font-semibold">Statistics</h2>
+            <h2 className="font-display text-[22px] font-semibold">{t("statistics")}</h2>
             <PillSelect
               value={period.id}
-              label="Period"
-              options={PERIODS.map((entry) => ({ id: entry.id, label: entry.label }))}
-              onChange={(next) =>
-                setPeriod(PERIODS.find((entry) => entry.id === next) ?? PERIODS[1]!)
-              }
+              label={t("periodLabel")}
+              options={periods}
+              onChange={setPeriodId}
             />
           </div>
           <div className="mt-7 flex flex-wrap gap-x-10 gap-y-4">
             <div>
               <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
                 <span aria-hidden className="size-2 rounded-full bg-chart-2" />
-                Expenses
+                {t("expenses")}
               </p>
               <p className="mt-1.5 font-display text-[24px] leading-none font-bold tabular-nums">
                 {show(flow.expense)}
@@ -514,7 +529,7 @@ export function OverviewContent() {
             <div>
               <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
                 <span aria-hidden className="size-2 rounded-full bg-primary" />
-                Incomes
+                {t("incomes")}
               </p>
               <p className="mt-1.5 font-display text-[24px] leading-none font-bold tabular-nums">
                 {show(flow.income)}
@@ -536,7 +551,7 @@ export function OverviewContent() {
           <div className="mt-6 flex items-end justify-between gap-3">
             <div>
               <p className="text-[13px] font-semibold text-muted-foreground">
-                Transfers · {period.label.toLowerCase()}
+                {t("transfers.label", { period: period.label })}
               </p>
               <p className="mt-1 font-display text-[30px] leading-none font-bold tabular-nums">
                 {flow.count}
@@ -567,7 +582,8 @@ export function OverviewContent() {
                       {transaction.note || shortAddress(transaction.counterpartyAddress)}
                     </span>
                     <span className="block truncate text-[11px] text-muted-foreground">
-                      {received ? "Received · " : "Sent · "}
+                      {received ? common("direction.received") : common("direction.sent")}
+                      {" · "}
                       {relativeTime(transaction.createdAt)}
                     </span>
                   </span>
@@ -580,7 +596,7 @@ export function OverviewContent() {
           })}
           {recent.length === 0 && (
             <li className="px-5 py-8 text-center text-[13px] text-muted-foreground">
-              Nothing moved in this period yet.
+              {t("transfers.empty")}
             </li>
           )}
         </ul>
@@ -596,7 +612,7 @@ export function OverviewContent() {
               <span className="flex items-center gap-3">
                 <WalletLogo />
                 <span className="text-[12px] font-semibold tracking-wide opacity-70">
-                  Available balance
+                  {t("balance.available")}
                 </span>
               </span>
               <MaskSwitch hidden={balanceHidden} onToggle={toggleBalanceHidden} />
@@ -608,8 +624,8 @@ export function OverviewContent() {
               <p className="mt-2.5 text-[11px] tracking-wide opacity-70">
                 LMA ·{" "}
                 {security?.wallet.status === "frozen"
-                  ? "Frozen · transfers are refused"
-                  : "Ready to transfer"}
+                  ? t("balance.frozen")
+                  : t("balance.ready")}
               </p>
               {/* The address lives here and nowhere else: once, with the copy that makes it usable. */}
               <div className="mt-2 flex min-w-0 items-center gap-1">
@@ -635,11 +651,11 @@ export function OverviewContent() {
         className={`${CARD} order-5 flex flex-wrap items-center justify-between gap-5 p-5 lg:order-none`}
       >
         <div className="min-w-0">
-          <p className="text-[12px] font-semibold text-muted-foreground">Send money to</p>
+          <p className="text-[12px] font-semibold text-muted-foreground">{t("quickSend.label")}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Link
               to="/transfer"
-              aria-label="New transfer"
+              aria-label={t("quickSend.newTransfer")}
               className="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105"
             >
               <Icon icon={Add01Icon} size={18} />
@@ -657,7 +673,7 @@ export function OverviewContent() {
                 </Link>
               ))
             ) : (
-              <p className="text-[13px] text-muted-foreground">No counterparties yet.</p>
+              <p className="text-[13px] text-muted-foreground">{t("quickSend.none")}</p>
             )}
           </div>
         </div>
@@ -666,14 +682,14 @@ export function OverviewContent() {
             to="/wallet"
             className="flex items-center gap-2 rounded-2xl bg-secondary px-5 py-3.5 text-[13px] font-bold tracking-wide text-secondary-foreground transition-colors hover:bg-secondary/80"
           >
-            [ RECEIVE ]
+            {t("quickSend.receive")}
             <Icon icon={ArrowDownLeft01Icon} size={16} />
           </Link>
           <Link
             to="/transfer"
             className="flex items-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-[13px] font-bold tracking-wide text-primary-foreground transition-transform hover:scale-[1.02]"
           >
-            [ TRANSFER ]
+            {t("quickSend.transfer")}
             <Icon icon={ArrowUpRight01Icon} size={16} />
           </Link>
         </div>
@@ -687,47 +703,55 @@ export function OverviewContent() {
           </div>
           <div className="mt-8">
             <p className="text-[12px] font-semibold text-muted-foreground">
-              Mined · {settledCycles.length} {settledCycles.length === 1 ? "cycle" : "cycles"}
+              {t("mined.label", {
+                count: settledCycles.length,
+                unit:
+                  settledCycles.length === 1
+                    ? common("units.cycleOne")
+                    : common("units.cycleOther"),
+              })}
             </p>
             <p className="mt-1 font-display text-[26px] leading-none font-bold tabular-nums">
               {show(mined)}
             </p>
             <p className="mt-2 text-[11px] text-muted-foreground">
               {lastSettled
-                ? `Last collected ${relativeTime(lastSettled)}`
-                : "Nothing collected yet"}
+                ? t("mined.lastCollected", { time: relativeTime(lastSettled) })
+                : t("mined.nothingCollected")}
             </p>
           </div>
         </section>
 
         {/* The account itself: what protects it and how many devices hold a session on it. */}
         <section className={`${CARD} order-7 flex flex-col p-5 sm:order-none`}>
-          <p className="text-[12px] font-semibold text-muted-foreground">Account</p>
+          <p className="text-[12px] font-semibold text-muted-foreground">{t("account.label")}</p>
           <dl className="mt-3 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-[12px] text-muted-foreground">Two-factor</dt>
+              <dt className="text-[12px] text-muted-foreground">{t("account.twoFactor")}</dt>
               <dd
                 className={`text-[13px] font-semibold ${
                   security?.twoFactor.enabled ? "text-success" : "text-destructive"
                 }`}
               >
-                {security?.twoFactor.enabled ? "On" : "Off"}
+                {security?.twoFactor.enabled ? common("state.on") : common("state.off")}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-[12px] text-muted-foreground">Sessions</dt>
+              <dt className="text-[12px] text-muted-foreground">{t("account.sessions")}</dt>
               <dd className="text-[13px] font-semibold tabular-nums">
                 {security?.activeSessions ?? "—"}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-[12px] text-muted-foreground">Wallet</dt>
+              <dt className="text-[12px] text-muted-foreground">{t("account.wallet")}</dt>
               <dd
                 className={`text-[13px] font-semibold ${
                   security?.wallet.status === "frozen" ? "text-destructive" : "text-success"
                 }`}
               >
-                {security?.wallet.status === "frozen" ? "Frozen" : "Active"}
+                {security?.wallet.status === "frozen"
+                  ? common("state.frozen")
+                  : common("state.active")}
               </dd>
             </div>
           </dl>
@@ -735,7 +759,7 @@ export function OverviewContent() {
             to="/security"
             className="mt-auto inline-flex items-center gap-1.5 pt-4 text-[13px] font-semibold text-primary-soft"
           >
-            Security center
+            {t("account.securityCenter")}
             <Icon icon={ArrowRight01Icon} size={14} />
           </Link>
         </section>
