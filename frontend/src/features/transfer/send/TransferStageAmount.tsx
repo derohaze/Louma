@@ -31,8 +31,6 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
     tax,
     net,
     decimalAmount,
-    note,
-    setNote,
     balanceMinor,
     busy,
     frozen,
@@ -145,20 +143,6 @@ export function TransferStageAmount({ flow }: { flow: TransferFlow }) {
       {balanceMinor <= 0 && (
         <p className="text-sm text-muted-foreground">{t("amount.noFunds")}</p>
       )}
-      <label className="block text-sm font-semibold">
-        {t("amount.noteLabel")}
-        <Input
-          className="mt-2"
-          autoComplete="off"
-          maxLength={LIMITS.maxNoteLength}
-          placeholder={t("amount.notePlaceholder")}
-          value={note}
-          onChange={(event) => {
-            setNote(event.target.value);
-            setError("");
-          }}
-        />
-      </label>
       {error && <FormMessage tone="error">{error}</FormMessage>}
       <div className="flex flex-wrap items-center gap-3">
         <Button

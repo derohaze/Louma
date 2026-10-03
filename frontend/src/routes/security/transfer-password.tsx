@@ -7,7 +7,7 @@ import { pageHead } from "@/shared/lib/platform";
 const feature = securityFeature("transfer-password");
 
 export const Route = createFileRoute("/security/transfer-password")({
-  head: () => pageHead(feature.titleKey, feature.descriptionKey),
+  head: ({ match }) => pageHead(feature.titleKey, feature.descriptionKey, match.context.language),
   component: () => (
     <WalletPage titleKey={feature.titleKey}>
       <TransferPasswordPage />

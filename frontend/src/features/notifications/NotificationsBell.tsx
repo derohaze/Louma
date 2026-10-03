@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { useT } from "@/shared/i18n";
 import { dateText } from "@/shared/lib/wallet";
 import { notificationKindIcons } from "./notification-icons";
+import { notificationText } from "./notification-text";
 import { useNotificationFeed } from "./useNotificationFeed";
 
 /**
@@ -64,9 +65,7 @@ export function WalletNotifications() {
         <Button
           variant="ghost"
           size="icon"
-          aria-label={
-            unreadCount > 0 ? t("bell.ariaUnread", { count: unreadCount }) : t("title")
-          }
+          aria-label={unreadCount > 0 ? t("bell.ariaUnread", { count: unreadCount }) : t("title")}
           aria-expanded={open}
           className="relative rounded-full border border-primary-foreground/10 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground dark:border-white/10 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
         >
@@ -100,6 +99,8 @@ export function WalletNotifications() {
       <PopoverContent
         align="end"
         sideOffset={12}
+        collisionPadding={12}
+        avoidCollisions
         className="w-[380px] max-w-[calc(100vw-2rem)] rounded-[24px] border-0 bg-[#E9E9EC] p-3 shadow-2xl dark:bg-card"
       >
         <div className="mb-1 flex items-center justify-between gap-2 px-2 pb-2 pt-1">
@@ -131,38 +132,41 @@ export function WalletNotifications() {
               <p className="py-6 text-sm text-destructive">{error}</p>
             ) : notifications.length ? (
               <div className="divide-y divide-gray-100 dark:divide-border">
-                {notifications.map((item) => (
-                  <article key={item.id} className="py-4">
-                    <div className="flex items-start gap-3">
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900 dark:bg-secondary dark:text-white">
-                        <HugeiconsIcon
-                          icon={notificationKindIcons[item.kind] ?? Notification01Icon}
-                          size={20}
-                          strokeWidth={1.7}
-                        />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start gap-2">
-                          {item.readAt === null && (
-                            <span
-                              aria-label={t("unreadAria")}
-                              className="mt-2 size-2 shrink-0 rounded-full bg-[#F5334F]"
-                            />
-                          )}
-                          <p className="flex-1 text-[15px] font-bold leading-snug text-gray-900 dark:text-white">
-                            {item.title}
+                {notifications.map((item) => {
+                  const copy = notificationText(item, t);
+                  return (
+                    <article key={item.id} className="py-4">
+                      <div className="flex items-start gap-3">
+                        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900 dark:bg-secondary dark:text-white">
+                          <HugeiconsIcon
+                            icon={notificationKindIcons[item.kind] ?? Notification01Icon}
+                            size={20}
+                            strokeWidth={1.7}
+                          />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start gap-2">
+                            {item.readAt === null && (
+                              <span
+                                aria-label={t("unreadAria")}
+                                className="mt-2 size-2 shrink-0 rounded-full bg-[#F5334F]"
+                              />
+                            )}
+                            <p className="flex-1 text-[15px] font-bold leading-snug text-gray-900 dark:text-white">
+                              {copy.title}
+                            </p>
+                          </div>
+                          <p className="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-zinc-400">
+                            {copy.body}
+                          </p>
+                          <p className="mt-1 text-[12px] text-gray-400 dark:text-zinc-500">
+                            {dateText(item.createdAt)}
                           </p>
                         </div>
-                        <p className="mt-1 text-[13px] leading-relaxed text-gray-500 dark:text-zinc-400">
-                          {item.body}
-                        </p>
-                        <p className="mt-1 text-[12px] text-gray-400 dark:text-zinc-500">
-                          {dateText(item.createdAt)}
-                        </p>
                       </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             ) : (
               <p className="py-6 text-sm text-gray-500 dark:text-zinc-400">

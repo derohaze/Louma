@@ -4,7 +4,7 @@ import { ProfileContent } from "@/features/profile";
 import { pageHead } from "@/shared/lib/platform";
 
 export const Route = createFileRoute("/profile/")({
-  head: () => pageHead("profile.title", "profile.description"),
+  head: ({ match }) => pageHead("profile.title", "profile.description", match.context.language),
   component: () => (
     <WalletPage titleKey="profile.title">
       <ProfileContent />

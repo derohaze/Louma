@@ -77,7 +77,7 @@ export function ProfileContent() {
         }
       />
       <div className="space-y-4">
-        <Panel title={t("identity.title")} description={t("identity.description")}>
+        <Panel delayMs={0} title={t("identity.title")} description={t("identity.description")}>
           <div className="flex flex-wrap items-center gap-4">
             <span
               aria-hidden
@@ -142,7 +142,7 @@ export function ProfileContent() {
           )}
         </Panel>
         <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-          <Panel title={t("glance.title")} description={t("glance.description")}>
+          <Panel delayMs={75} title={t("glance.title")} description={t("glance.description")}>
             <FactList
               items={[
                 [
@@ -179,7 +179,7 @@ export function ProfileContent() {
               ]}
             />
           </Panel>
-          <Panel title={t("account.title")} description={t("account.description")}>
+          <Panel delayMs={150} title={t("account.title")} description={t("account.description")}>
             <FactList
               items={[
                 [t("account.id"), <code key="id">{user?.id ?? common("state.none")}</code>],
@@ -205,7 +205,12 @@ export function ProfileContent() {
             />
           </Panel>
         </div>
-        <Panel title={t("links.title")} description={t("links.description")} bodyClassName="p-0">
+        <Panel
+          delayMs={225}
+          title={t("links.title")}
+          description={t("links.description")}
+          bodyClassName="p-0"
+        >
           <div className="grid sm:grid-cols-2">
             <Link
               to="/security"

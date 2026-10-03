@@ -1,6 +1,5 @@
 import type { ApiTransaction } from "@/shared/api";
 import { dateText } from "./wallet-format";
-import { displayNote } from "./address-book";
 
 /**
  * Statement exports: CSV files generated in the browser from API data.
@@ -36,16 +35,7 @@ export function downloadCsv(filename: string, csv: string): void {
 
 export function transactionsToCsv(transactions: ApiTransaction[], userId: string | null): string {
   return toCsv(
-    [
-      "Date",
-      "Direction",
-      "Counterparty",
-      "Amount (LMA)",
-      "Fee (LMA)",
-      "Net (LMA)",
-      "Transfer ID",
-      "Note",
-    ],
+    ["Date", "Direction", "Counterparty", "Amount (LMA)", "Fee (LMA)", "Net (LMA)", "Transfer ID"],
     transactions.map((tx) => [
       dateText(tx.createdAt),
       tx.direction,
@@ -54,7 +44,6 @@ export function transactionsToCsv(transactions: ApiTransaction[], userId: string
       tx.fee,
       tx.netAmount,
       tx.transferId,
-      displayNote(tx.note, ""),
     ]),
   );
 }

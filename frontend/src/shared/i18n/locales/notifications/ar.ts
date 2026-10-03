@@ -17,6 +17,16 @@ const ar: Strings<typeof en> = {
   },
   loadingOlder: "جارٍ تحميل إشعارات أقدم…",
   loadOlder: "تحميل إشعارات أقدم",
+  transfer: {
+    sent: {
+      title: "تم إرسال تحويل",
+      body: "أرسلت {amount} LMA إلى {address}. الرسوم {fee} LMA.",
+    },
+    received: {
+      title: "تم استلام تحويل",
+      body: "استلمت {amount} LMA من {address}.",
+    },
+  },
   bell: {
     ariaUnread: "الإشعارات، {count} غير مقروء",
     viewAll: "عرض الكل",

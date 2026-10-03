@@ -3,15 +3,15 @@ import { z } from "zod";
 import * as mining from "../../mining/service.js";
 import * as pools from "../../mining/pools.js";
 import { authBody, pageLimitSchema } from "../schemas.js";
-import { authenticated, getAuth, parseBody } from "../http-helpers.js";
+import { authenticated, clientIp, getAuth, parseBody } from "../http-helpers.js";
 import { enforceRateLimit, membershipCache, settingsCache } from "../../../app.js";
 
 export async function registerMiningRoutes(app: FastifyInstance): Promise<void> {
   /**
-   * Mining is a persisted cycle plus a clock, so these endpoints read and settle state; they never
-   * accept a rate, a window, or an elapsed time from the caller. `start` and `settle` are the only
-   * writes, and both are safe to repeat: `start` while a cycle runs is refused, and a settle with
-   * nothing new to post writes nothing.
+   * Mining is persisted segments plus a clock, so these endpoints read and settle state; they never
+   * accept a rate, a window, or an elapsed time from the caller. `start`, `stop`, and `settle` are
+   * the only writes, all safe to repeat: `start` while a segment runs is refused, `stop` with no
+   * active segment returns the current state, and a settle with nothing new to post writes nothing.
    */
   app.get(
     "/api/v1/mining/state",
@@ -90,9 +90,24 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
         membershipCache: membershipCache(app),
         ...(body.device === undefined
           ? {}
-          : { device: { evidenceRaw: body.device, ip: request.ip.slice(0, 45) } }),
+          : { device: { evidenceRaw: body.device, ip: clientIp(request).slice(0, 45) } }),
       });
     },
+  );
+
+  app.post(
+    "/api/v1/mining/stop",
+    { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
+    async (request) =>
+      mining.stopMining({
+        collections: app.collections,
+        mongoClient: app.mongoClient,
+        config: app.config,
+        ownerUserId: getAuth(request).userId,
+        correlationId: request.id,
+        cache: settingsCache(app),
+        membershipCache: membershipCache(app),
+      }),
   );
 
   app.post(

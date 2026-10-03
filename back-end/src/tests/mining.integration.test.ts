@@ -15,11 +15,12 @@ import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/l
 /**
  * Mining against the configured MongoDB cluster.
  *
- * The guarantees under test are the ones the product depends on: a cycle is exactly 24 hours, the
- * rate is the server's and never the browser's, the reward is a pure function of persisted state,
- * and settlement credits the ledger exactly once no matter how many times or how concurrently it is
- * asked. Where a test needs time to have passed it moves the stored window (both endpoints together,
- * so the 24-hour invariant holds) rather than waiting.
+ * The guarantees under test are the ones the product depends on: a fresh segment is at most 10
+ * hours inside a 24h quota window, the rate is the server's and never the browser's, the reward
+ * is a pure function of persisted state, and settlement credits the ledger exactly once no matter
+ * how many times or how concurrently it is asked. Where a test needs time to have passed it moves
+ * the stored window (both endpoints together, so the segment-length invariant holds) rather than
+ * waiting.
  *
  * Run with `npm run test:integration:mining`. Every document the run creates is removed afterwards,
  * and the shared treasury is returned to the balance it had before the run.
@@ -29,6 +30,9 @@ const PASSWORD = "SmokeTest1234";
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const DAY_SECONDS = 24 * 60 * 60;
+// 10h daily quota per 24h window: fresh starts open a 10h segment, not a 24h cycle.
+const QUOTA_SECONDS = 10 * 60 * 60;
+const QUOTA_MS = QUOTA_SECONDS * 1000;
 
 /**
  * Namespace and start time for one run of this file.
@@ -269,14 +273,24 @@ async function miningState(account: Account) {
 }
 
 async function startMining(account: Account) {
+  return startMiningOn(account, account.machine);
+}
+
+/** Starts mining as `account` from an explicit simulated machine (a device). */
+async function startMiningOn(account: Account, machine: number) {
   const response = await call("POST", "/api/v1/mining/start", {
     token: account.accessToken,
-    body: { device: deviceEvidence(account.machine) },
+    body: { device: deviceEvidence(machine) },
   });
   assert.equal(response.status, 200, JSON.stringify(response.body));
   const state = response.body as { status: string; session: MiningSession };
   createdSessionIds.push(state.session.id);
   return state;
+}
+
+/** Reserves a simulated machine index nobody has registered on, for cross-device tests. */
+function freshMachine(): number {
+  return nextMachine++;
 }
 
 async function settleMining(account: Account, body?: unknown) {
@@ -500,7 +514,7 @@ test("a pool cap stored in mining_settings is enforced without a restart", async
   }
 });
 
-test("start opens exactly a 24-hour cycle with a server-chosen rate inside the configured band", async () => {
+test("start opens at most a 10-hour segment with a server-chosen rate inside the configured band", async () => {
   const account = await register("start");
   assert.equal((await miningState(account)).status, "idle", "a fresh account has no cycle");
 
@@ -508,16 +522,16 @@ test("start opens exactly a 24-hour cycle with a server-chosen rate inside the c
   const started = await startMining(account);
   const session = started.session;
   assert.equal(session.status, "active");
-  assert.equal(new Date(session.endsAt).getTime() - new Date(session.startedAt).getTime(), DAY_MS, "the window is exactly 24 hours");
-  assert.equal(session.durationSeconds, DAY_SECONDS);
-  // "The cycle just opened" is a fact about the stored start versus the server clock (both in the
+  assert.equal(new Date(session.endsAt).getTime() - new Date(session.startedAt).getTime(), QUOTA_MS, "a fresh account gets the full 10h quota");
+  assert.equal(session.durationSeconds, QUOTA_SECONDS);
+  // "The segment just opened" is a fact about the stored start versus the server clock (both in the
   // payload), not about this process's wall clock: a fixed tolerance on `remainingSeconds` fails
   // whenever the round trip to the database exceeds it. Assert the window's own arithmetic — the
   // remaining time is derived from the stored start, never re-chosen — plus that this is a fresh
-  // cycle, still inside its 24-hour window.
-  assert.ok(new Date(session.startedAt).getTime() >= requestedAt - 1000, "the cycle opens at the server clock of this request");
-  assert.equal(session.remainingSeconds, DAY_SECONDS - session.elapsedSeconds, "remaining time is the stored window minus the stored start");
-  assert.ok(session.elapsedSeconds >= 0 && session.elapsedSeconds < DAY_SECONDS, "the fresh cycle is inside its 24-hour window");
+  // segment, still inside its 10-hour allowance.
+  assert.ok(new Date(session.startedAt).getTime() >= requestedAt - 1000, "the segment opens at the server clock of this request");
+  assert.equal(session.remainingSeconds, QUOTA_SECONDS - session.elapsedSeconds, "remaining time is the stored window minus the stored start");
+  assert.ok(session.elapsedSeconds >= 0 && session.elapsedSeconds < QUOTA_SECONDS, "the fresh segment is inside its 10-hour allowance");
   assert.match(session.rate, /^\d+\.\d{6}$/);
   const rateUnits = Number(session.rate.replace(".", ""));
   // Fixtures join the Low pool (factor 0.85–1.15x) on top of the configured band.
@@ -526,7 +540,7 @@ test("start opens exactly a 24-hour cycle with a server-chosen rate inside the c
     "the drawn rate is the base band scaled by the pool factor",
   );
   assert.equal(session.accrued, "0.0000", "nothing has accrued yet");
-  assert.ok(session.totalAccruedMinor > 0, "the cycle still has a positive 24-hour ceiling");
+  assert.ok(session.totalAccruedMinor > 0, "the segment still has a positive 10-hour ceiling");
   assert.ok(session.accruedMinor < session.totalAccruedMinor);
   assert.equal(started.session.canSettle, false);
 
@@ -581,7 +595,7 @@ test("the server reports the accrual from persisted state, and settlement posts 
   assert.equal(hour.status, "active");
   assert.ok(hour.elapsedSeconds >= 3600, "about an hour has elapsed");
   assert.equal(hour.accruedMinor, expectedAccruedMinor(hour, hour.elapsedSeconds), "the reported accrual matches the exact server arithmetic");
-  assert.equal(hour.remainingSeconds, DAY_SECONDS - hour.elapsedSeconds);
+  assert.equal(hour.remainingSeconds, QUOTA_SECONDS - hour.elapsedSeconds);
   assert.ok(hour.accruedMinor > 0, "an hour of mining has produced a reward");
 
   const settled = await settleMining(account);
@@ -607,29 +621,44 @@ test("the server reports the accrual from persisted state, and settlement posts 
   assert.equal((history.body["transactions"] as unknown[]).length, 0, "mining never surfaces as a transfer");
 });
 
-test("exactly 24 hours: one millisecond short pays less, and nothing after the window pays more", async () => {
+test("exactly 10 hours: past the segment end pays nothing more", async () => {
   const account = await register("window");
   const started = await startMining(account);
   const cap = started.session.totalAccruedMinor;
-  assert.ok(cap > 0, "the configured band pays a non-zero 24-hour reward");
+  assert.ok(cap > 0, "the configured band pays a non-zero 10-hour reward");
 
   await rewindCycle(started.session.id, DAY_MS + 30 * DAY_MS);
   const expired = (await miningState(account)).session;
   assert.ok(expired);
   assert.equal(expired.status, "completed");
-  assert.equal(expired.accruedMinor, cap, "a month past the window is clamped to the 24-hour reward");
+  assert.equal(expired.accruedMinor, cap, "a month past the segment is clamped to the 10-hour reward");
   assert.equal(expired.remainingSeconds, 0);
 
   await settleMining(account);
   assert.equal(await balanceMinorOf(account), cap);
 
-  // Repeated, replayed settlement after the window cannot credit a second time.
+  // Repeated, replayed settlement after the segment cannot credit a second time.
   const before = await collections.ledgerEntries.countDocuments({ ledgerAccountId: account.ledgerAccountId });
   for (let attempt = 0; attempt < 3; attempt += 1) await settleMining(account);
-  assert.equal(await balanceMinorOf(account), cap, "no reward beyond the 24-hour total");
+  assert.equal(await balanceMinorOf(account), cap, "no reward beyond the 10-hour total");
   assert.equal(await collections.ledgerEntries.countDocuments({ ledgerAccountId: account.ledgerAccountId }), before, "no further lines were written");
 
-  // A closed cycle can be followed by a fresh one, and the old record is not reused.
+  // A closed 10h segment exhausts the window: the next start in the SAME window
+  // is refused, and only the next 24h window opens fresh quota.
+  const refused = await call("POST", "/api/v1/mining/start", {
+    token: account.accessToken,
+    body: { device: deviceEvidence(account.machine) },
+  });
+  assert.equal(refused.status, 409);
+  assert.equal((refused.body["error"] as { code: string }).code, "mining_quota_exhausted");
+
+  // Simulate the next window by moving the settled segment's anchors 25h back;
+  // the new start anchors a fresh window and the old record is not reused.
+  const past = new Date(Date.now() - 25 * HOUR_MS);
+  await collections.miningSessions.updateMany(
+    { ownerUserId: account.userId },
+    { $set: { accountWindowStart: past, deviceWindowStart: past } },
+  );
   const next = await startMining(account);
   assert.notEqual(next.session.id, started.session.id);
   assert.equal(next.session.cycleNumber, 2);
@@ -712,8 +741,8 @@ test("a client cannot forge a rate, a window, or an amount", async () => {
   assert.equal(session.id, started.session.id);
   assert.equal(session.rate, before.rate, "the rate is still the stored one");
   assert.equal(session.endsAt, before.endsAt, "the window was not extended");
-  assert.equal(session.durationSeconds, DAY_SECONDS);
-  assert.ok(session.accruedMinor <= before.totalAccruedMinor, "the reward cannot exceed the 24-hour total");
+  assert.equal(session.durationSeconds, QUOTA_SECONDS);
+  assert.ok(session.accruedMinor <= before.totalAccruedMinor, "the reward cannot exceed the 10-hour total");
   assert.ok(settledMatchesRecentAccrual(session, session.settledMinor), "only the canonical reward was credited");
   assert.equal(await balanceMinorOf(account), session.settledMinor);
 });
@@ -761,6 +790,100 @@ test("the database enforces one active cycle per account", async () => {
       } as never),
     (error: unknown) => error instanceof MongoServerError && error.code === 11000,
   );
+});
+
+test("stop closes the active segment and resume continues from the remaining quota", async () => {
+  const account = await register("stop-resume");
+  const first = await startMining(account);
+  assert.equal(first.session.durationSeconds, QUOTA_SECONDS);
+
+  await rewindCycle(first.session.id, HOUR_MS);
+  const stopped = await call("POST", "/api/v1/mining/stop", { token: account.accessToken });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  const stoppedState = stopped.body as { status: string; quota: { consumedSeconds: number; remainingSeconds: number } };
+  assert.ok(stoppedState.quota.consumedSeconds >= 3600, "one hour is consumed and never refunded");
+  assert.ok(stoppedState.quota.remainingSeconds <= QUOTA_SECONDS - 3600, "remaining is quota minus consumed");
+
+  // Resume is a new segment on the same anchors, capped to what remains.
+  const resumed = await startMining(account);
+  assert.notEqual(resumed.session.id, first.session.id);
+  assert.ok(resumed.session.durationSeconds <= QUOTA_SECONDS - 3600, "resume only gets what remains");
+  assert.ok(resumed.session.durationSeconds > 0);
+
+  // Stop is idempotent: with no active segment it returns state without writing.
+  await call("POST", "/api/v1/mining/stop", { token: account.accessToken });
+  const idleStop = await call("POST", "/api/v1/mining/stop", { token: account.accessToken });
+  assert.equal(idleStop.status, 200);
+});
+
+test("exhausting the 10h quota refuses the next start until the window resets", async () => {
+  const account = await register("exhaust");
+  const started = await startMining(account);
+  // Consume the full 10h, then stop: the window is exhausted.
+  await rewindCycle(started.session.id, QUOTA_MS);
+  const stopped = await call("POST", "/api/v1/mining/stop", { token: account.accessToken });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  const refused = await call("POST", "/api/v1/mining/start", {
+    token: account.accessToken,
+    body: { device: deviceEvidence(account.machine) },
+  });
+  assert.equal(refused.status, 409);
+  assert.equal((refused.body["error"] as { code: string }).code, "mining_quota_exhausted");
+});
+
+test("cross-account device quota: A 1h + B 2h on X, then A is capped everywhere", async () => {
+  const accountA = await register("quota-a");
+  const accountB = await register("quota-b");
+  const deviceX = accountA.machine;
+  const deviceY = freshMachine();
+
+  // A mines 1h on X and stops: A consumed 1h, X consumed 1h, nothing refunded.
+  const aFirst = await startMiningOn(accountA, deviceX);
+  assert.equal(aFirst.session.durationSeconds, QUOTA_SECONDS);
+  await rewindCycle(aFirst.session.id, HOUR_MS);
+  const aStopped = await call("POST", "/api/v1/mining/stop", { token: accountA.accessToken });
+  assert.equal(aStopped.status, 200, JSON.stringify(aStopped.body));
+  const aQuota = (aStopped.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
+  assert.equal(aQuota.consumedSeconds, 3600);
+  assert.equal(aQuota.remainingSeconds, QUOTA_SECONDS - 3600);
+
+  // B starts on the SAME device X: the shared device quota leaves B at most 9h,
+  // even though B's own account quota is a fresh 10h.
+  const bFirst = await startMiningOn(accountB, deviceX);
+  assert.equal(bFirst.session.durationSeconds, QUOTA_SECONDS - 3600, "device X has 9h left, shared across accounts");
+  await rewindCycle(bFirst.session.id, 2 * HOUR_MS);
+  const bStopped = await call("POST", "/api/v1/mining/stop", { token: accountB.accessToken });
+  assert.equal(bStopped.status, 200, JSON.stringify(bStopped.body));
+  assert.equal((bStopped.body as { quota: { consumedSeconds: number } }).quota.consumedSeconds, 2 * 3600);
+
+  // A moves to a FRESH device Y: the account quota (9h left) still binds, so the
+  // segment is capped to 9h even though Y itself is untouched.
+  const aOnY = await startMiningOn(accountA, deviceY);
+  assert.equal(aOnY.session.durationSeconds, QUOTA_SECONDS - 3600, "account quota follows across devices");
+
+  // While A mines on Y, B cannot mine on Y at the same moment, and the rejected
+  // attempt consumes no quota for B.
+  const bRace = await call("POST", "/api/v1/mining/start", {
+    token: accountB.accessToken,
+    body: { device: deviceEvidence(deviceY) },
+  });
+  assert.equal(bRace.status, 409);
+  assert.equal((bRace.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  const bState = await miningState(accountB);
+  assert.equal((bState as unknown as { quota: { consumedSeconds: number } }).quota.consumedSeconds, 2 * 3600, "the rejected start consumed nothing");
+  assert.equal((await miningState(accountA)).status, "active", "A remains the active miner on Y");
+
+  // A mines 8h more on Y and stops: A consumed 9h total, 1h remains.
+  await rewindCycle(aOnY.session.id, 8 * HOUR_MS);
+  const aStopped2 = await call("POST", "/api/v1/mining/stop", { token: accountA.accessToken });
+  assert.equal(aStopped2.status, 200, JSON.stringify(aStopped2.body));
+  const aQuota2 = (aStopped2.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
+  assert.equal(aQuota2.consumedSeconds, 9 * 3600);
+  assert.equal(aQuota2.remainingSeconds, 3600);
+
+  // The next segment for A is capped to the final 1h on any device.
+  const aLast = await startMiningOn(accountA, deviceY);
+  assert.equal(aLast.session.durationSeconds, 3600);
 });
 
 test("the ledger remains reconciled after mining settles", async () => {

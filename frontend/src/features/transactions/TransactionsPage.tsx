@@ -9,11 +9,10 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { EmptyState, Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { useWallet } from "@/shared/hooks";
 import { parseAmount } from "@/shared/lib/platform";
-import { displayNote, loadLocalNote } from "@/shared/lib/wallet";
 import { downloadCsv, transactionsToCsv } from "@/shared/lib/wallet";
 import { currency, dateText, moneyToMinorUnits, sumMoney } from "@/shared/lib/wallet";
 
@@ -39,10 +38,9 @@ export function TransactionsPage() {
   const hasAdvanced = Boolean(dateFrom || dateTo || minAmount.trim() || maxAmount.trim());
   const filtered = transactions.filter((transaction) => {
     if (filter !== "all" && transaction.direction !== filter) return false;
-    const localNote = loadLocalNote(userId, transaction.transferId);
     if (
       query &&
-      !`${transaction.counterpartyAddress} ${transaction.note} ${localNote} ${transaction.transferId}`
+      !`${transaction.counterpartyAddress} ${transaction.transferId}`
         .toLowerCase()
         .includes(query.toLowerCase())
     )
@@ -97,7 +95,7 @@ export function TransactionsPage() {
           </Button>
         }
       />
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row">
+      <div style={revealDelay(0)} className="card-enter mb-5 flex flex-col gap-3 sm:flex-row">
         <Input
           aria-label={t("searchAria")}
           placeholder={t("searchPlaceholder")}
@@ -205,28 +203,32 @@ export function TransactionsPage() {
           [t("stats.sent"), String(sent.length)],
           [t("stats.received"), String(transactions.length - sent.length)],
           [t("stats.tax"), currency(sumMoney(sent.map((item) => item.fee)))],
-        ].map(([label, value]) => (
-          <div key={label} className="rounded-2xl border bg-card p-4 shadow-sm">
+        ].map(([label, value], index) => (
+          <div
+            key={label}
+            style={revealDelay(index + 1)}
+            className="card-enter rounded-2xl border bg-card p-4 shadow-sm"
+          >
             <p className="text-sm text-muted-foreground">{label}</p>
             <strong className="mt-3 block font-display text-2xl">{value}</strong>
           </div>
         ))}
       </div>
-      <section className="overflow-hidden rounded-[22px] border bg-card shadow-sm">
+      <section
+        style={revealDelay(5)}
+        className="card-enter overflow-hidden rounded-[22px] border bg-card shadow-sm"
+      >
         <div className="border-b px-5 py-4 font-display font-semibold">
           {t("listHeading", { count: filtered.length })}
         </div>
         {shown.length ? (
-          shown.map((transaction) => {
+          shown.map((transaction, row) => {
             const isSent = transaction.direction === "sent";
-            const rowNote = displayNote(
-              transaction.note,
-              loadLocalNote(userId, transaction.transferId),
-            );
             return (
               <div
                 key={transaction.id}
-                className="flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
+                style={revealDelay(row, 45, 360)}
+                className="list-enter flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
               >
                 <Icon
                   icon={isSent ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
@@ -240,10 +242,7 @@ export function TransactionsPage() {
                   <p className="break-all text-sm font-semibold">
                     {transaction.counterpartyAddress}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {dateText(transaction.createdAt)}
-                    {rowNote ? ` · ${rowNote}` : ""}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{dateText(transaction.createdAt)}</p>
                 </Link>
                 {/*
                  * A received transfer credits the net amount: the amount the sender paid includes

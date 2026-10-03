@@ -98,6 +98,7 @@ export function DevicesPage() {
       <PageHeader title={translate(page.titleKey)} subtitle={translate(page.descriptionKey)} />
       <div className="space-y-4">
         <Panel
+          delayMs={0}
           title={t("panel.title")}
           description={t("panel.description")}
           bodyClassName="p-0"

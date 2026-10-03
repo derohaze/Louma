@@ -158,6 +158,16 @@ export interface ApiNotification {
   kind: string;
   title: string;
   body: string;
+  /**
+   * Structured money facts for transfer kinds (absent on older rows). The client renders title
+   * and body from these in the reader's language; `title`/`body` stay the English fallback.
+   */
+  data: {
+    direction: "sent" | "received";
+    amountMinor: number;
+    feeMinor: number;
+    counterpartyAddress: string;
+  } | null;
   readAt: string | null;
   createdAt: string;
 }

@@ -18,7 +18,7 @@ import {
   parseLanguage,
   readLanguageCookie,
   setCurrentLanguage,
-  translate,
+  translateIn,
   useI18n,
   useT,
   type LanguageCode,
@@ -141,30 +141,34 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
    */
   beforeLoad: async () => {
     const [theme, language] = await Promise.all([readDocumentTheme(), readDocumentLanguage()]);
-    // Mirrored into the module state here, before any route head is evaluated: the router runs
-    // every route's `head` after all of the `beforeLoad`s, so the browser tab is already named in
-    // the language the page will be painted in, on the server as well as in the browser.
+    // Mirrored into the module state here for the code that formats outside React (dates, head
+    // helpers that cannot read a hook). Route `head` functions below must NOT read that mirror:
+    // it is process-wide, so on the server one request would overwrite another's language before
+    // its head is built. Heads read `match.context.language` instead — the value this return
+    // carries per request.
     setCurrentLanguage(language);
     return { theme, language };
   },
-  head: () => ({
+  head: ({ match }) => ({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "color-scheme", content: "light dark" },
       // Private wallet app: never indexed, never followed. Belt and suspenders with
       // robots.txt (Disallow: /) so a mis-served header cannot expose auth routes.
-      { name: "robots", content: "noindex, nofollow" },
-      { title: translate("shell.document.title") },
+      { title: translateIn(match.context.language, "shell.document.title") },
       {
         name: "description",
-        content: translate("shell.document.description"),
+        content: translateIn(match.context.language, "shell.document.description"),
       },
       { name: "author", content: "Louma" },
-      { property: "og:title", content: translate("shell.document.title") },
+      {
+        property: "og:title",
+        content: translateIn(match.context.language, "shell.document.title"),
+      },
       {
         property: "og:description",
-        content: translate("shell.document.description"),
+        content: translateIn(match.context.language, "shell.document.description"),
       },
       // No og:type website / twitter cards: nothing here is shareable public content.
       { name: "twitter:card", content: "none" },
@@ -220,13 +224,7 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
-function DocumentShell({
-  documentTheme,
-  children,
-}: {
-  documentTheme: Theme;
-  children: ReactNode;
-}) {
+function DocumentShell({ documentTheme, children }: { documentTheme: Theme; children: ReactNode }) {
   const { language } = useI18n();
   /**
    * The source of truth for these two attributes, on both sides of the wire. `documentTheme` is the

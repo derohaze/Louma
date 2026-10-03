@@ -26,8 +26,6 @@ export default {
     tax: "Network tax (1%): {amount}",
     leaves: "{sent} leaves your wallet and {received} reaches the recipient.",
     noFunds: "No funds available. Share your receiving address to receive LMA first.",
-    noteLabel: "Note (optional)",
-    notePlaceholder: "What is this transfer for?",
     checking: "Checking the ledger…",
   },
   confirm: {
@@ -36,7 +34,6 @@ export default {
     amount: "Amount (LMA)",
     receives: "Recipient receives",
     balanceAfter: "Balance after",
-    note: "Note",
     paying:
       "Paying the wallet held by {name}. Check both sides of the address before sending: a transfer cannot be reversed.",
     authenticatorCode: "Authenticator code",

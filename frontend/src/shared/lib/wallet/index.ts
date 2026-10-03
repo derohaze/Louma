@@ -11,9 +11,6 @@ export {
   prefillTransfer,
   consumeTransferPrefill,
   clearTransferPrefill,
-  loadLocalNote,
-  saveLocalNote,
-  displayNote,
 } from "./address-book";
 export { downloadCsv, transactionsToCsv } from "./statements";
 export type { WalletSnapshot } from "./wallet-cache";

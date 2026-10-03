@@ -454,6 +454,114 @@ html[lang="ar"] {
       box-shadow: none;
     }
   }
+
+  /*
+   * Page header entrance: the title block settles down from 8px above while fading in.
+   * Shorter and subtler than cards, so the heading lands first and the sections follow it.
+   */
+  @keyframes t-page-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .page-enter {
+    animation: t-page-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  /*
+   * List row entrance: the same rise as cards but shorter, so long histories
+   * (transactions, notifications, recipients) cascade without feeling laggy.
+   * The per-row delay is set inline and capped, so a 50-row list does not
+   * keep animating after the user started reading.
+   */
+  @keyframes t-list-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .list-enter {
+    animation: t-list-enter 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  /*
+   * Stepped-form stage entrance (transfer send flow): the new step glides in
+   * from the inline-end side, so moving forward feels like moving forward in
+   * both LTR and RTL. Re-mounted per stage via `key={stage}`.
+   */
+  @keyframes t-stage-enter {
+    from {
+      opacity: 0;
+      transform: translateX(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .stage-enter {
+    animation: t-stage-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  [dir="rtl"] .stage-enter {
+    animation-name: t-stage-enter-rtl;
+  }
+
+  @keyframes t-stage-enter-rtl {
+    from {
+      opacity: 0;
+      transform: translateX(-14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  /*
+   * Mining orb mount: scales up from 96% while fading in, so the live canvas
+   * does not pop into place next to the rising cards around it.
+   */
+  @keyframes t-orb-enter {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .orb-enter {
+    animation: t-orb-enter 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform, opacity;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .page-enter,
+    .list-enter,
+    .stage-enter,
+    .orb-enter {
+      animation: none;
+      will-change: auto;
+    }
+  }
 }
 
 /* Thinking Orbs canvas hook: prevents an inline-canvas baseline gap. */

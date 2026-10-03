@@ -426,10 +426,10 @@ export async function listNotifications(input: { collections: Collections; owner
   // `unread` counts the whole account, not the page: a badge derived from the twenty notifications
   // a client happens to have loaded would silently under-report and never reach zero.
   const [notifications, unread] = await Promise.all([
-    input.collections.notifications.find(filter, { projection: { _id: 1, kind: 1, title: 1, body: 1, readAt: 1, createdAt: 1 } }).sort({ createdAt: -1, _id: -1 }).limit(pageSize + 1).toArray(),
+    input.collections.notifications.find(filter, { projection: { _id: 1, kind: 1, title: 1, body: 1, data: 1, readAt: 1, createdAt: 1 } }).sort({ createdAt: -1, _id: -1 }).limit(pageSize + 1).toArray(),
     input.collections.notifications.countDocuments({ ownerUserId: input.ownerUserId, readAt: null }),
   ]);
   const hasMore = notifications.length > pageSize;
   const page = notifications.slice(0, pageSize);
-  return { notifications: page.map((notification) => ({ id: String(notification._id), kind: notification.kind, title: notification.title, body: notification.body, readAt: notification.readAt?.toISOString() ?? null, createdAt: notification.createdAt.toISOString() })), nextCursor: hasMore ? String(page.at(-1)?._id) : null, unread };
+  return { notifications: page.map((notification) => ({ id: String(notification._id), kind: notification.kind, title: notification.title, body: notification.body, data: notification.data ?? null, readAt: notification.readAt?.toISOString() ?? null, createdAt: notification.createdAt.toISOString() })), nextCursor: hasMore ? String(page.at(-1)?._id) : null, unread };
 }

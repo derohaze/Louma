@@ -16,7 +16,6 @@ export const LIMITS = {
   minAmountMinor: 1,
   minPasswordLength: 8,
   maxPasswordLength: 128,
-  maxNoteLength: 240,
   /** Mirrors the API's own caps on the transfer form, so nothing unbounded can be typed into it. */
   maxRecipientLength: 128,
   maxAmountLength: 32,

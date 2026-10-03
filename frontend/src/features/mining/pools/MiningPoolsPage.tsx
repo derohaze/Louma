@@ -125,10 +125,14 @@ export function MiningPools() {
       )}
 
       <div className="grid gap-4 md:grid-cols-2">
-        {(state?.pools ?? []).map((pool) => {
+        {(state?.pools ?? []).map((pool, index) => {
           const fullness = Math.min(100, (pool.activeMiners / Math.max(pool.maxMembers, 1)) * 100);
           return (
-            <section key={pool.id} className="rounded-[22px] border bg-card p-5 shadow-sm">
+            <section
+              key={pool.id}
+              style={{ animationDelay: `${Math.min(index * 75, 300)}ms` }}
+              className="card-enter rounded-[22px] border bg-card p-5 shadow-sm"
+            >
               <div className="flex items-center justify-between gap-3">
                 <h2 className="flex items-center gap-2 font-display text-lg font-semibold">
                   <Icon icon={UserGroupIcon} size={20} className="text-primary-soft" />

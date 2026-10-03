@@ -175,7 +175,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
   // at once and only the page body waits (see PageSkeleton).
   return (
     <div suppressHydrationWarning className="min-h-dvh bg-shell text-foreground">
-      <header className="sticky top-0 z-50 flex h-[68px] items-center gap-4 bg-shell px-5 text-primary-foreground dark:text-white">
+      <header className="sticky top-0 z-50 flex h-[68px] items-center gap-2 bg-shell px-3 text-primary-foreground sm:gap-4 sm:px-5 dark:text-white">
         {/*
          * Sized for the phone first: a 64px mark and a 330px column only fit a desktop bar, so on a
          * narrow screen the mark shrinks and the name is allowed to truncate instead of pushing the
@@ -194,7 +194,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
             {t("header.brand")}
           </span>
         </div>
-        <div className="ms-auto flex items-center gap-3">
+        <div className="ms-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <Popover
             open={searchOpen}
             onOpenChange={(open) => {
@@ -222,6 +222,8 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
             <PopoverContent
               align="end"
               sideOffset={12}
+              collisionPadding={12}
+              avoidCollisions
               aria-label={t("search.dialogAria")}
               className="w-[min(880px,calc(100vw-2rem))] gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl"
             >
@@ -302,12 +304,18 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                 <Icon icon={UserCircleIcon} />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72 rounded-[20px] p-3">
-              <DropdownMenuLabel>
-                <strong className="block font-display">
+            <DropdownMenuContent
+              align="end"
+              sideOffset={8}
+              collisionPadding={12}
+              avoidCollisions
+              className="w-[min(18rem,calc(100vw-2rem))] rounded-[20px] p-3"
+            >
+              <DropdownMenuLabel className="min-w-0 max-w-full overflow-hidden">
+                <strong className="block truncate font-display">
                   {user?.displayName ?? t("menu.fallbackName")}
                 </strong>
-                <span className="text-xs font-normal text-muted-foreground">
+                <span className="block truncate text-xs font-normal text-muted-foreground">
                   {user?.email ?? t("menu.notSignedIn")}
                 </span>
               </DropdownMenuLabel>
@@ -411,8 +419,8 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
            * `pb-24` on a phone leaves the tab bar's height clear; the desktop shell has no bar and
            * keeps the symmetric padding from `lg` up.
            */}
-          <div className="relative mx-auto max-w-[1380px] p-5 pb-24 lg:p-8">
-            <div className="mb-5 flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="relative mx-auto max-w-[1380px] p-4 pb-24 sm:p-5 lg:p-8">
+            <div className="mb-5 flex min-w-0 flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <Icon icon={Home04Icon} size={17} />
               {activeSection && activeSectionTitle(activeSection) !== title && (
                 <>
@@ -421,7 +429,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                 </>
               )}
               <Icon icon={ArrowRight01Icon} size={15} />
-              <strong className="text-foreground">{title}</strong>
+              <strong className="min-w-0 flex-1 truncate text-foreground">{title}</strong>
             </div>
             {walletFrozen && securitySectionOpen && (
               <p

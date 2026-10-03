@@ -13,6 +13,8 @@ export function Panel({
   children,
   tone = "default",
   bodyClassName,
+  delayMs,
+  className,
 }: {
   title: string;
   description?: string;
@@ -22,12 +24,19 @@ export function Panel({
   tone?: "default" | "danger";
   /** `p-0` for panels whose body is a full-bleed list. */
   bodyClassName?: string;
+  /** Staggered entrance delay in ms; the panel rises in with `card-enter` when set. */
+  delayMs?: number | undefined;
+  /** Extra classes appended after the card surface (e.g. grid spans, margins). */
+  className?: string | undefined;
 }) {
   return (
     <section
+      style={delayMs !== undefined ? { animationDelay: `${delayMs}ms` } : undefined}
       className={cn(
         "rounded-[22px] border bg-card shadow-sm",
         tone === "danger" && "border-destructive/40",
+        delayMs !== undefined && "card-enter",
+        className,
       )}
     >
       <div className="flex flex-wrap items-center gap-3 border-b px-5 py-4">

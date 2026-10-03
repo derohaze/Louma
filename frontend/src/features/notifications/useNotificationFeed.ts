@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { api, messageForError, type ApiNotification } from "@/shared/api";
 import {
@@ -21,6 +21,19 @@ import {
  * hook is therefore a reader of server state, not an owner of it: the server is the only authority
  * on which notices exist and which are unread.
  */
+/**
+ * The pagination guard, shared by every mounted reader in this tab. The bell panel and the
+ * notifications page read the same cached pages through separate hook instances, so per-instance
+ * guards cannot see each other: a refresh triggered by the bell would invalidate mid-flight while
+ * the page is appending older notices, cancelling the page fetch and leaving history unloaded.
+ * Module scope is per-tab in the browser (and these callbacks only ever run client-side), so one
+ * shared guard is exactly one guard per cache.
+ */
+const sharedFetchGuard = {
+  pageFetchInFlight: false,
+  queuedRefresh: null as (() => void) | null,
+};
+
 export function useNotificationFeed() {
   const queryClient = useQueryClient();
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -69,12 +82,9 @@ export function useNotificationFeed() {
    * replaced list would skip every notice between them while the cursor moved past them. A refresh
    * that arrives while a page is loading is therefore queued and run once the page has landed.
    */
-  const pageFetchInFlight = useRef(false);
-  const queuedRefresh = useRef<(() => void) | null>(null);
-
   const runOrQueueRefresh = useCallback((action: () => void) => {
-    if (pageFetchInFlight.current) {
-      queuedRefresh.current = action;
+    if (sharedFetchGuard.pageFetchInFlight) {
+      sharedFetchGuard.queuedRefresh = action;
       return;
     }
     action();
@@ -122,8 +132,8 @@ export function useNotificationFeed() {
    * locally and leaves the list — and the retry — in place.
    */
   const loadOlder = useCallback(async () => {
-    if (pageFetchInFlight.current) return;
-    pageFetchInFlight.current = true;
+    if (sharedFetchGuard.pageFetchInFlight) return;
+    sharedFetchGuard.pageFetchInFlight = true;
     setLoadingOlder(true);
     setPageError("");
     try {
@@ -136,10 +146,10 @@ export function useNotificationFeed() {
     } catch (cause) {
       setPageError(messageForError(cause));
     } finally {
-      pageFetchInFlight.current = false;
+      sharedFetchGuard.pageFetchInFlight = false;
       setLoadingOlder(false);
-      const queued = queuedRefresh.current;
-      queuedRefresh.current = null;
+      const queued = sharedFetchGuard.queuedRefresh;
+      sharedFetchGuard.queuedRefresh = null;
       queued?.();
     }
   }, [query]);
@@ -158,6 +168,12 @@ export function useNotificationFeed() {
     }
   }, [queryClient]);
 
+  /**
+   * Drops a stale action error (e.g. a failed "mark all as read") so a retry can bring the list
+   * back: refetching alone leaves the error in place and the notices stay hidden behind it.
+   */
+  const clearActionError = useCallback(() => setActionError(""), []);
+
   return {
     query,
     notifications,
@@ -169,6 +185,7 @@ export function useNotificationFeed() {
     loadOlder,
     markingRead,
     markAllRead,
+    clearActionError,
     refreshIfStale,
   };
 }

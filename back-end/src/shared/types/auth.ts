@@ -129,8 +129,24 @@ export interface NotificationRecord {
   kind: string;
   title: string;
   body: string;
+  /**
+   * Structured money-movement params for transfer kinds, so clients can render the notice in
+   * the reader's language. Title/body stay the English rendering as the fallback for notices
+   * written before this field existed and for kinds without params. Absent on old rows.
+   */
+  data?: NotificationData | null;
   readAt: Date | null;
   createdAt: Date;
+}
+
+/** Bounded, array-free params behind a transfer notice: minor-unit integers plus one address. */
+export interface NotificationData {
+  direction: "sent" | "received";
+  /** Gross amount for a sent transfer, net amount for a received one. */
+  amountMinor: number;
+  /** Zero on received notices: the sender's fee is not the recipient's business. */
+  feeMinor: number;
+  counterpartyAddress: string;
 }
 
 export interface PublicUser {

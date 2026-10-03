@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   DEFAULT_LANGUAGE,
   LANGUAGES,
@@ -70,12 +71,21 @@ export function I18nProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setLanguage = useCallback((code: LanguageCode) => {
-    if (!LANGUAGES.some((item) => item.code === code)) return;
-    setCurrentLanguage(code);
-    persistLanguage(code);
-    setLanguageState(code);
-  }, []);
+  const router = useRouter();
+
+  const setLanguage = useCallback(
+    (code: LanguageCode) => {
+      if (!LANGUAGES.some((item) => item.code === code)) return;
+      setCurrentLanguage(code);
+      persistLanguage(code);
+      setLanguageState(code);
+      // The home copy, legal documents, metadata, and `<html lang>` are server-rendered from the
+      // cookie: client state alone leaves them in the previous language. Refreshing re-renders the
+      // server tree against the just-persisted cookie without a full document reload.
+      router.refresh();
+    },
+    [router],
+  );
 
   const value = useMemo<I18nValue>(() => ({ language, setLanguage }), [language, setLanguage]);
 

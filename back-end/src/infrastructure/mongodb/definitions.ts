@@ -107,6 +107,16 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     // Serving "the running cycle" and sweep/reporting queries without a collection scan.
     db.collection("mining_sessions").createIndex({ ownerUserId: 1, endsAt: -1 }, { name: "mining_sessions_owner_ends" }),
     db.collection("mining_sessions").createIndex({ status: 1, endsAt: 1 }, { name: "mining_sessions_status_ends" }),
+    // 10h/24h quota window sums: membership is by stored anchor (`accountWindowStart` /
+    // `deviceWindowStart` equality; anchors never move on stop/resume), with a `startedAt`
+    // range fallback for pre-quota rows that carry no anchor. The device sum spans accounts
+    // on one machine identity.
+    db.collection("mining_sessions").createIndex({ ownerUserId: 1, accountWindowStart: 1 }, { name: "mining_sessions_owner_quota_window" }),
+    db.collection("mining_sessions").createIndex({ ownerUserId: 1, startedAt: 1 }, { name: "mining_sessions_owner_started" }),
+    db.collection("mining_sessions").createIndex(
+      { deviceQuotaKey: 1, deviceWindowStart: 1 },
+      { partialFilterExpression: { deviceQuotaKey: { $type: "string" } }, name: "mining_sessions_device_quota_window" },
+    ),
     // LEGACY (see ADR-003): `mining_settlements` is no longer written — the journal header is the
     // authoritative record — but these indexes stay until the migration copies every legacy row
     // into `transactions` and the collection is dropped. Removing them first would leave the

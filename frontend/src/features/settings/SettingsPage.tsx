@@ -29,7 +29,7 @@ export function AccountContent() {
     <>
       <PageHeader title={t("title")} subtitle={t("description")} />
       <div className="space-y-4">
-        <Panel title={t("appearance.title")} description={t("appearance.description")}>
+        <Panel delayMs={0} title={t("appearance.title")} description={t("appearance.description")}>
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold">{t("appearance.darkMode")}</p>
@@ -44,7 +44,7 @@ export function AccountContent() {
             />
           </div>
         </Panel>
-        <Panel title={t("identity.title")} description={t("identity.description")}>
+        <Panel delayMs={75} title={t("identity.title")} description={t("identity.description")}>
           <FactList
             items={[
               [t("identity.email"), user?.email ?? common("state.none")],
@@ -75,6 +75,7 @@ export function AccountContent() {
           />
         </Panel>
         <Panel
+          delayMs={150}
           title={t("delete.title")}
           description={t("delete.description")}
           tone="danger"

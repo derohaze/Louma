@@ -3,6 +3,17 @@ export default {
     title: 'Digital wallet for LMA',
     description:
       'Louma is a digital wallet for holding, sending, and receiving LMA — with mining rewards, a full transaction history, custom receiving addresses, and a built-in security centre.',
+    features: [
+      'Balance overview',
+      'Receiving addresses',
+      'Custom address with QR code',
+      'Send and receive LMA',
+      'Mining rewards',
+      'Transaction history',
+      'Transaction search',
+      'Security centre',
+      'Profile and settings',
+    ],
   },
   /** The opening statement under the hero; `**…**` marks the highlighted words. */
   intro:

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { useRouter } from "@tanstack/react-router";
 import { useIsomorphicLayoutEffect } from "@/shared/hooks";
 import {
   DEFAULT_LANGUAGE,
@@ -56,12 +57,22 @@ export function I18nProvider({
     setLanguageState(persisted);
   }, []);
 
-  const setLanguage = useCallback((code: LanguageCode) => {
-    if (!LANGUAGES.some((item) => item.code === code)) return;
-    setCurrentLanguage(code);
-    persistLanguage(code);
-    setLanguageState(code);
-  }, []);
+  const router = useRouter();
+
+  const setLanguage = useCallback(
+    (code: LanguageCode) => {
+      if (!LANGUAGES.some((item) => item.code === code)) return;
+      setCurrentLanguage(code);
+      persistLanguage(code);
+      setLanguageState(code);
+      // Route `head()` functions only re-run when the matches reload: without this the page
+      // below switches language while the browser tab keeps the previous title and meta tags.
+      // Invalidation re-reads the just-persisted cookie in `beforeLoad`, so heads rebuild in the
+      // new language without a full document reload.
+      void router.invalidate();
+    },
+    [router],
+  );
 
   const value = useMemo<I18nValue>(() => ({ language, setLanguage }), [language, setLanguage]);
 

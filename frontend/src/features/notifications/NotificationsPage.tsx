@@ -5,10 +5,11 @@ import {
   Refresh01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
-import { EmptyState, Icon, PageHeader } from "@/shared/ui/page";
+import { EmptyState, Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { dateText } from "@/shared/lib/wallet";
 import { notificationKindIcons } from "./notification-icons";
+import { notificationText } from "./notification-text";
 import { useNotificationFeed } from "./useNotificationFeed";
 
 /**
@@ -32,6 +33,7 @@ export function NotificationsPage() {
     loadOlder,
     markingRead,
     markAllRead,
+    clearActionError,
     refreshIfStale,
   } = useNotificationFeed();
 
@@ -72,13 +74,21 @@ export function NotificationsPage() {
           title={t("unavailable")}
           detail={error}
           action={
-            <Button onClick={() => void query.refetch().catch(() => undefined)}>
+            <Button
+              onClick={() => {
+                clearActionError();
+                void query.refetch().catch(() => undefined);
+              }}
+            >
               {common("actions.retry")}
             </Button>
           }
         />
       ) : (
-        <section className="overflow-hidden rounded-[22px] border bg-card shadow-sm">
+        <section
+          style={revealDelay(0)}
+          className="card-enter overflow-hidden rounded-[22px] border bg-card shadow-sm"
+        >
           <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
             <h2 className="font-display font-semibold">{t("all")}</h2>
             {unreadCount > 0 && (
@@ -90,36 +100,39 @@ export function NotificationsPage() {
 
           {notifications.length ? (
             <ul className="divide-y divide-gray-100 dark:divide-border">
-              {notifications.map((item) => (
-                <li key={item.id}>
-                  <article className="flex items-start gap-3 px-5 py-4">
-                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900 dark:bg-secondary dark:text-white">
-                      <HugeiconsIcon
-                        icon={notificationKindIcons[item.kind] ?? Notification01Icon}
-                        size={20}
-                        strokeWidth={1.7}
-                      />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start gap-2">
-                        {item.readAt === null && (
-                          <span
-                            aria-label={t("unreadAria")}
-                            className="mt-2 size-2 shrink-0 rounded-full bg-[#F5334F]"
-                          />
-                        )}
-                        <p className="flex-1 text-[15px] font-bold leading-snug">{item.title}</p>
+              {notifications.map((item, row) => {
+                const copy = notificationText(item, t);
+                return (
+                  <li key={item.id} style={revealDelay(row, 45, 360)} className="list-enter">
+                    <article className="flex items-start gap-3 px-5 py-4">
+                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#F4F4F5] text-gray-900 dark:bg-secondary dark:text-white">
+                        <HugeiconsIcon
+                          icon={notificationKindIcons[item.kind] ?? Notification01Icon}
+                          size={20}
+                          strokeWidth={1.7}
+                        />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-2">
+                          {item.readAt === null && (
+                            <span
+                              aria-label={t("unreadAria")}
+                              className="mt-2 size-2 shrink-0 rounded-full bg-[#F5334F]"
+                            />
+                          )}
+                          <p className="flex-1 text-[15px] font-bold leading-snug">{copy.title}</p>
+                        </div>
+                        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+                          {copy.body}
+                        </p>
+                        <p className="mt-1 text-[12px] text-muted-foreground/80">
+                          {dateText(item.createdAt)}
+                        </p>
                       </div>
-                      <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-                        {item.body}
-                      </p>
-                      <p className="mt-1 text-[12px] text-muted-foreground/80">
-                        {dateText(item.createdAt)}
-                      </p>
-                    </div>
-                  </article>
-                </li>
-              ))}
+                    </article>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <p className="px-5 py-10 text-center text-sm text-muted-foreground">

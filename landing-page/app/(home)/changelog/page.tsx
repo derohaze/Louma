@@ -26,15 +26,24 @@ export default async function ChangelogPage() {
   const t = createT(language, 'changelog');
   const changelog = sectionIn(language, 'changelog');
 
+  const english = sectionIn('en', 'changelog');
+
   /**
    * Each release in the dictionary is matched to the version in `releases.ts`; the English file is
-   * the one that fixes the order and the count, so a release added to one and not the other shows
-   * up as a missing translation in development rather than as a silently dropped entry.
+   * the one that fixes the order and the count. A release missing from the selected language falls
+   * back to its English copy with a development warning — it must never silently disappear from
+   * the public timeline because of a routine one-file update.
    */
   const timeline = releases.flatMap((release) => {
     const copy = changelog.releases.find((entry) => entry.version === release.version);
-
-    return copy ? [{ ...release, ...copy }] : [];
+    const fallback = english.releases.find((entry) => entry.version === release.version);
+    if (!copy && process.env.NODE_ENV === 'development') {
+      console.warn(
+        `[i18n] missing changelog entry: version ${release.version} (${language}) — showing English copy`,
+      );
+    }
+    const entry = copy ?? fallback;
+    return entry ? [{ ...release, ...entry }] : [];
   });
 
   return (

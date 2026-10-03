@@ -7,7 +7,7 @@ import { pageHead } from "@/shared/lib/platform";
 const page = securityFreezeWallet;
 
 export const Route = createFileRoute("/security/freeze")({
-  head: () => pageHead(page.titleKey, page.descriptionKey),
+  head: ({ match }) => pageHead(page.titleKey, page.descriptionKey, match.context.language),
   component: () => (
     <WalletPage titleKey={page.titleKey}>
       <FreezeWalletPage />

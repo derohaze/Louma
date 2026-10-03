@@ -24,9 +24,21 @@ export interface MiningSessionRecord {
   status: MiningSessionStatus;
   cycleNumber: number;
   startedAt: Date;
-  /** Exactly `startedAt + durationSeconds`, fixed at creation and never extended. */
+  /** Exactly `startedAt + durationSeconds`, fixed at creation and never extended (stop truncates both together). */
   endsAt: Date;
   durationSeconds: number;
+  /**
+   * Anchor of the 10h/24h account quota window this segment belongs to.
+   * The first start anchors a fresh 24h window; stop/resume never move it.
+   * Missing on rows written before the quota (treated as `startedAt`).
+   */
+  accountWindowStart?: Date | null;
+  /** Canonical device quota subject (`machineKey ?? device.publicId`); null when no device was bound. */
+  deviceQuotaKey?: string | null;
+  /** Anchor of the shared 10h/24h device window; null when no device was bound. */
+  deviceWindowStart?: Date | null;
+  /** Resolved device cluster (`publicId`); null when no device was bound. */
+  deviceId?: string | null;
   /** The drawn rate as an exact integer count of `1 / rateScale` LMA per hour. */
   rateUnits: number;
   rateScale: number;
@@ -112,6 +124,19 @@ export interface PublicMiningSession {
   settlements: { amount: string; at: string }[];
 }
 
+export interface MiningQuotaView {
+  /** Actual mining allowed per window (10h). */
+  dailyQuotaSeconds: number;
+  /** Window length (24h). */
+  windowSeconds: number;
+  /** Consumed actual-mining seconds in the current account window. */
+  consumedSeconds: number;
+  /** `dailyQuotaSeconds - consumedSeconds`, never negative. */
+  remainingSeconds: number;
+  /** End of the current account window (anchor + 24h). Null when never mined. */
+  windowEndsAt: string | null;
+}
+
 export interface PublicMiningState {
   status: MiningEffectiveStatus;
   serverNow: string;
@@ -123,4 +148,6 @@ export interface PublicMiningState {
   poolId: string | null;
   /** True when the account must join a pool before Start is accepted. */
   poolRequired: boolean;
+  /** Server-computed 10h/24h account quota; never taken from the client. */
+  quota: MiningQuotaView;
 }

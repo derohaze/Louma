@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type {
   FastifyInstance,
   FastifyReply,
@@ -72,6 +73,40 @@ export function setCsrfCookie(app: FastifyInstance, reply: FastifyReply, token: 
 export function getAuth(request: FastifyRequest): AuthContext {
   if (!request.auth) throw unauthorized();
   return request.auth;
+}
+
+/** Headers the first-party proxy sets when it forwards a request to the API. */
+const PROXY_CLIENT_IP_HEADER = "x-louma-client-ip";
+const PROXY_SECRET_HEADER = "x-louma-proxy-secret";
+/** An IPv4 literal or a bare IPv6 literal; anything else was not an address the proxy saw. */
+const IP_LITERAL = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:.]{2,45})$/;
+
+function proxySecretMatches(request: FastifyRequest): boolean {
+  const expected = request.server.config.proxySharedSecret;
+  if (!expected) return false;
+  const provided = request.headers[PROXY_SECRET_HEADER];
+  if (typeof provided !== "string" || provided.length === 0) return false;
+  const left = Buffer.from(provided);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/**
+ * The real client IP for identity purposes (login throttle, stored signup IP, device network).
+ *
+ * `request.ip` behind Cloudflare is an edge address shared by many users, so the first-party
+ * frontend proxy stamps the connecting IP it saw into a header authenticated by a shared secret.
+ * The stamp is only believed when the secret matches — a direct caller cannot choose their own IP —
+ * and when it parses as an address; otherwise this falls back to `request.ip`.
+ */
+export function clientIp(request: FastifyRequest): string {
+  if (proxySecretMatches(request)) {
+    const claimed = request.headers[PROXY_CLIENT_IP_HEADER];
+    if (typeof claimed === "string" && claimed.length <= 45 && IP_LITERAL.test(claimed)) {
+      return claimed;
+    }
+  }
+  return request.ip;
 }
 
 async function requireAuth(request: FastifyRequest) {

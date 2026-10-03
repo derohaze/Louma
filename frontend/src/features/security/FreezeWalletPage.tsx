@@ -70,6 +70,7 @@ export function FreezeWalletPage() {
       <PageHeader title={translate(page.titleKey)} subtitle={translate(page.descriptionKey)} />
       <div className="space-y-4">
         <Panel
+          delayMs={0}
           title={t(frozen ? "title.frozen" : "title.active")}
           description={t(frozen ? "description.frozen" : "description.active")}
           action={
@@ -172,7 +173,12 @@ export function FreezeWalletPage() {
             </div>
           )}
         </Panel>
-        <Panel title={t("impact.title")} description={t("impact.description")} bodyClassName="p-0">
+        <Panel
+          delayMs={75}
+          title={t("impact.title")}
+          description={t("impact.description")}
+          bodyClassName="p-0"
+        >
           {[
             [t("impact.transfersOut"), t("impact.transfersOutDetail")],
             [t("impact.signIn"), t("impact.signInDetail")],

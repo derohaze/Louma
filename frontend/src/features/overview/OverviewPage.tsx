@@ -26,7 +26,7 @@ import {
   type MiningHistoryPage,
 } from "@/shared/lib/platform";
 import { currentLocale, translate, useT } from "@/shared/i18n";
-import { Icon, CopyButton } from "@/shared/ui/page";
+import { Icon, CopyButton, revealDelay } from "@/shared/ui/page";
 import { Switch } from "@/shared/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { countdown, liveSnapshot } from "@/features/mining/cycle/mining-format";
@@ -134,7 +134,7 @@ function PillSelect({
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger
         aria-label={label}
-        className="h-8 w-auto gap-1 rounded-full px-3 text-[12px] font-semibold"
+        className="h-8 w-auto max-w-full shrink-0 gap-1 rounded-full px-3 text-[12px] font-semibold"
       >
         <SelectValue placeholder={label} />
       </SelectTrigger>
@@ -254,9 +254,11 @@ function MaskSwitch({ hidden, onToggle }: { hidden: boolean; onToggle: () => voi
 function MiningCycleCard({
   state,
   className,
+  style,
 }: {
   state: ApiMiningState | undefined;
   className?: string;
+  style?: React.CSSProperties;
 }) {
   const session = state?.session ?? null;
   const [tick, setTick] = useState(() => Date.now());
@@ -284,6 +286,7 @@ function MiningCycleCard({
   return (
     <Link
       to="/mining"
+      style={style}
       className={className ? `${FILLED} ${className}` : FILLED}
       aria-label={translate("overview.mining.cardAria")}
     >
@@ -504,17 +507,22 @@ export function OverviewContent() {
     <div className="grid gap-4 lg:grid-cols-[1.04fr_1fr] lg:grid-rows-[auto_auto_auto]">
       {/* What moved in the period. The only card that reports the two totals themselves. */}
       <section
-        className={`${CARD} order-2 flex flex-col gap-6 p-6 sm:flex-row sm:items-end lg:order-none`}
+        style={revealDelay(0)}
+        className={`${CARD} order-2 flex flex-col gap-6 p-4 sm:flex-row sm:items-end sm:p-6 lg:order-none`}
       >
         <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="font-display text-[22px] font-semibold">{t("statistics")}</h2>
-            <PillSelect
-              value={period.id}
-              label={t("periodLabel")}
-              options={periods}
-              onChange={setPeriodId}
-            />
+          <div className="flex min-w-0 items-center justify-between gap-2 sm:gap-3">
+            <h2 className="min-w-0 flex-1 truncate font-display text-[22px] font-semibold">
+              {t("statistics")}
+            </h2>
+            <div className="shrink-0">
+              <PillSelect
+                value={period.id}
+                label={t("periodLabel")}
+                options={periods}
+                onChange={setPeriodId}
+              />
+            </div>
           </div>
           <div className="mt-7 flex flex-wrap gap-x-10 gap-y-4">
             <div>
@@ -543,7 +551,10 @@ export function OverviewContent() {
       </section>
 
       {/* How much happened, and what happened: the count, then the transfers themselves. */}
-      <section className={`${CARD} order-4 overflow-hidden lg:order-none lg:row-span-2`}>
+      <section
+        style={revealDelay(1)}
+        className={`${CARD} order-4 overflow-hidden lg:order-none lg:row-span-2`}
+      >
         <div className="bg-secondary p-5">
           <div className="flex justify-end">
             <WalletLogo />
@@ -579,7 +590,7 @@ export function OverviewContent() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-bold">
-                      {transaction.note || shortAddress(transaction.counterpartyAddress)}
+                      {shortAddress(transaction.counterpartyAddress)}
                     </span>
                     <span className="block truncate text-[11px] text-muted-foreground">
                       {received ? common("direction.received") : common("direction.sent")}
@@ -606,7 +617,7 @@ export function OverviewContent() {
           On a phone it comes first (see the order utilities): the bento pairs only exist to arrange
           the desktop grid, and the mobile column should open on the money, not on the charts. */}
       <div className="contents gap-4 sm:grid sm:grid-cols-2">
-        <section className={`${INK} order-1 sm:order-none`}>
+        <section style={revealDelay(2)} className={`${INK} order-1 sm:order-none`}>
           <div className="flex h-full flex-col justify-between p-5">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-3">
@@ -643,11 +654,16 @@ export function OverviewContent() {
         </section>
 
         {/* The live cycle, and how much of its window is still left to earn. */}
-        <MiningCycleCard state={mining.data} className="order-3 sm:order-none" />
+        <MiningCycleCard
+          state={mining.data}
+          style={revealDelay(3)}
+          className="order-3 sm:order-none"
+        />
       </div>
 
       {/* The people this wallet moves money with, and the two ways to move it. */}
       <section
+        style={revealDelay(4)}
         className={`${CARD} order-5 flex flex-wrap items-center justify-between gap-5 p-5 lg:order-none`}
       >
         <div className="min-w-0">
@@ -697,7 +713,10 @@ export function OverviewContent() {
 
       {/* What mining has already paid, and what protects the account holding it. */}
       <div className="contents gap-4 sm:grid sm:grid-cols-2">
-        <section className={`${CARD} order-6 flex flex-col justify-between p-5 sm:order-none`}>
+        <section
+          style={revealDelay(5)}
+          className={`${CARD} order-6 flex flex-col justify-between p-5 sm:order-none`}
+        >
           <div className="flex justify-end">
             <WalletLogo />
           </div>
@@ -723,7 +742,10 @@ export function OverviewContent() {
         </section>
 
         {/* The account itself: what protects it and how many devices hold a session on it. */}
-        <section className={`${CARD} order-7 flex flex-col p-5 sm:order-none`}>
+        <section
+          style={revealDelay(6)}
+          className={`${CARD} order-7 flex flex-col p-5 sm:order-none`}
+        >
           <p className="text-[12px] font-semibold text-muted-foreground">{t("account.label")}</p>
           <dl className="mt-3 space-y-2.5">
             <div className="flex items-center justify-between gap-2">

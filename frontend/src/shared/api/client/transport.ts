@@ -121,23 +121,45 @@ async function refreshAccessToken(): Promise<string> {
   if (!readRefreshPromise()) {
     // The refresh runs before any session token exists in memory — after a reload this page holds
     // none — so it authenticates itself with the pre-session token.
-    writeRefreshPromise(
+    const attempt = () =>
       send<{ accessToken: string; csrfToken: string }>(
         "/api/v1/auth/refresh",
         { method: "POST", auth: false, csrf: "preauth" },
         null,
-      )
-        .then(({ accessToken: token, csrfToken }) => {
-          writeAccessToken(token);
-          setSessionCsrfToken(csrfToken);
-          writeSessionHint();
-          return token;
+      ).then(({ accessToken: token, csrfToken }) => {
+        writeAccessToken(token);
+        setSessionCsrfToken(csrfToken);
+        writeSessionHint();
+        return token;
+      });
+    writeRefreshPromise(
+      attempt()
+        .catch((error: unknown) => {
+          // The pre-session token this tab holds is stale (rollout crossing, key rotation, or a
+          // newer session from another tab). Re-bootstrap it once and retry rather than failing
+          // until a manual reload — the same recovery apiRequest already does per request.
+          if (
+            error instanceof ApiError &&
+            error.status === 403 &&
+            error.code === "csrf_token_invalid"
+          ) {
+            setSessionCsrfToken(null);
+            forgetPreauthCsrfToken();
+            return attempt();
+          }
+          throw error;
         })
         .catch((error: unknown) => {
           writeAccessToken(null);
-          // Only an authoritative rejection proves the session is gone: a transport or server
-          // fault must keep the hint so a later visit still probes once the backend recovers.
-          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          // Only an authoritative backend rejection proves the session is gone. An edge/security
+          // challenge (non-JSON 403 with code "request_failed"), a stale CSRF token, or any
+          // transport/server fault must keep the hint so a later visit still probes once the
+          // backend recovers instead of parking the user on the login page.
+          if (
+            error instanceof ApiError &&
+            error.status === 401 &&
+            error.code === "unauthorized"
+          ) {
             clearSessionHint();
           }
           throw error;
