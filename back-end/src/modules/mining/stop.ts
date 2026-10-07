@@ -86,7 +86,7 @@ export async function stopMining(input: {
       }
     }
 
-    const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
+    const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId, active.walletId, active.ledgerAccountId);
     const nextSequence = active.settlementSequence + 1;
     const settlementPublicId = randomUUID();
     const idempotencyKey = `mining:${active.publicId}:${nextSequence}`;

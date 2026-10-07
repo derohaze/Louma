@@ -13,7 +13,7 @@
    Projections move only via conditional updates (funds-present debit,
    ceiling-checked credit).
 5. Idempotency is durable (MongoDB unique indexes), never Redis-only:
-   transfer (sender + key), mining (session + sequence, key namespace
+   transfer (sender wallet + key), mining (session + sequence, key namespace
    `mining:<session>:<sequence>`). Same key + different intent = rejection.
 6. One approval, one spend (conditional consume inside the money transaction +
    consumedByTransactionPublicId uniqueness). One TOTP step, one operation
@@ -21,11 +21,16 @@
    rolled back with failure).
 7. Credential replacement races close via the wallet financialVersion guard:
    a transfer proven under a replaced password/factor cannot commit.
-8. Freezes serialize with transfers through the same guard; a frozen wallet
-   cannot send.
+8. Wallet freezes serialize with transfers through the same guard; a frozen
+   wallet cannot send. A wallet freeze does not block account login or freeze
+   another wallet owned by that account.
 9. Issuance only via settlement: treasury-debit / wallet-credit, treasury
    never negative, capped at the 24h accrual, operator-pausable (payoutsPaused
    reports unconfirmed, never a zero-success).
 10. Transactions are short, snapshot-read, majority-write, with no network
     calls inside. Retries are bounded and always re-check the idempotency
     record before re-executing.
+11. A user owns zero or more separate wallet documents; registration creates
+    exactly one primary wallet and its ledger account in the user transaction.
+    Mining quotas stay account-scoped while each session's reward is bound to
+    its stored wallet and ledger-account IDs.
