@@ -15,6 +15,7 @@ import {
   decideClusterMatch,
   digestFeatureMap,
   ipHash,
+  isMachineIdentityMatch,
   isNearCloneMatch,
   learnFeatureProfile,
   matchDeviceFeatures,
@@ -1171,8 +1172,8 @@ test("SLOT-EDIT BOUNDARY: the allowance follows the machine while its identity s
   ];
   // The pinned measurement. The shared device allowance follows a machine in exactly two ways: a
   // positive verdict merges the observation into the record, so it lands on that record's window, and
-  // the near-clone band leaves the record enrolled beside the machine while it keeps the machine's
-  // allowance. Below four agreeing identity slots the guard has nothing left that says "one computer",
+  // the machine-identity bands (the near clone, and the cross-engine pair whose identity slots agree)
+  // leave the record enrolled beside the machine while it keeps the machine's allowance. Below four agreeing identity slots the guard has nothing left that says "one computer",
   // and the observation opens its own window — the residual `ENROLL BOUND` bounds.
   const expected = [
     { edited: 0, verdict: "same", shared: true },
@@ -1196,7 +1197,10 @@ test("SLOT-EDIT BOUNDARY: the allowance follows the machine while its identity s
     const verdict = decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
     const agreements = match.matchedMachine.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
     const moves = match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
-    const shared = verdict === "same" || isNearCloneMatch(match);
+    // Mirroring the code, not a re-derivation of it: sharing the allowance is what the guard takes it
+    // on (`isMachineIdentityMatch`), which is the near-clone band plus the cross-engine band whose
+    // identity slots agree while only one engine's own corroborators do not.
+    const shared = verdict === "same" || isMachineIdentityMatch(match, config.lmdg.ambiguousThreshold);
     measured.push(`${row.edited}:${verdict}/${match.score}/${match.machineScore}/${agreements}agree/${moves}moved/${shared ? "shared" : "fresh"}`);
     // The edit is what it claims to be: every edit moved one identity slot and left the rest agreeing.
     assert.equal(moves, row.edited, `the fixture edit moved the intended identity slots (${measured.join(" ")})`);

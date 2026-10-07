@@ -24,6 +24,44 @@ function hasIndex(indexes: Array<{ name?: string; key: Record<string, unknown>; 
   return JSON.stringify(index.partialFilterExpression ?? null) === JSON.stringify(expected.partialFilterExpression ?? null);
 }
 
+async function inspectOrphanWalletLedgerAccounts(collections: ReturnType<typeof getCollections>) {
+  const rows = await collections.ledgerAccounts.aggregate<{ _id: null; count: number; nonZeroBalances: number; accountsWithEntries: number }>([
+    { $match: { accountType: "wallet" } },
+    {
+      $lookup: {
+        from: "wallets",
+        let: { walletId: "$walletId" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$publicId", "$$walletId"] } } },
+          { $limit: 1 },
+        ],
+        as: "wallet",
+      },
+    },
+    { $match: { $expr: { $eq: [{ $size: "$wallet" }, 0] } } },
+    {
+      $lookup: {
+        from: "ledger_entries",
+        let: { accountId: "$publicId" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$ledgerAccountId", "$$accountId"] } } },
+          { $limit: 1 },
+        ],
+        as: "entry",
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        count: { $sum: 1 },
+        nonZeroBalances: { $sum: { $cond: [{ $ne: ["$balanceMinor", 0] }, 1, 0] } },
+        accountsWithEntries: { $sum: { $cond: [{ $gt: [{ $size: "$entry" }, 0] }, 1, 0] } },
+      },
+    },
+  ]).toArray();
+  return rows[0] ?? { _id: null, count: 0, nonZeroBalances: 0, accountsWithEntries: 0 };
+}
+
 async function main(): Promise<void> {
   const mongoUri = process.env["MONGODB_URI"]?.trim();
   if (!mongoUri || (!mongoUri.startsWith("mongodb://") && !mongoUri.startsWith("mongodb+srv://"))) {
@@ -97,6 +135,7 @@ async function main(): Promise<void> {
     });
     const missingAddressVersion = await wallets.countDocuments({ addressVersion: { $nin: [0, 1] } });
     const walletAccountCount = await collections.ledgerAccounts.countDocuments({ accountType: "wallet" });
+    const orphanWalletAccounts = await inspectOrphanWalletLedgerAccounts(collections);
     const walletsWithoutExactlyOneLedgerAccount = await wallets.aggregate<{ _id: 1 }>([
       {
         $lookup: {
@@ -118,7 +157,9 @@ async function main(): Promise<void> {
       ...(canonicalInvalid > 0 ? [`${canonicalInvalid} canonical wallet addresses are malformed`] : []),
       ...(missingAddressVersion > 0 ? [`${missingAddressVersion} wallets need addressVersion backfill; start the updated API first`] : []),
       ...(walletsWithoutExactlyOneLedgerAccount.length > 0 ? ["one or more wallets do not have exactly one wallet ledger account"] : []),
-      ...(walletAccountCount !== totalBefore ? [`wallet ledger account count ${walletAccountCount} does not match wallet count ${totalBefore}`] : []),
+      ...(orphanWalletAccounts.nonZeroBalances > 0 || orphanWalletAccounts.accountsWithEntries > 0
+        ? [`${orphanWalletAccounts.count} wallet ledger accounts have no wallet; ${orphanWalletAccounts.nonZeroBalances} have balances and ${orphanWalletAccounts.accountsWithEntries} have entries`]
+        : []),
     ];
     if (blockers.length > 0) throw new Error(`Preflight blocked: ${blockers.join("; ")}`);
 
@@ -130,6 +171,8 @@ async function main(): Promise<void> {
       legacyAddresses: await wallets.countDocuments({ addressVersion: 0 }),
       canonicalAddresses: await wallets.countDocuments({ addressVersion: 1 }),
       walletLedgerAccounts: walletAccountCount,
+      orphanWalletLedgerAccounts: orphanWalletAccounts.count,
+      orphanWalletLedgerAccountsWithBalanceOrEntries: orphanWalletAccounts.nonZeroBalances + orphanWalletAccounts.accountsWithEntries,
       primaryWalletUniqueIndex: true,
       canonicalAddressUniqueIndex: true,
     };
@@ -141,16 +184,21 @@ async function main(): Promise<void> {
       addressVersion: 1,
       $or: [{ address: { $not: { $regex: CANONICAL_ADDRESS } } }, { addressNormalized: { $not: { $regex: CANONICAL_ADDRESS } } }],
     });
+    const orphanWalletAccountsAfter = await inspectOrphanWalletLedgerAccounts(collections);
     const verification = {
       walletCountPreserved: totalBefore === totalAfter,
       noLegacyWalletAddressesRemain: legacyAfter === 0,
       everyWalletHasCanonicalAddress: canonicalAfter === totalAfter,
       noMalformedCanonicalAddresses: invalidAfter === 0,
       walletLedgerAccountsUnchanged: walletAccountCount === await collections.ledgerAccounts.countDocuments({ accountType: "wallet" }),
+      orphanWalletLedgerAccountsUnchanged:
+        orphanWalletAccounts.count === orphanWalletAccountsAfter.count &&
+        orphanWalletAccounts.nonZeroBalances === orphanWalletAccountsAfter.nonZeroBalances &&
+        orphanWalletAccounts.accountsWithEntries === orphanWalletAccountsAfter.accountsWithEntries,
     };
     console.log(JSON.stringify({ mode: execute ? "execute" : "dry-run", preflight, report, verification }, null, 2));
 
-    const clean = verification.walletCountPreserved && verification.noLegacyWalletAddressesRemain && verification.everyWalletHasCanonicalAddress && verification.noMalformedCanonicalAddresses && verification.walletLedgerAccountsUnchanged;
+    const clean = verification.walletCountPreserved && verification.noLegacyWalletAddressesRemain && verification.everyWalletHasCanonicalAddress && verification.noMalformedCanonicalAddresses && verification.walletLedgerAccountsUnchanged && verification.orphanWalletLedgerAccountsUnchanged;
     if (!execute) {
       console.log("Dry run complete. A legacy address will be replaced in place; transaction snapshots and ledger records are not modified.");
       process.exitCode = 0;

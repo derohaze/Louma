@@ -37,7 +37,7 @@ import { Switch } from "@/shared/ui/switch";
 import { cn } from "@/shared/lib/platform";
 import { findActiveSection, navSections, type NavHref } from "@/shared/lib/wallet";
 import { LIMITS } from "@/shared/lib/platform";
-import { currency, dateText, loadLocalNote } from "@/shared/lib/wallet";
+import { currency, loadLocalNote, transactionDateText } from "@/shared/lib/wallet";
 import { EmptyState, Icon } from "@/shared/ui/page";
 import { MobileMoreSheet, MobileTabBar, RailLink, SidebarNav } from "@/app/shell/shell-nav";
 import {
@@ -163,7 +163,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
         .map((tx) => ({
           id: `tx:${tx.id}`,
           title: tx.counterpartyAddress,
-          subtitle: `${tx.direction === "sent" ? common("direction.sent") : common("direction.received")} · ${currency(tx.amount)} · ${dateText(tx.createdAt)}`,
+          subtitle: `${tx.direction === "sent" ? common("direction.sent") : common("direction.received")} · ${currency(tx.amount)} · ${transactionDateText(tx.createdAt)}`,
           icon: tx.direction === "sent" ? ArrowUpRight01Icon : ArrowDownLeft01Icon,
           href: "/transactions" as const,
         }));
@@ -387,7 +387,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
        * `bg-shell` (not `bg-panel`): the surface background is only visible through those
        * corners, and it must match the dark shell for the arcs to read as curves.
        */}
-      <div className="app-surface flex h-[calc(100dvh-68px)] bg-shell">
+      <div className="app-surface flex h-[calc(100dvh-68px-65px-env(safe-area-inset-bottom))] bg-shell lg:h-[calc(100dvh-68px)]">
         {/*
          * The rail and the panel are the desktop navigation. Both start at `lg`: below it the
          * phone's tab bar is the only navigation, so a tablet is not asked to use a 72px icon
@@ -421,10 +421,10 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
           <div className="dotted-canvas pointer-events-none absolute end-0 top-0 h-48 w-[38%] [mask-image:linear-gradient(to_bottom_left,black,transparent)]" />
           <div className="dotted-canvas pointer-events-none absolute bottom-0 start-0 h-32 w-[28%] [mask-image:linear-gradient(to_top_right,black,transparent)]" />
           {/*
-           * `pb-24` on a phone leaves the tab bar's height clear; the desktop shell has no bar and
-           * keeps the symmetric padding from `lg` up.
+           * The shell reserves the mobile tab bar below this scroll area, so the page's normal
+           * padding stays visible above it; the desktop shell has no bar and uses wider padding.
            */}
-          <div className="relative mx-auto max-w-[1380px] p-4 pb-24 sm:p-5 lg:p-8">
+          <div className="relative mx-auto max-w-[1380px] p-4 sm:p-5 lg:p-8">
             <div className="mb-5 flex min-w-0 flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <Icon icon={Home04Icon} size={17} />
               {activeSection && activeSectionTitle(activeSection) !== title && (

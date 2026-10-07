@@ -6,7 +6,7 @@ import { Input } from "@/shared/ui/input";
 import { useWallet, type Transaction } from "@/shared/hooks";
 import { api, messageForError } from "@/shared/api";
 import { displayNote, loadLocalNote, saveLocalNote } from "@/shared/lib/wallet";
-import { currency, dateText, transferNet, transferTax } from "@/shared/lib/wallet";
+import { currency, transactionDateText, transferNet, transferTax } from "@/shared/lib/wallet";
 import { CopyButton, EmptyState, Icon, PageHeader } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { TransactionDetailSkeleton } from "@/shared/skeletons";
@@ -111,7 +111,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
         title={t(sent ? "heading.sent" : "heading.received", {
           amount: currency(movedForThisWallet),
         })}
-        subtitle={`${transaction.transferId} · ${dateText(transaction.createdAt)}`}
+        subtitle={`${transaction.transferId} · ${transactionDateText(transaction.createdAt)}`}
       />
       <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
         <div className="space-y-4">
@@ -127,7 +127,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
                     {transaction.transferId}
                   </code>,
                 ],
-                [t("breakdown.recorded"), dateText(transaction.createdAt)],
+                [t("breakdown.recorded"), transactionDateText(transaction.createdAt)],
               ]}
             />
           </Panel>

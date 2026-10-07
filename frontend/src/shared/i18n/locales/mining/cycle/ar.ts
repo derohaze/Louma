@@ -68,8 +68,9 @@ const ar: Strings<typeof en> = {
     earned: "المكتسب في هذه الدورة",
     alreadyCollected: "{amount} محصّلة بالفعل",
     progressAria: "تقدّم دورة التعدين",
-    elapsed: "مضى {time}",
-    window: "10:00:00 كحد أقصى لكل نافذة",
+    minedThisWindow: "عدّنت {time} في هذه النافذة",
+    windowRemaining: "{time} متبقٍ · {max} كحد أقصى",
+    currentSession: "الجلسة الحالية: {time}",
     facts: {
       rate: "معدل التعدين",
       pool: "التجمع",

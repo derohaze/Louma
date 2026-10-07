@@ -100,3 +100,11 @@ export const dateText = (date: string) =>
   new Intl.DateTimeFormat(currentLocale(), { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(date),
   );
+
+/** Transfer times use UTC so both wallets display the same instant across device time zones. */
+export const transactionDateText = (date: string) =>
+  `${new Intl.DateTimeFormat(currentLocale(), {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(new Date(date))} UTC`;

@@ -708,6 +708,63 @@ export function isNearCloneMatch(match: ClusterMatch): boolean {
 }
 
 /**
+ * The one identity slot two engines may disagree about while still describing one computer.
+ *
+ * `audioDevice` is read from the audio context each engine opens for the same hardware: it is a real
+ * property of the machine, but the value each engine negotiates for it is not guaranteed to be the
+ * same one. Every other core slot is read from the same place by every engine — CPU class, pointer
+ * touch class, display gamut, HDR capability, panel depth — so at most one may move before the
+ * evidence is describing some other computer.
+ */
+export const MAX_ENGINE_VARIANT_CORE_MOVES = 1;
+
+/**
+ * Whether the comparison says "this is the same computer" strongly enough to spend that computer's
+ * mining allowance.
+ *
+ * This is a statement about the *machine*, so it is measured on the machine traits and never on the
+ * overall agreement, which is diluted by the rendering stack two engines measure differently by
+ * construction.
+ *
+ * The near clone is one band: the machine's hardware story moved by identity slots, so the record
+ * stays separate — the machine is not merged — but the allowance it spends is the known machine's.
+ *
+ * The second band is the honest cross-engine pair the near clone does not cover, because only *one*
+ * identity slot moved. It is the shape the near-clone test alone misses: a machine whose identity
+ * slots agree (no CPU or memory class disagreement, at most one negotiated slot moved) while the
+ * corroborators only one engine reports — the capture-device counts Firefox answers for only once
+ * its media stack has started, the memory class it cannot report at all — and the whole rendering
+ * stack differ, as two engines' do by construction. That pair lands *below* the "same" line on the
+ * diluted overall score while the machine itself is not in question, and `different` is not a neutral
+ * outcome: it enrolls the observation as a new machine with its own immutable anchor, and that anchor
+ * is its own 10-hour allowance in the same window. One computer collecting two allowances is the
+ * exact failure this band exists to prevent.
+ *
+ * It cannot over-reach onto the pinned SLOT-EDIT BOUNDARY rows: every row from two moved identity
+ * slots on is outside it — the row's own assertion is that the number of moved identity slots equals
+ * the number of edits — and the single-moved row is `same` before this band is consulted.
+ *
+ * The price is the one the near clone already pays and this model already documents: two genuinely
+ * different machines of one model that drift a single identity slot and agree on the rest spend one
+ * allowance, and a start beside the other's live lease is refused. Breadth keeps that narrow — the
+ * band needs at least MIN_MACHINE_TRAITS_MATCHED agreed machine traits, so a machine that shares no
+ * more than a CPU class cannot reach it.
+ */
+export function isMachineIdentityMatch(match: ClusterMatch, ambiguousThreshold: number): boolean {
+  if (isNearCloneMatch(match)) return true;
+  // A class contradiction is a difference of machine, or an observation that is not describing the
+  // machine truthfully: either way it may not share the allowance.
+  if (match.classDrifted.length > 0) return false;
+  if (match.classCompared.length < MIN_MACHINE_CLASS_FEATURES) return false;
+  const movedCoreSlots = match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+  return (
+    movedCoreSlots <= MAX_ENGINE_VARIANT_CORE_MOVES &&
+    match.matchedMachine.length >= MIN_MACHINE_TRAITS_MATCHED &&
+    match.machineScore >= ambiguousThreshold
+  );
+}
+
+/**
  * A positive "same device" verdict is a statement about the *computer*, so it is decided on the
  * machine traits and never on the rendering stack.
  *
@@ -750,6 +807,10 @@ export function decideClusterMatch(match: ClusterMatch, highThreshold: number, a
     match.machineScore >= highThreshold
   ) return "same";
   if (match.score >= highThreshold && match.matchedGraphics) return "same";
+  // One computer behind two engines whose identity slots agree while the engine-owned corroborators
+  // do not: the conservative middle. It is ambiguous rather than different on purpose — different
+  // would mint a second machine identity, and therefore a second mining allowance, for one computer.
+  if (isMachineIdentityMatch(match, ambiguousThreshold)) return "ambiguous";
   if (match.score >= ambiguousThreshold) return "ambiguous";
   return "different";
 }

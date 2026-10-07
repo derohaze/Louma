@@ -398,6 +398,12 @@ test("the database enforces unique identities and addresses", async () => {
     () => collections.wallets.insertOne({ publicId: randomUUID(), address: first.address, addressNormalized: first.address, addressVersion: 1, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: new Date(), updatedAt: new Date(), customAddressChangedAt: null, customAddress: null, customAddressNormalized: null } as never),
     (error: unknown) => error instanceof MongoServerError && error.code === 11000 && (error as MongoServerError & { keyPattern?: Record<string, number> }).keyPattern?.["addressNormalized"] === 1,
   );
+  const malformedAddress = "LMA-0000-0000-0000";
+  await assert.rejects(
+    () => collections.wallets.insertOne({ publicId: randomUUID(), address: malformedAddress, addressNormalized: malformedAddress, addressVersion: 1, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: new Date(), updatedAt: new Date(), customAddressChangedAt: null, customAddress: null, customAddressNormalized: null } as never),
+    (error: unknown) => error instanceof MongoServerError && error.code === 121,
+    "the wallet validator rejects addresses outside the active versioned format",
+  );
 });
 
 test("one owner can hold secondary wallets while primary and idempotency uniqueness stay wallet-scoped", async () => {
@@ -1281,6 +1287,11 @@ test("a custom alias stays separate from the canonical receiving address and is 
   await fund(other, FUNDING_MINOR);
   assert.equal((await transfer(`@${handle}`, "1.0000", other.accessToken)).status, 201);
   assert.equal((await transfer(generatedAddress, "1.0000", other.accessToken)).status, 201);
+  assert.equal(
+    await collections.transactions.countDocuments({ senderWalletId: other.walletId, receiverWalletId: owner.walletId, receiverAddress: generatedAddress }),
+    2,
+    "transaction snapshots keep the immutable address even when the transfer used a handle",
+  );
   assert.equal(await balanceOf(owner), "1.9800", "each transfer credits 1.0000 less the 1% fee");
 
   // The handle is locked for 30 days, and a refused change leaves the wallet untouched.
@@ -1288,7 +1299,8 @@ test("a custom alias stays separate from the canonical receiving address and is 
   assert.equal(cooldown.status, 409, JSON.stringify(cooldown.body));
   assert.equal((cooldown.body["error"] as Record<string, unknown>)["code"], "address_change_cooldown");
   const unchanged = (await call("GET", "/api/v1/wallet", { token: owner.accessToken })).body["wallet"] as Record<string, unknown>;
-  assert.equal(unchanged["address"], `@${handle}`);
+  assert.equal(unchanged["address"], generatedAddress, "the canonical receiving address stays immutable");
+  assert.equal(unchanged["customAddress"], `@${handle}`, "the refused change leaves the alias unchanged");
   assert.equal(unchanged["customAddressChangedAt"], wallet["customAddressChangedAt"]);
 
   await assertLedgerConsistency();

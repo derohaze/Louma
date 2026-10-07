@@ -51,7 +51,10 @@ traffic during the one-time replacement and restart after verification.
 Preflight checks the target database name, required global-address and
 primary-wallet unique indexes, wallet/address versions, valid old and canonical
 formats, exactly one primary wallet per existing user, and one wallet ledger
-account per wallet. The migration is bounded to batches of 200 and resumable:
+account per wallet. Existing wallet-ledger accounts without a wallet are counted
+and left untouched when their balance is zero and they have no ledger entries;
+the preflight blocks if an orphan account carries financial data. The migration
+is bounded to batches of 200 and resumable:
 each wallet update is atomic, and already migrated rows are skipped on rerun.
 Postflight verifies the wallet count and wallet-ledger-account count are
 unchanged, every wallet is version 1 with a valid canonical address, and no

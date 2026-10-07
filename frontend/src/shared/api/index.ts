@@ -6,6 +6,7 @@ export type {
   ApiUser,
   ApiWallet,
   ApiMiningSession,
+  ApiMiningQuota,
   ApiMiningState,
   ApiMiningPool,
   ApiMiningPoolsState,

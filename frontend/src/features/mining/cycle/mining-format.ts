@@ -1,5 +1,5 @@
 import { MONEY_SCALE } from "@/shared/lib/wallet";
-import type { ApiMiningSession } from "@/shared/api";
+import type { ApiMiningQuota, ApiMiningSession } from "@/shared/api";
 
 const SECONDS_PER_HOUR = 3600n;
 
@@ -33,6 +33,41 @@ export function liveSnapshot(session: ApiMiningSession, serverNowMs: number) {
 }
 
 export type LiveSnapshot = ReturnType<typeof liveSnapshot>;
+
+/**
+ * The window's own numbers — what the account has mined inside its 24-hour window, and what is left
+ * of the 10 hours — advanced locally between server reads.
+ *
+ * `quota.consumedSeconds` is the server's accumulated sum for that window, so it already contains
+ * every earlier segment of this account, whichever browser or device mined it. The only local
+ * addition is the growth of the *running* segment since that read, measured on the same live
+ * snapshot the cycle countdown uses: a stopped account's window stops counting, and a reopened page
+ * continues the same total instead of restarting from zero.
+ */
+export function windowSnapshot(
+  quota: ApiMiningQuota,
+  live: { elapsedSeconds: number } | null,
+  sessionElapsedSeconds: number,
+) {
+  const runningGrowth = live ? Math.max(0, live.elapsedSeconds - sessionElapsedSeconds) : 0;
+  const minedSeconds = Math.max(
+    0,
+    Math.min(quota.dailyQuotaSeconds, quota.consumedSeconds + runningGrowth),
+  );
+  const remainingSeconds = Math.max(0, quota.dailyQuotaSeconds - minedSeconds);
+  return {
+    minedSeconds,
+    remainingSeconds,
+    dailyQuotaSeconds: quota.dailyQuotaSeconds,
+    windowEndsAt: quota.windowEndsAt,
+    progressPercent:
+      quota.dailyQuotaSeconds > 0
+        ? Math.min(100, (minedSeconds / quota.dailyQuotaSeconds) * 100)
+        : 0,
+  };
+}
+
+export type WindowSnapshot = ReturnType<typeof windowSnapshot>;
 
 export function countdown(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);

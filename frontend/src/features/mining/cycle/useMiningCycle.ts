@@ -16,7 +16,12 @@ import {
 } from "@/shared/lib/platform";
 import { translate } from "@/shared/i18n";
 import { currency, dateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
-import { countdown, liveSnapshot, nextPaint } from "@/features/mining/cycle/mining-format";
+import {
+  countdown,
+  liveSnapshot,
+  nextPaint,
+  windowSnapshot,
+} from "@/features/mining/cycle/mining-format";
 import type { FeedLine } from "@/features/mining/live/MiningLiveLog";
 
 /**
@@ -368,8 +373,18 @@ export function useMiningCycle() {
   const rateText = session ? translate("mining.cycle.ratePerHour", { rate: session.rate }) : "—";
   const remaining = live?.remainingSeconds ?? session?.remainingSeconds ?? 0;
   const accruedMinor = live?.accruedMinor ?? session?.accruedMinor ?? 0;
-  const progressPercent =
-    session && live ? Math.min(100, (live.elapsedSeconds / session.durationSeconds) * 100) : 0;
+  /**
+   * The window's numbers, not the segment's: what this account has mined inside the current 24-hour
+   * window across every segment (and every browser it mined in), how much of the 10 hours is left,
+   * and the bar between them. `remaining` above stays this cycle's own countdown; this is the
+   * allowance the server actually enforces, so stopping and reopening — here or in a second browser
+   * — continues the same total instead of restarting it.
+   */
+  const quota = mining.data?.quota ?? null;
+  const quotaWindow = useMemo(
+    () => (quota ? windowSnapshot(quota, live, session?.elapsedSeconds ?? 0) : null),
+    [quota, live, session?.elapsedSeconds],
+  );
   const needsCollection = session ? session.settledMinor < accruedMinor : false;
   // A cycle that is over and has nothing left to collect has no card of its own: the page goes
   // back to the ready panel (pool gate or Start) instead of parking on a settled record, and the
@@ -393,7 +408,7 @@ export function useMiningCycle() {
     rateText,
     remaining,
     accruedMinor,
-    progressPercent,
+    quotaWindow,
     needsCollection,
     cycleComplete,
     actionsEnabled,

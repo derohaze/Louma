@@ -29,6 +29,7 @@ export {
   transferTax,
   transferNet,
   dateText,
+  transactionDateText,
 } from "./wallet-format";
 export type { NavHref, NavSection } from "./wallet-nav";
 export { navSections, navItems, findActiveSection } from "./wallet-nav";

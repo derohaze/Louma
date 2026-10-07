@@ -139,7 +139,7 @@ export function MobileTabBar({
   const activeSection = findActiveSection(pathname);
   const tw = (current: boolean) =>
     cn(
-      "flex h-16 flex-col items-center justify-center gap-1 text-[10px] font-semibold transition-colors",
+      "flex h-16 min-w-0 flex-col items-center justify-center gap-1 text-[10px] font-semibold transition-colors",
       current ? "text-primary" : "text-muted-foreground hover:text-foreground",
     );
   return (
@@ -158,7 +158,9 @@ export function MobileTabBar({
               className={tw(current)}
             >
               <Icon icon={section.icon} size={22} />
-              <span>{translate(section.titleKey)}</span>
+              <span className="min-w-0 max-w-full truncate whitespace-nowrap">
+                {translate(section.titleKey)}
+              </span>
             </Link>
           );
         })}
@@ -169,7 +171,9 @@ export function MobileTabBar({
           className={tw(moreActive(activeSection))}
         >
           <Icon icon={Menu01Icon} size={22} />
-          <span>{t("chrome.more")}</span>
+          <span className="min-w-0 max-w-full truncate whitespace-nowrap">
+            {t("chrome.more")}
+          </span>
         </button>
       </div>
     </nav>
