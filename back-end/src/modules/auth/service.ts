@@ -5,7 +5,7 @@ import type { AppConfig } from "../../config/env.js";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { RedisHandle } from "../../infrastructure/redis/client.js";
 import { displayNameKey, invalidate } from "../../infrastructure/redis/cache.js";
-import { recordSecurityEvent } from "../security/audit.js";
+import { logAuditFailure, recordSecurityEvent } from "../security/audit.js";
 import { createAccessToken, verifyAccessToken } from "../security/access-token.js";
 import { createOpaqueToken, decryptSecret, hashRecoveryCode, hashToken } from "../security/crypto.js";
 import { verifyTotpToken } from "../security/totp.js";
@@ -100,7 +100,7 @@ async function issueSession(input: {
   const accessToken = session.status === "active"
     ? await createAccessToken({ userId: input.user.publicId, sessionId }, input.config.accessTokenSecret)
     : null;
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.user.publicId, sessionId, eventType: session.status === "active" ? "login" : "login_pending_two_factor", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.user.publicId, sessionId, eventType: session.status === "active" ? "login" : "login_pending_two_factor", outcome: "success", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure(session.status === "active" ? "login" : "login_pending_two_factor", error));
   return { user: toPublicUser(input.user), accessToken, refreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId };
 }
 
@@ -243,12 +243,12 @@ export async function login(input: {
     ? await argon2.verify(user.passwordHash, password).catch(() => false)
     : await argon2.verify(await getDummyPasswordHash(), password).catch(() => false);
   if (!user || !matches || user.status !== "active") {
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user?.publicId ?? null, eventType: "login_failed", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: user?.publicId ?? null, eventType: "login_failed", outcome: "failure", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("login_failed", error));
     throw unauthorized();
   }
   const wallet = await input.collections.wallets.findOne({ ownerUserId: user.publicId });
   if (wallet?.status === "frozen") {
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "login_blocked_wallet_frozen", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "login_blocked_wallet_frozen", outcome: "failure", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("login_blocked_wallet_frozen", error));
     throw forbidden("wallet_frozen", "This wallet is frozen. Unfreeze it from an active session before signing in.");
   }
   const twoFactor = await input.collections.twoFactorCredentials.findOne({ ownerUserId: user.publicId, enabledAt: { $ne: null } });
@@ -293,7 +293,7 @@ export async function refreshSession(input: {
     if (!raced) throw unauthorized();
     if (now.getTime() - raced.lastActiveAt.getTime() > REFRESH_REUSE_GRACE_MS) {
       await input.collections.sessions.updateMany({ ownerUserId: raced.ownerUserId, status: "active" }, { $set: { status: "revoked", revokedAt: now, refreshTokenHash: null } });
-      await recordSecurityEvent({ collections: input.collections, ownerUserId: raced.ownerUserId, sessionId: raced.publicId, eventType: "refresh_token_reuse_detected", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
+      await recordSecurityEvent({ collections: input.collections, ownerUserId: raced.ownerUserId, sessionId: raced.publicId, eventType: "refresh_token_reuse_detected", outcome: "failure", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("refresh_token_reuse_detected", error));
       throw unauthorized();
     }
     // Inside the grace window this is a second tab, not a replay: the session is rotated again so
@@ -330,7 +330,7 @@ export async function completeTwoFactor(input: {
   }
   if (!valid) {
     await input.collections.sessions.updateOne({ _id: session._id, status: "pending_two_factor", twoFactorAttempts: { $lt: 5 } }, { $inc: { twoFactorAttempts: 1 } });
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, sessionId: session.publicId, eventType: "two_factor_login_failed", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, sessionId: session.publicId, eventType: "two_factor_login_failed", outcome: "failure", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("two_factor_login_failed", error));
     throw unauthorized();
   }
 
@@ -360,13 +360,13 @@ export async function revokeSession(input: { collections: Collections; ownerUser
   if (input.sessionId === input.currentSessionId) throw notFound();
   const result = await input.collections.sessions.updateOne({ publicId: input.sessionId, ownerUserId: input.ownerUserId, status: "active" }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
   if (result.matchedCount === 0) throw notFound();
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "session_revoked", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "session_revoked", outcome: "success", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("session_revoked", error));
 }
 
 export async function revokeCurrentSession(input: { collections: Collections; ownerUserId: string; sessionId: string; requestId: string }): Promise<void> {
   const now = new Date();
   await input.collections.sessions.updateOne({ publicId: input.sessionId, ownerUserId: input.ownerUserId, status: { $ne: "revoked" } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: now } });
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "logout", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "logout", outcome: "success", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("logout", error));
 }
 
 export async function listSessions(input: { collections: Collections; ownerUserId: string; currentSessionId: string }) {
@@ -402,7 +402,7 @@ export async function updateProfile(input: { collections: Collections; ownerUser
   if ("profile.displayName" in changes && input.redis) {
     await invalidate(input.redis, displayNameKey(input.redis, input.ownerUserId));
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "profile_updated", outcome: "success", correlationId: input.requestId, metadata: { displayNameChanged: "profile.displayName" in changes, countryChanged: "profile.country" in changes } }).catch(() => undefined);
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "profile_updated", outcome: "success", correlationId: input.requestId, metadata: { displayNameChanged: "profile.displayName" in changes, countryChanged: "profile.country" in changes } }).catch((error: unknown) => logAuditFailure("profile_updated", error));
   return (await getCurrentUser({ collections: input.collections, ownerUserId: input.ownerUserId })).user;
 }
 
@@ -424,7 +424,7 @@ export async function changePassword(input: { collections: Collections; ownerUse
   await input.collections.sessions.updateMany({ ownerUserId: input.ownerUserId, status: { $in: ["active", "pending_two_factor"] }, publicId: { $ne: input.sessionId } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
   // The password and the sibling sessions are already changed by the time this runs, and the old
   // password no longer exists, so this write must never be the reason the caller sees an error.
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "password_changed", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "password_changed", outcome: "success", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("password_changed", error));
   return { changed: true };
 }
 

@@ -97,6 +97,14 @@ export interface MiningDeviceRecord {
    */
   anchorHash?: string | null;
   /**
+   * The shared quota identity of a near-clone enrollment: the matched machine's anchor, copied here
+   * when this cluster was enrolled as a near clone of a known machine. The record keeps its own
+   * immutable `anchorHash`, but the 10h device quota binds to this anchor instead, so the shared
+   * allowance survives enrollment and a retry that resolves to this record reads the same window
+   * rather than a fresh one. Null on every other record; readers default a missing value to null.
+   */
+  quotaAnchorHash?: string | null;
+  /**
    * Append-only machine-key aliases the server accepted for this cluster (a browser/driver update
    * that moved a core trait, or a tolerant cross-engine match). Bounded; only appended on an
    * allowed admission, never by a rejected request.

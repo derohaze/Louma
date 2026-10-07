@@ -402,6 +402,10 @@ async function invalidateMembership(input: {
  * freed in the same commit that ends the cycle — a stop can never leave a hold behind it. The row
  * is kept (not deleted) as the room-change throttle's anchor until the cooldown is over; the TTL
  * index reaps it after that.
+ *
+ * Stopping is not a room change, so the release keeps the deadline the last join or switch wrote
+ * instead of imposing a fresh wait: an account that last moved rooms hours ago can switch straight
+ * away, while one that joined moments ago still waits out its original deadline.
  */
 export async function releasePoolHold(input: {
   collections: Collections;
@@ -419,15 +423,17 @@ export async function releasePoolHold(input: {
   const throttleUntil = new Date(input.nowMs + input.cooldownSeconds * 1000);
   await input.collections.miningPoolMembers.updateOne(
     { ownerUserId: input.ownerUserId, status: "held" },
-    {
-      $set: {
-        status: "released",
-        releasedAt: now,
-        updatedAt: now,
-        expiresAt: throttleUntil,
-        changeAvailableAt: throttleUntil,
+    [
+      {
+        $set: {
+          status: "released",
+          releasedAt: now,
+          updatedAt: now,
+          expiresAt: throttleUntil,
+          changeAvailableAt: { $ifNull: ["$changeAvailableAt", throttleUntil] },
+        },
       },
-    },
+    ],
     options,
   );
 }
@@ -436,17 +442,22 @@ export async function releasePoolHold(input: {
  * Extends the account's hold to the end of the cycle that was just committed. The compare-and-set
  * keeps it honest: only the room this cycle started in, and only while it is still held, is
  * extended — a release that landed in between is never resurrected.
+ *
+ * Returns whether the hold was still there. A concurrent leave or switch can release or move the
+ * room between the start gate's check and this write; the caller must detect the miss rather than
+ * leave a running cycle whose room is absent or belongs to a different pool.
  */
 export async function extendPoolHoldToCycle(input: {
   collections: Collections;
   ownerUserId: string;
   poolId: MiningPoolId;
   endsAt: Date;
-}): Promise<void> {
-  await input.collections.miningPoolMembers.updateOne(
+}): Promise<boolean> {
+  const extended = await input.collections.miningPoolMembers.updateOne(
     { ownerUserId: input.ownerUserId, poolId: input.poolId, status: "held" },
     { $set: { expiresAt: input.endsAt } },
   );
+  return extended.modifiedCount === 1;
 }
 
 export async function joinMiningPool(input: {
@@ -501,23 +512,70 @@ export async function joinMiningPool(input: {
   // they actually landed. `joinedAt` keeps the first-seen time on a switch, while the two deadlines
   // this row carries — the join grace and the next change — are durations measured on the
   // application clock, so they compare consistently with the clock that reads them.
-  await input.collections.miningPoolMembers.updateOne(
-    { ownerUserId: input.ownerUserId },
-    [
-      {
-        $set: {
-          poolId: pool.id,
-          status: "held",
-          expiresAt: new Date(nowMs + live.miningPools.holdSeconds * 1000),
-          changeAvailableAt: new Date(nowMs + live.miningPools.switchCooldownSeconds * 1000),
-          releasedAt: null,
-          joinedAt: { $ifNull: ["$joinedAt", "$$NOW"] },
-          updatedAt: "$$NOW",
-        },
-      },
+  // The cooldown pre-check above reads stale state: two concurrent joins to different rooms can
+  // both pass against the same prior row before either write lands. The write is therefore guarded
+  // on the same condition — a change to a different room only while no throttle is in force — so
+  // the loser cannot silently replace the winner's room and deadline. A guarded write that matches
+  // nothing on an existing row fails the upsert with a duplicate key on the per-account index;
+  // that is re-read below rather than surfaced, because the winner's room decides the answer.
+  const joinGuard = {
+    ownerUserId: input.ownerUserId,
+    $or: [
+      { changeAvailableAt: { $exists: false } },
+      { changeAvailableAt: { $lte: now } },
+      { poolId: pool.id },
+      { status: { $ne: "held" as const } },
+      { expiresAt: { $lte: now } },
     ],
-    { upsert: true },
-  );
+  };
+  const joinWrite = [
+    {
+      $set: {
+        poolId: pool.id,
+        status: "held",
+        expiresAt: new Date(nowMs + live.miningPools.holdSeconds * 1000),
+        changeAvailableAt: new Date(nowMs + live.miningPools.switchCooldownSeconds * 1000),
+        releasedAt: null,
+        joinedAt: { $ifNull: ["$joinedAt", "$$NOW"] },
+        updatedAt: "$$NOW",
+      },
+    },
+  ] as const;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await input.collections.miningPoolMembers.updateOne(joinGuard, [...joinWrite], { upsert: true });
+      break;
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      // Another join won this account's membership after the pre-check read. Re-read: a winner in
+      // the room this join wanted is an idempotent success, a winner elsewhere with a live
+      // throttle turns this join into the same cooldown refusal the pre-check would have given,
+      // and anything else (a racing trim removed the row) retries the guarded write.
+      const raced = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
+      const racedNowMs = Date.now();
+      if (raced && isLiveMembership(raced, racedNowMs) && raced.poolId === pool.id) {
+        await invalidateMembership(input);
+        return getMiningPoolsState({ collections: input.collections, config: live, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
+      }
+      if (raced && raced.poolId !== pool.id) {
+        const availableAtMs = raced.changeAvailableAt?.getTime() ?? 0;
+        if (racedNowMs < availableAtMs) {
+          const waitMinutes = Math.max(1, Math.ceil((availableAtMs - racedNowMs) / 60_000));
+          throw conflict(
+            "mining_pool_switch_cooldown",
+            `Changing rooms is limited to once every ${Math.round(live.miningPools.switchCooldownSeconds / 60)} minutes. Join ${poolNameOf(raced.poolId)} again now, or try this room in ${waitMinutes} minute${waitMinutes === 1 ? "" : "s"}.`,
+          );
+        }
+      }
+      if (attempt >= 2) {
+        const current = await input.collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
+        if (current && isLiveMembership(current, Date.now()) && current.poolId === pool.id) {
+          break;
+        }
+        throw conflict("mining_pool_full", `${pool.name} is full. Try the other pool or try again later.`);
+      }
+    }
+  }
   // The pre-check above races: two joins against one seat can both pass `countDocuments`
   // before either upsert lands. Trim the pool back to the cap after the write instead.
   //

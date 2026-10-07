@@ -80,6 +80,9 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     db.collection("sessions").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "sessions_expire_at" }),
     db.collection("security_events").createIndex({ publicId: 1 }, { unique: true, name: "security_events_public_id_unique" }),
     db.collection("security_events").createIndex({ ownerUserId: 1, createdAt: -1 }, { name: "security_events_owner_history" }),
+    // The mining-refusal ops report matches refusal event types inside a global time window (no
+    // owner in the filter), so it needs its own index rather than the per-owner history one.
+    db.collection("security_events").createIndex({ eventType: 1, createdAt: -1 }, { name: "security_events_type_time" }),
     db.collection("two_factor_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "two_factor_owner_unique" }),
     db.collection("transfer_password_credentials").createIndex({ ownerUserId: 1 }, { unique: true, name: "transfer_password_owner_unique" }),
     db.collection("transfer_authorizations").createIndex({ publicId: 1 }, { unique: true, name: "transfer_authorizations_public_id_unique" }),

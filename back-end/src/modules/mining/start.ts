@@ -593,15 +593,33 @@ export async function startMining(input: {
   // once — the moment mining stops, and the TTL index reaps the row behind it. Never fails the
   // committed request, but never disappears either: logged, and the hold then falls back to the
   // join grace it was created with.
+  //
+  // The extension is a compare-and-set against the room this cycle started in: a concurrent leave
+  // or switch that released or moved the hold after the gate's check matches no row. That miss is
+  // reported (log and security event) rather than left silent — the cycle is running while its room
+  // is absent or belongs to a different pool, which the next join, stop or state read must be able
+  // to explain.
   await extendPoolHoldToCycle({
     collections,
     ownerUserId: input.ownerUserId,
     poolId: poolDef.id,
     endsAt: session.endsAt,
   })
-    .then(async () => {
+    .then(async (extended) => {
       const handle = input.membershipCache?.redis ?? input.cache?.redis;
       if (handle) await invalidate(handle, poolMembershipKey(handle, input.ownerUserId));
+      if (!extended) {
+        console.error(`[mining] pool hold not extended for session ${session.publicId}: hold released or moved before the extension`);
+        await recordSecurityEvent({
+          collections,
+          ownerUserId: input.ownerUserId,
+          sessionId: null,
+          eventType: "mining_started",
+          outcome: "failure",
+          correlationId: input.correlationId,
+          metadata: { reason: "pool_hold_not_extended", sessionId: session.publicId, poolId: poolDef.id },
+        }).catch(() => undefined);
+      }
     })
     .catch((error) => {
       console.error(`[mining] pool hold not extended for session ${session.publicId}:`, error);

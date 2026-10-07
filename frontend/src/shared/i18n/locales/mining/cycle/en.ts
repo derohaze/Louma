@@ -43,7 +43,7 @@ export default {
     noteSession:
       "Closing the tab or switching devices never stops or loses a cycle: reopening the page re-reads the same state from the server.",
     noteStop:
-      "Stopping is always available: mining pauses, what you earned is collected, your pool is released, and the hours left in the window stay yours to resume with.",
+      "Stopping is always available, with one exception: if the cycle has earned rewards while settlement or payouts are paused, it cannot be stopped until settlement resumes. Otherwise mining pauses, what you earned is collected, your pool is released, and the hours left in the window stay yours to resume with.",
     noteCounter:
       "The counter you see is a display of the server's reward. Only the server decides how much LMA is credited.",
   },

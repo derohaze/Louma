@@ -291,6 +291,12 @@ export async function createTransfer(input: {
       // actually committed is found and replayed, so a retry never re-executes money movement.
       const landed = await findCommittedTransfer({ collections: input.collections, ownerUserId: input.ownerUserId, idempotencyKey, requestFingerprint });
       if (landed) return { ...landed.public, balanceAfter: formatMoney(landed.record.balanceAfterMinor), replayed: true };
+      // The previous attempt assigned `posted` before it rolled back. That header never committed,
+      // so it must not survive into this attempt: should this retry converge on another request's
+      // committed transfer while the final lookup below fails, the fallback would otherwise return
+      // the rolled-back header — with `replayed: false` — and its transfer id and balance would
+      // disagree with the money actually posted.
+      posted = null;
       await sleep(RETRY_BACKOFF_BASE_MS * 2 ** (attempt - 2));
     }
 
