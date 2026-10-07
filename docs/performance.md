@@ -4,7 +4,12 @@ Runner: `src/tests/architecture-benchmark.ts`
 (`node --env-file=/tmp/louma-direct.env --import tsx src/tests/architecture-benchmark.ts`).
 25 iterations per query; reports p50/p95/p99 plus full winning-plan explains.
 
-## Baseline (MongoDB-only, Atlas from the dev machine — link RTT dominates)
+## Existing baseline (before the wallet identity refactor)
+
+The timing sample below is retained for historical comparison. It predates
+primary-wallet lookup and wallet-scoped idempotency, so it is not a measurement
+of the new query shapes. Re-run this benchmark against the target deployment
+before drawing latency conclusions.
 
 | read | p50 | p95 | p99 |
 |---|---|---|---|
@@ -23,14 +28,23 @@ the code path is covered by construction (readThrough + counters) and the
 MongoDB-only baseline above is the worst case. Re-run with REDIS_URL to fill
 the hit/miss columns before claiming any caching speedup.
 
-## Explain plans (all IXSCAN, bounded examines)
+## Explain plans
+
+The last successful database run before this refactor reported:
 
 - history: LIMIT > FETCH > IXSCAN(transactions_participants_history)
-- idempotency: FETCH > IXSCAN(transactions_idempotency_unique)
 - mining header: FETCH > IXSCAN(transactions_mining_session_sequence_unique)
 - entries: FETCH > IXSCAN(ledger_entries_account_history)
 - active cycle (production shape): LIMIT > FETCH > IXSCAN(mining_sessions_one_active_per_user)
 - approvals: FETCH > IXSCAN(transfer_authorizations_owner_history)
+
+The wallet refactor adds three plan checks to the benchmark. Expected winning
+indexes are `wallets_owner_primary_unique` for `{ ownerUserId, isPrimary: true }`,
+`wallets_address_unique` for `{ addressNormalized }`, and
+`transactions_sender_wallet_idempotency_unique` for `{ type: "transfer",
+senderWalletId, idempotencyKey }`. The in-repo benchmark was updated for these
+queries; this environment could not run it because no local MongoDB service was
+available, so the post-refactor plans and timings remain unmeasured here.
 
 Note: the first benchmark revision printed a COLLSCAN for an unscoped
 `{miningSessionId, sequenceNumber}` probe — a query no production path runs.

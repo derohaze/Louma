@@ -26,7 +26,7 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
     rateText,
     remaining,
     accruedMinor,
-    progressPercent,
+    quotaWindow,
     poolName,
     collect,
     stop,
@@ -112,22 +112,38 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
             aria-label={t("active.progressAria")}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={Math.round(progressPercent)}
+            aria-valuenow={Math.round(quotaWindow?.progressPercent ?? 0)}
             className="h-2.5 w-full overflow-hidden rounded-full bg-secondary"
           >
             <div
               className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-linear"
-              style={{ width: `${progressPercent}%` }}
+              style={{ width: `${quotaWindow?.progressPercent ?? 0}%` }}
             />
           </div>
-          <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+          {/**
+           * The bar carries the *window*, not the segment: the big countdown above is this cycle's
+           * own remaining time, while this is the account's whole 10 hours — mined across every
+           * cycle, in whichever browser, read back from the server — so it never restarts at zero
+           * when a page is reopened or a cycle is stopped and resumed.
+           */}
+          <div className="mt-2 flex flex-wrap justify-between gap-x-4 text-xs text-muted-foreground">
             <span>
-              {t("active.elapsed", {
-                time: countdown(live?.elapsedSeconds ?? session.elapsedSeconds),
+              {t("active.minedThisWindow", {
+                time: countdown(quotaWindow?.minedSeconds ?? 0),
               })}
             </span>
-            <span>{t("active.window")}</span>
+            <span>
+              {t("active.windowRemaining", {
+                time: countdown(quotaWindow?.remainingSeconds ?? 0),
+                max: countdown(quotaWindow?.dailyQuotaSeconds ?? 0),
+              })}
+            </span>
           </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("active.currentSession", {
+              time: countdown(live?.elapsedSeconds ?? session.elapsedSeconds),
+            })}
+          </p>
         </div>
 
         <div className="mt-6 border-t pt-5">

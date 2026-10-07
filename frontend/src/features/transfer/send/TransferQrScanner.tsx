@@ -65,7 +65,7 @@ export function SendStepper({ stage }: { stage: 1 | 2 | 3 }) {
  * unrelated URL or email and silently replace the typed recipient. An unrecognised QR adds nothing.
  */
 function targetFromQrText(text: string): string | null {
-  const match = /^(?:louma:)?(LMA(?:-[A-Z0-9]{4}){3}|@[a-z0-9_]{4,24})$/i.exec(text.trim());
+  const match = /^(?:louma:)?(LMA[0-7][0-9A-HJKMNP-TV-Z]{27}|@[a-z0-9_]{4,24})$/i.exec(text.trim());
   return match?.[1] ? normalizeTransferTarget(match[1]) : null;
 }
 

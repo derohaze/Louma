@@ -9,7 +9,7 @@ import {
   buildFeatureMap,
   buildNormalizedVector,
   decideClusterMatch,
-  isNearCloneMatch,
+  isMachineIdentityMatch,
   deviceKeyHash,
   digestFeatureMap,
   ipHash,
@@ -73,13 +73,15 @@ export interface DeviceResolution {
   /** Every identity the resolved record itself is known by (machine key and browser key). */
   equivalentLeaseKeys: string[];
   /**
-   * The stable anchor of a *known* machine this observation matched as a near clone (the strong
-   * same-model band of `decideClusterMatch`) without being merged into it; null in every other case.
+   * The stable anchor of a *known* machine this observation matched as that machine — the near clone
+   * band, or the cross-engine pair whose identity slots agree while one engine's own corroborators do
+   * not (see `isMachineIdentityMatch`) — without being merged into it; null in every other case.
    *
    * The new record carries its own immutable anchor, so an economic limit keyed on the anchor alone
    * would open a second allowance beside the matched machine's stopped segment — one machine
-   * collecting a fresh 10h window per edited hardware slot. Callers that key such a limit (the shared
-   * device quota) use this anchor instead, which keeps one machine to one allowance.
+   * collecting a fresh 10h window per edited hardware slot, or per browser it is opened in. Callers
+   * that key such a limit (the shared device quota) use this anchor instead, which keeps one machine
+   * to one allowance.
    */
   quotaAnchor: string | null;
   isNew: boolean;
@@ -333,14 +335,27 @@ export async function resolveOrCreateDevice(input: {
       throw new AppError(403, DEVICE_ENROLLMENT_LIMITED_CODE, DEVICE_ENROLLMENT_LIMITED_MESSAGE);
     }
   }
-  // A near clone is enrolled as its own record, but it is still the machine it matched for every
-  // economic purpose: the shared 10h device quota is keyed on this anchor so editing a hardware
-  // slot cannot buy a second allowance next to the first account's stopped segment. Every other
-  // verdict leaves it null — a weak match must not lend its allowance to an unrelated computer.
-  const nearCloneAnchor =
-    best && isNearCloneMatch(decided)
-      ? best.candidate.quotaAnchorHash ?? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
-      : null;
+  // A machine-identity match is enrolled separately but shares the matched machine's allowance. When
+  // the best candidate is itself spending someone else's allowance, verify against the original quota
+  // owner too; otherwise similarities could chain A's quota through B to a distinct C that no longer
+  // resembles A.
+  let machineAnchor: string | null = null;
+  if (best && isMachineIdentityMatch(decided, config.lmdg.ambiguousThreshold)) {
+    const candidateAnchor = best.candidate.quotaAnchorHash;
+    const quotaRoot = candidateAnchor
+      ? await collections.miningDevices.findOne({
+          $or: [{ anchorHash: candidateAnchor }, { machineKeyHash: candidateAnchor }, { publicId: candidateAnchor }],
+        })
+      : best.candidate;
+    if (quotaRoot && !quotaRoot.quotaAnchorHash) {
+      const rootMatch = quotaRoot.publicId === best.candidate.publicId
+        ? decided
+        : matchDeviceFeatures(toCandidate(quotaRoot), observed, config.encryptionKey);
+      if (isMachineIdentityMatch(rootMatch, config.lmdg.ambiguousThreshold)) {
+        machineAnchor = quotaRoot.anchorHash ?? quotaRoot.machineKeyHash ?? quotaRoot.publicId;
+      }
+    }
+  }
   const created = await createDevice(
     collections,
     {
@@ -352,7 +367,7 @@ export async function resolveOrCreateDevice(input: {
       keyHash,
       visitorHash,
       machineKey,
-      quotaAnchorHash: nearCloneAnchor,
+      quotaAnchorHash: machineAnchor,
       browserKeyPublicKey: evidence.browserKeyPublicKey,
       fingerprintVersion: evidence.fingerprintVersion,
       fingerprintConfidence: evidence.fingerprintConfidence,
@@ -365,7 +380,7 @@ export async function resolveOrCreateDevice(input: {
     score: best?.identity ? 100 : decided.score,
     match: decided,
     isNew: true,
-    quotaAnchor: nearCloneAnchor,
+    quotaAnchor: machineAnchor,
   });
 }
 

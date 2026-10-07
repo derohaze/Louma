@@ -10,7 +10,7 @@ const ar: Strings<typeof en> = {
   address: {
     savedRecipients: "مستلمون محفوظون",
     label: "عنوان محفظة المستلم",
-    placeholder: "LMA-XXXX-XXXX-XXXX أو @handle",
+    placeholder: "LMA… (31 حرفًا) أو @handle",
     own: "هذا عنوانك الخاص.",
     note: "لا يخرج أي شيء من محفظتك في هذه الخطوة: يُتحقق من العنوان في السجل قبل طلب المبلغ أصلًا.",
     checking: "جارٍ التحقق من العنوان…",
@@ -53,7 +53,7 @@ const ar: Strings<typeof en> = {
     send: "إرسال {amount}",
   },
   errors: {
-    invalidTarget: "أدخل عنوان محفظة لوما (LMA-XXXX-XXXX-XXXX) أو معرّف @.",
+    invalidTarget: "أدخل عنوان محفظة لوما من 31 رمزًا يبدأ بـ LMA أو معرّف @.",
     ownAddress: "هذا عنوانك الخاص. استخدم محفظة أخرى.",
     quoteFailed: "تعذّر تسعير المبلغ. حاول مرة أخرى.",
     insufficient: "هذا أكثر مما تحمله المحفظة. المتاح {balance}.",

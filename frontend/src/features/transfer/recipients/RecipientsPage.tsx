@@ -19,7 +19,7 @@ import {
   saveAddress,
   type SavedAddress,
 } from "@/shared/lib/wallet";
-import { dateText } from "@/shared/lib/wallet";
+import { transactionDateText } from "@/shared/lib/wallet";
 
 /** The Recipients page: saved shortcuts plus everyone this wallet paid. */
 export function RecipientsPage() {
@@ -144,7 +144,7 @@ export function RecipientsPage() {
                   <div className="min-w-0 flex-1">
                     <code className="break-all text-sm font-semibold">{item.address}</code>
                     <p className="text-xs text-muted-foreground">
-                      {t("lastPaid", { date: dateText(item.at) })}
+                      {t("lastPaid", { date: transactionDateText(item.at) })}
                       {isSaved ? t("savedTag") : ""}
                     </p>
                   </div>

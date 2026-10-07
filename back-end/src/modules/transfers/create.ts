@@ -7,7 +7,7 @@ import type { CacheContext } from "../../infrastructure/redis/cache.js";
 import type { AppConfig } from "../../config/env.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { consumeTransferCredentialProof, proveTransferCredential, type TransferCredentialProof } from "../security/service.js";
-import { ensureFeeAccount, resolveRecipient } from "../wallets/service.js";
+import { ensureFeeAccount, findPrimaryWallet, resolveRecipient } from "../wallets/service.js";
 import { settleMiningForOwner } from "../mining/service.js";
 import { readFinancialControls } from "../financial-controls/service.js";
 import { assertBalanced, calculateTransferAmounts, formatMoney, parseMoneyToMinorUnits } from "../ledger/money.js";
@@ -28,6 +28,7 @@ import {
 import {
   assertTransferAuthorizationAttemptsRemain,
   findCommittedTransfer,
+  intentHashOf,
   loadTransferAuthorization,
   normalizeNote,
   parseRecipientAddress,
@@ -130,6 +131,14 @@ export async function createTransfer(input: {
    * (and the fingerprints) differ.
    */
   const requestFingerprint = approval.intentHash;
+  const senderWallet = await findPrimaryWallet(input.collections, input.ownerUserId);
+  if (!senderWallet) throw notFound();
+  if (approval.senderWalletId !== senderWallet.publicId) {
+    throw conflict("transfer_authorization_mismatch", "That approval does not belong to this wallet. Confirm the transfer again.");
+  }
+  if (intentHashOf(approval.intent, senderWallet.publicId) !== approval.intentHash) {
+    throw conflict("transfer_authorization_mismatch", "That approval is no longer valid. Confirm the transfer again.");
+  }
   // The body's echoes of the approved intent are checked, never used: the client cannot introduce a
   // recipient, an amount, or a note the sender did not approve, whether it is a bug or an attacker.
   const requestedRecipient = parseRecipientAddress(input.recipientAddress);
@@ -138,7 +147,7 @@ export async function createTransfer(input: {
     throw conflict("transfer_authorization_mismatch", "This transfer does not match the one you approved. Confirm the recipient and the amount again.");
   }
 
-  const prior = await input.collections.transactions.findOne({ type: "transfer", senderUserId: input.ownerUserId, idempotencyKey });
+  const prior = await input.collections.transactions.findOne({ type: "transfer", senderWalletId: senderWallet.publicId, idempotencyKey });
   // Unreachable while the collection validator holds (a transfer filter can only match a
   // transfer header), but a replay must never execute against a misread shape: fail closed.
   if (prior && !isTransferTransaction(prior)) throw new Error("Transfer idempotency record has an unexpected shape");
@@ -162,7 +171,7 @@ export async function createTransfer(input: {
   let recipientWallet = await input.collections.wallets.findOne({ publicId: intent.recipientWalletId });
   if (!recipientWallet) throw notFound();
   if (requestedRecipient.toLowerCase() !== intent.recipientAddress.toLowerCase()) {
-    const resolved = await resolveRecipient({ collections: input.collections, address: requestedRecipient, senderUserId: input.ownerUserId });
+    const resolved = await resolveRecipient({ collections: input.collections, address: requestedRecipient, senderWalletId: senderWallet.publicId });
     if (resolved.publicId !== intent.recipientWalletId) {
       throw conflict("transfer_authorization_mismatch", "The recipient changed after it was approved. Confirm the transfer again.");
     }
@@ -204,10 +213,7 @@ export async function createTransfer(input: {
     throw error;
   }
 
-  const senderWallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId, status: "active" });
-  if (!senderWallet) {
-    const wallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
-    if (!wallet) throw notFound();
+  if (senderWallet.status !== "active") {
     throw forbidden("wallet_frozen", "This wallet is frozen and cannot send transfers.");
   }
   if (senderWallet.publicId === recipientWallet.publicId) throw conflict("self_transfer", "You cannot transfer to your own wallet.");
@@ -225,8 +231,6 @@ export async function createTransfer(input: {
       mongoClient: input.mongoClient,
       config: input.config,
       ownerUserId: input.ownerUserId,
-      wallet: senderWallet,
-      walletAccount: senderAccount,
       correlationId: input.requestId,
       cache: input.cache,
     });
@@ -251,8 +255,8 @@ export async function createTransfer(input: {
     senderWalletId: senderWallet.publicId,
     receiverWalletId: recipientWallet.publicId,
     participants: [input.ownerUserId, recipientWallet.ownerUserId],
-    senderAddress: senderWallet.customAddress ?? senderWallet.address,
-    receiverAddress: recipientWallet.customAddress ?? recipientWallet.address,
+    senderAddress: senderWallet.address,
+    receiverAddress: recipientWallet.address,
     amountMinor: amounts.amountMinor,
     feeMinor: amounts.feeMinor,
     netAmountMinor: amounts.netAmountMinor,
@@ -289,7 +293,7 @@ export async function createTransfer(input: {
     if (attempt > 1) {
       // A retry is only safe because of what happens next: the record of a previous attempt that
       // actually committed is found and replayed, so a retry never re-executes money movement.
-      const landed = await findCommittedTransfer({ collections: input.collections, ownerUserId: input.ownerUserId, idempotencyKey, requestFingerprint });
+      const landed = await findCommittedTransfer({ collections: input.collections, ownerUserId: input.ownerUserId, senderWalletId: senderWallet.publicId, idempotencyKey, requestFingerprint });
       if (landed) return { ...landed.public, balanceAfter: formatMoney(landed.record.balanceAfterMinor), replayed: true };
       // The previous attempt assigned `posted` before it rolled back. That header never committed,
       // so it must not survive into this attempt: should this retry converge on another request's
@@ -304,7 +308,7 @@ export async function createTransfer(input: {
     try {
       await session.withTransaction(
         async () => {
-          const duplicate = await input.collections.transactions.findOne({ type: "transfer", senderUserId: input.ownerUserId, idempotencyKey }, { session });
+          const duplicate = await input.collections.transactions.findOne({ type: "transfer", senderWalletId: senderWallet.publicId, idempotencyKey }, { session });
           if (duplicate && !isTransferTransaction(duplicate)) throw new Error("Transfer idempotency record has an unexpected shape");
           if (duplicate) {
             if (duplicate.requestFingerprint !== requestFingerprint) throw conflict("idempotency_key_reused", "This idempotency key was already used for a different transfer.");
@@ -313,7 +317,7 @@ export async function createTransfer(input: {
 
           // Share a write-conflict boundary with freeze so a concurrently frozen wallet cannot send.
           const walletGuard = await input.collections.wallets.updateOne(
-            { _id: senderWallet._id, ownerUserId: input.ownerUserId, status: "active" },
+            { _id: senderWallet._id, ownerUserId: input.ownerUserId, isPrimary: true, status: "active" },
             { $inc: { financialVersion: 1 } },
             { session },
           );
@@ -478,7 +482,7 @@ export async function createTransfer(input: {
       // Ambiguous outcomes — unknown commit, a duplicate key, or retries exhausted on a transient
       // error — are decided by the idempotency record: if money already moved, replay it.
       if (isUnknownCommitOutcome(error) || duplicateKey || transient) {
-        const landed = await findCommittedTransfer({ collections: input.collections, ownerUserId: input.ownerUserId, idempotencyKey, requestFingerprint });
+        const landed = await findCommittedTransfer({ collections: input.collections, ownerUserId: input.ownerUserId, senderWalletId: senderWallet.publicId, idempotencyKey, requestFingerprint });
         if (landed) return { ...landed.public, balanceAfter: formatMoney(landed.record.balanceAfterMinor), replayed: true };
         // Nothing landed and the attempts are spent. The outcome of the last attempt is uncertain, so
         // it is answered as a retryable failure: never as a success (that could hide a transfer that
@@ -520,7 +524,7 @@ export async function createTransfer(input: {
    */
   let completed: TransferTransactionRecord | null = null;
   try {
-    const stored = await input.collections.transactions.findOne({ type: "transfer", senderUserId: input.ownerUserId, idempotencyKey });
+    const stored = await input.collections.transactions.findOne({ type: "transfer", senderWalletId: senderWallet.publicId, idempotencyKey });
     if (stored && isTransferTransaction(stored)) completed = stored;
   } catch {
     completed = null;

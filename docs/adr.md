@@ -58,3 +58,28 @@ Repositories own the journal header/entries pairing and the balance assertion
 (postBalancedJournal). Balance mutations stay in services (flow-specific
 conditional semantics), reads stay in services/modules (query-specific shapes).
 No abstraction without at least two callers — unused finders were deleted.
+
+## ADR-009 — wallet identity and ownership
+
+Users own wallets through `wallets.ownerUserId`, with one or more wallet
+documents per user. `isPrimary` selects the current product wallet and a partial
+unique index enforces at most one primary per owner. Registration creates the
+user, primary wallet, ledger account and registration audit event in one
+MongoDB transaction. No ownership join collection is needed while each wallet
+has one owner, and no secondary-wallet API or UI is added until the product
+requires it.
+
+`address` is the immutable routing identity, separate from the wallet public ID
+and from a mutable custom handle. Version 1 uses 128 random bits encoded as
+26 uppercase Crockford Base32 symbols, prefixed by `LMA`, plus a two-symbol
+SHA-256 typo checksum. Randomness avoids user-linked data; MongoDB's unique
+`addressNormalized` index decides collisions and only that duplicate error is
+retried. Wallet address replacement updates existing wallet rows without
+retaining the old address as a live alias. Historical transaction snapshots
+remain unchanged. See `docs/migrations.md` for the guarded one-time migration.
+
+The wallet collection stays unsharded. Any future shard design must preserve
+global uniqueness of `addressNormalized`; sharding only by owner would not make
+that uniqueness guarantee enforceable. Account-level mining quotas remain
+owner-scoped, while each mining settlement uses the session's concrete
+`walletId` and `ledgerAccountId`.

@@ -51,6 +51,23 @@ export interface ApiMiningSession {
   settlements?: { amount: string; at: string }[];
 }
 
+/**
+ * The account's allowance inside its current 24-hour window, summed on the server over every segment
+ * the account has mined — the segments it mined in another browser or on another device included,
+ * and the part of a running segment that has already elapsed.
+ *
+ * Window membership is by the stored anchor, so these numbers only ever reset when the 24-hour window
+ * itself rolls over: stopping, closing the tab, or reopening the page in a second browser continues
+ * the same total instead of starting a new one.
+ */
+export interface ApiMiningQuota {
+  dailyQuotaSeconds: number;
+  windowSeconds: number;
+  consumedSeconds: number;
+  remainingSeconds: number;
+  windowEndsAt: string | null;
+}
+
 export interface ApiMiningState {
   status: "idle" | "active" | "completed" | "settled";
   serverNow: string;
@@ -58,6 +75,8 @@ export interface ApiMiningState {
   canStart: boolean;
   cycleDurationSeconds: number;
   session: ApiMiningSession | null;
+  /** The window allowance behind the progress bar: accumulated, never scoped to one segment. */
+  quota: ApiMiningQuota;
   /** Pool the account mines in; null until it joins one (start is refused then). */
   poolId: string | null;
   /** True when the account must join a pool before Start is accepted. */

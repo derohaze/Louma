@@ -1,5 +1,5 @@
 import type { ApiTransaction } from "@/shared/api";
-import { dateText } from "./wallet-format";
+import { transactionDateText } from "./wallet-format";
 import { displayNote, loadLocalNote } from "./address-book";
 
 /**
@@ -47,7 +47,7 @@ export function transactionsToCsv(transactions: ApiTransaction[], userId: string
       "Note",
     ],
     transactions.map((tx) => [
-      dateText(tx.createdAt),
+      transactionDateText(tx.createdAt),
       tx.direction,
       tx.counterpartyAddress,
       tx.amount,

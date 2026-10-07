@@ -15,7 +15,7 @@ import { useWallet } from "@/shared/hooks";
 import { parseAmount } from "@/shared/lib/platform";
 import { displayNote, loadLocalNote } from "@/shared/lib/wallet";
 import { downloadCsv, transactionsToCsv } from "@/shared/lib/wallet";
-import { currency, dateText, moneyToMinorUnits, sumMoney } from "@/shared/lib/wallet";
+import { currency, moneyToMinorUnits, sumMoney, transactionDateText } from "@/shared/lib/wallet";
 
 /** The Transactions page: searchable, filterable history with CSV export. */
 export function TransactionsPage() {
@@ -251,7 +251,7 @@ export function TransactionsPage() {
                     {transaction.counterpartyAddress}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {dateText(transaction.createdAt)}
+                    {transactionDateText(transaction.createdAt)}
                     {rowNote ? ` · ${rowNote}` : ""}
                   </p>
                 </Link>

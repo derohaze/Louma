@@ -10,12 +10,16 @@ import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import type { Db } from "mongodb";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
+import { schemas } from "../infrastructure/mongodb/schemas.js";
+import { ensureCollection } from "../infrastructure/mongodb/validators.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
 import { disabledRedis } from "../infrastructure/redis/client.js";
 import { formatMoney, parseMoneyToMinorUnits } from "../modules/ledger/money.js";
 import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
 import { isTransferTransaction, PENDING_2FA_TTL_MS } from "../shared/types.js";
 import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
+import { generateWalletAddress, isValidWalletAddress } from "../modules/wallets/address.js";
+import { migrateWalletAddresses } from "../infrastructure/mongodb/wallet-address-migration.js";
 
 /**
  * Integration test against the configured MongoDB cluster.
@@ -345,12 +349,35 @@ after(async () => {
 
 test("registration creates a wallet with a unique address and a zero ledger balance", async () => {
   const account = await register("a");
-  assert.match(account.address, /^LMA(-[A-Z0-9]{4}){3}$/);
+  assert.ok(isValidWalletAddress(account.address));
   assert.equal(await balanceOf(account), "0.0000");
   assert.equal(await ledgerBalanceOf(account.ledgerAccountId), 0);
   const wallet = await collections.wallets.findOne({ publicId: account.walletId });
   assert.ok(wallet);
   assert.equal(wallet.status, "active");
+  assert.equal(wallet.isPrimary, true);
+  assert.equal(wallet.addressVersion, 1);
+  assert.equal(await collections.ledgerAccounts.countDocuments({ walletId: account.walletId, accountType: "wallet" }), 1);
+});
+
+test("registration rolls back the user when wallet provisioning fails", async () => {
+  const email = `wallet-provisioning-failure.${randomUUID()}@example.test`;
+  const walletsBefore = await collections.wallets.countDocuments({});
+  const walletAccountsBefore = await collections.ledgerAccounts.countDocuments({ accountType: "wallet" });
+  const walletCollection = collections.wallets as unknown as { insertOne: (...args: unknown[]) => Promise<unknown> };
+  const originalInsertOne = walletCollection.insertOne;
+  walletCollection.insertOne = async () => { throw new Error("injected wallet provisioning failure"); };
+  let response: Awaited<ReturnType<typeof call>>;
+  try {
+    response = await call("POST", "/api/v1/auth/register", { body: { email, password: PASSWORD, displayName: "Provision failure" } });
+  } finally {
+    walletCollection.insertOne = originalInsertOne;
+  }
+  assert.equal(response!.status, 500);
+  assert.equal(await collections.users.findOne({ email }), null, "the user insert rolled back with wallet provisioning");
+  assert.equal(await collections.wallets.countDocuments({}), walletsBefore, "the failed provisioning left no wallet");
+  assert.equal(await collections.ledgerAccounts.countDocuments({ accountType: "wallet" }), walletAccountsBefore, "the failed registration left no ledger account");
+  assert.equal(await collections.wallets.countDocuments({ ownerUserId: { $exists: false } }), 0);
 });
 
 test("the database enforces unique identities and addresses", async () => {
@@ -362,19 +389,146 @@ test("the database enforces unique identities and addresses", async () => {
     () => collections.users.insertOne({ publicId: randomUUID(), email: first.email, passwordHash: "x", profile: { displayName: "dup", country: null }, status: "active", emailVerifiedAt: null, createdAt: new Date(), updatedAt: new Date() } as never),
     (error: unknown) => error instanceof MongoServerError && error.code === 11000,
   );
+  const duplicateAddress = generateWalletAddress();
   await assert.rejects(
-    () => collections.wallets.insertOne({ publicId: first.walletId, address: "LMA-0000-0000-0000", addressNormalized: "LMA-0000-0000-0000", ownerUserId: randomUUID(), status: "active", financialVersion: 0, createdAt: new Date(), updatedAt: new Date(), customAddressChangedAt: null, customAddress: null, customAddressNormalized: null } as never),
+    () => collections.wallets.insertOne({ publicId: first.walletId, address: duplicateAddress, addressNormalized: duplicateAddress, addressVersion: 1, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: new Date(), updatedAt: new Date(), customAddressChangedAt: null, customAddress: null, customAddressNormalized: null } as never),
     (error: unknown) => error instanceof MongoServerError && error.code === 11000,
   );
+  await assert.rejects(
+    () => collections.wallets.insertOne({ publicId: randomUUID(), address: first.address, addressNormalized: first.address, addressVersion: 1, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: new Date(), updatedAt: new Date(), customAddressChangedAt: null, customAddress: null, customAddressNormalized: null } as never),
+    (error: unknown) => error instanceof MongoServerError && error.code === 11000 && (error as MongoServerError & { keyPattern?: Record<string, number> }).keyPattern?.["addressNormalized"] === 1,
+  );
+  const malformedAddress = "LMA-0000-0000-0000";
+  await assert.rejects(
+    () => collections.wallets.insertOne({ publicId: randomUUID(), address: malformedAddress, addressNormalized: malformedAddress, addressVersion: 1, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: new Date(), updatedAt: new Date(), customAddressChangedAt: null, customAddress: null, customAddressNormalized: null } as never),
+    (error: unknown) => error instanceof MongoServerError && error.code === 121,
+    "the wallet validator rejects addresses outside the active versioned format",
+  );
+});
+
+test("one owner can hold secondary wallets while primary and idempotency uniqueness stay wallet-scoped", async () => {
+  const owner = await register("wallet-many");
+  const receiver = await register("wallet-many-receiver");
+  const now = new Date();
+  const secondaryId = randomUUID();
+  const secondaryAddress = generateWalletAddress();
+  const secondaryAccountId = randomUUID();
+  const secondary = {
+    _id: new ObjectId(),
+    publicId: secondaryId,
+    address: secondaryAddress,
+    addressNormalized: secondaryAddress,
+    addressVersion: 1,
+    ownerUserId: owner.userId,
+    isPrimary: false,
+    status: "active",
+    financialVersion: 0,
+    createdAt: now,
+    updatedAt: now,
+    customAddressChangedAt: null,
+    customAddress: null,
+    customAddressNormalized: null,
+  };
+  await collections.wallets.insertOne(secondary as never);
+  await collections.ledgerAccounts.insertOne({ _id: new ObjectId(), publicId: secondaryAccountId, walletId: secondaryId, accountType: "wallet", currency: "LMA", balanceMinor: 0, createdAt: now } as never);
+  assert.equal((await collections.ledgerAccounts.findOne({ publicId: secondaryAccountId }))?.walletId, secondaryId);
+  assert.notEqual(secondaryId, owner.walletId);
+  assert.equal((await collections.wallets.findOne({ publicId: receiver.walletId }))?.isPrimary, true, "another owner has an independent primary wallet");
+
+  const duplicatePrimaryAddress = generateWalletAddress();
+  await assert.rejects(
+    () => collections.wallets.insertOne({ ...secondary, _id: new ObjectId(), publicId: randomUUID(), address: duplicatePrimaryAddress, addressNormalized: duplicatePrimaryAddress, isPrimary: true } as never),
+    (error: unknown) => error instanceof MongoServerError && error.code === 11000,
+  );
+  const publicWallet = await call("GET", "/api/v1/wallet", { token: owner.accessToken });
+  assert.equal((publicWallet.body["wallet"] as { id: string }).id, owner.walletId, "the current API continues to return only the primary wallet");
+
+  const key = randomUUID();
+  const makeHeader = (senderWalletId: string, senderAddress: string) => ({
+    _id: new ObjectId(),
+    publicId: randomUUID(),
+    transferId: randomUUID(),
+    senderUserId: owner.userId,
+    receiverUserId: receiver.userId,
+    senderWalletId,
+    receiverWalletId: receiver.walletId,
+    participants: [owner.userId, receiver.userId],
+    senderAddress,
+    receiverAddress: receiver.address,
+    amountMinor: 1,
+    feeMinor: 0,
+    netAmountMinor: 1,
+    currency: "LMA",
+    status: "completed",
+    type: "transfer",
+    note: "",
+    idempotencyKey: key,
+    requestFingerprint: randomUUID(),
+    correlationId: randomUUID(),
+    balanceAfterMinor: 0,
+    createdAt: now,
+    completedAt: now,
+  });
+  const primaryHeader = makeHeader(owner.walletId, owner.address);
+  const secondaryHeader = makeHeader(secondaryId, secondaryAddress);
+  try {
+    await collections.transactions.insertOne(primaryHeader as never);
+    await collections.transactions.insertOne(secondaryHeader as never);
+    assert.equal(await collections.transactions.countDocuments({ senderUserId: owner.userId, idempotencyKey: key }), 2, "different wallets can use the same account-level idempotency key");
+    await assert.rejects(
+      () => collections.transactions.insertOne(makeHeader(secondaryId, secondaryAddress) as never),
+      (error: unknown) => error instanceof MongoServerError && error.code === 11000,
+      "the same wallet cannot use the key twice",
+    );
+  } finally {
+    await collections.transactions.deleteMany({ publicId: { $in: [primaryHeader.publicId, secondaryHeader.publicId] } });
+    await collections.ledgerAccounts.deleteOne({ publicId: secondaryAccountId });
+    await collections.wallets.deleteOne({ publicId: secondaryId });
+  }
+});
+
+test("wallet address migration is bounded, replaces old values in place, and is idempotent", async () => {
+  const migrationDb = client.db(`louma_wallet_migration_${randomUUID().slice(0, 8)}`);
+  const migrationWallets = migrationDb.collection<import("../shared/types.js").WalletRecord>("wallets");
+  await ensureCollection(migrationDb, "wallets", schemas["wallets"]!);
+  await migrationWallets.createIndex({ addressNormalized: 1 }, { unique: true, name: "wallets_address_unique" });
+  const now = new Date();
+  const existingCanonical = generateWalletAddress();
+  const legacyAddress = "LMA-AAAA-BBBB-CCCC";
+  await migrationWallets.insertMany([
+    { _id: new ObjectId(), publicId: randomUUID(), address: existingCanonical, addressNormalized: existingCanonical, addressVersion: 1, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: now, updatedAt: now, customAddressChangedAt: null, customAddress: null, customAddressNormalized: null },
+    { _id: new ObjectId(), publicId: randomUUID(), address: legacyAddress, addressNormalized: legacyAddress, addressVersion: 0, ownerUserId: randomUUID(), isPrimary: true, status: "active", financialVersion: 0, createdAt: now, updatedAt: now, customAddressChangedAt: null, customAddress: null, customAddressNormalized: null },
+  ] as never);
+
+  try {
+    const planned = await migrateWalletAddresses({ wallets: migrationWallets, dryRun: true, generateAddress: () => existingCanonical });
+    assert.equal(planned.planned, 1);
+    assert.equal(await migrationWallets.countDocuments({ addressVersion: 0 }), 1, "dry run writes nothing");
+
+    const candidates = [existingCanonical, generateWalletAddress()];
+    const report = await migrateWalletAddresses({ wallets: migrationWallets, dryRun: false, generateAddress: () => candidates.shift()! });
+    assert.deepEqual(report, { planned: 1, migrated: 1, changedByConcurrentRun: 0 }, "a duplicate candidate is retried through MongoDB uniqueness");
+    const migrated = await migrationWallets.findOne({ addressVersion: 1, addressNormalized: { $ne: existingCanonical } });
+    assert.ok(migrated);
+    assert.ok(isValidWalletAddress(migrated.address));
+    assert.equal(migrated.address, migrated.addressNormalized);
+    assert.equal("legacyAddressNormalized" in migrated, false, "the old address is not retained as an alias");
+    const again = await migrateWalletAddresses({ wallets: migrationWallets, dryRun: false, generateAddress: generateWalletAddress });
+    assert.deepEqual(again, { planned: 0, migrated: 0, changedByConcurrentRun: 0 });
+    assert.equal(await migrationWallets.countDocuments({ addressVersion: 0 }), 0);
+    assert.equal(await migrationWallets.countDocuments({}), 2);
+  } finally {
+    await migrationDb.dropDatabase();
+  }
 });
 
 test("the declared indexes required by the query patterns exist", async () => {
   const expected: Record<string, string[]> = {
     users: ["users_public_id_unique", "users_email_unique"],
-    wallets: ["wallets_public_id_unique", "wallets_address_unique", "wallets_owner_unique"],
+    wallets: ["wallets_public_id_unique", "wallets_address_unique", "wallets_address_legacy_migration", "wallets_owner_primary_unique", "wallets_owner_list"],
     ledger_accounts: ["ledger_accounts_public_id_unique", "ledger_accounts_revenue_unique"],
     ledger_entries: ["ledger_entries_transaction_line_unique", "ledger_entries_account_history"],
-    transactions: ["transactions_public_id_unique", "transactions_transfer_id_unique", "transactions_idempotency_unique", "transactions_sender_history"],
+    transactions: ["transactions_public_id_unique", "transactions_transfer_id_unique", "transactions_sender_wallet_idempotency_unique", "transactions_sender_history"],
     sessions: ["sessions_public_id_unique", "sessions_owner_active", "sessions_expire_at"],
     security_events: ["security_events_public_id_unique", "security_events_owner_history"],
   };
@@ -557,7 +711,7 @@ test("the staged transfer form resolves the recipient, then quotes the tax and t
   assert.equal(resolvedPreview.recipient.displayName, "S•••t", "the owner is recognisable without publishing the name");
   assert.equal(resolvedPreview.quote, null, "nothing is quoted before an amount is offered");
 
-  const unknown = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: "LMA-AAAA-BBBB-CCCC" } });
+  const unknown = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: generateWalletAddress() } });
   assert.equal(unknown.status, 404, "an address nobody holds never reaches the amount");
   const self = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: sender.address } });
   assert.equal(self.status, 409, JSON.stringify(self.body));
@@ -569,7 +723,7 @@ test("the staged transfer form resolves the recipient, then quotes the tax and t
   assert.equal(named.status, 200, JSON.stringify(named.body));
   const byHandle = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: `@${handle}` } });
   assert.equal(byHandle.status, 200, JSON.stringify(byHandle.body));
-  assert.equal((byHandle.body["preview"] as { recipient: { address: string } }).recipient.address, `@${handle}`);
+  assert.equal((byHandle.body["preview"] as { recipient: { address: string } }).recipient.address, receiver.address);
 
   // Stage two asks for the amount, and the ledger that would charge it answers.
   const quoted = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: receiver.address, amount: TRANSFER } });
@@ -689,7 +843,7 @@ test("transfers are refused for insufficient funds, self-transfers, unknown addr
   assert.equal((withoutFunds.body["error"] as { code: string }).code, "insufficient_funds");
   await fund(sender, FUNDING_MINOR);
   assert.equal((await transfer(sender.address, "1.0000", sender.accessToken)).status, 409, "self transfer");
-  assert.equal((await transfer("LMA-1111-2222-3333", "1.0000", sender.accessToken)).status, 404, "unknown recipient");
+  assert.equal((await transfer(generateWalletAddress(), "1.0000", sender.accessToken)).status, 404, "unknown recipient");
   assert.equal((await transfer("not-an-address", "1.0000", sender.accessToken)).status, 400, "invalid recipient");
   const unauthenticated = await call("POST", "/api/v1/transfers", { body: { authorizationId: randomUUID(), recipientAddress: "LMA-1111-2222-3333", amount: "1.0000" }, idempotencyKey: randomUUID() });
   assert.equal(unauthenticated.status, 401, "a transfer requires a session");
@@ -708,6 +862,7 @@ test("freezing the wallet blocks transfers until it is unfrozen", async () => {
   const blocked = await transfer(receiver.address, "1.0000", sender.accessToken);
   assert.equal(blocked.status, 403, "a frozen wallet cannot send");
   assert.equal(await balanceOf(sender), "25.0000", "nothing was taken");
+  assert.equal((await call("POST", "/api/v1/auth/login", { body: { email: sender.email, password: PASSWORD } })).status, 200, "a frozen wallet does not block account login");
 
   const overview = await call("GET", "/api/v1/security", { token: sender.accessToken });
   assert.equal((overview.body["wallet"] as { status: string }).status, "frozen");
@@ -1076,10 +1231,11 @@ test("a committed account change survives a failing audit write, so it is never 
 
   assert.equal(injected, 4, "the injected audit failure fired on every one of those writes");
   // The effects stand, which is exactly why the response had to be a success.
-  assert.equal(await collections.wallets.findOne({ ownerUserId: account.userId }).then((wallet) => wallet?.status), "frozen");
+  assert.equal(await collections.wallets.findOne({ ownerUserId: account.userId, isPrimary: true }).then((wallet) => wallet?.status), "frozen");
   assert.equal(await collections.twoFactorCredentials.findOne({ ownerUserId: account.userId }), null);
   // Unfreezing is itself gated on the account password, so it is how this test proves the password
-  // change really landed (a frozen wallet refuses sign-in, which is why login is asserted after it).
+  // change really landed. A frozen wallet no longer blocks account authentication.
+  assert.equal((await call("POST", "/api/v1/auth/login", { body: { email: account.email, password: NEW_PASSWORD } })).status, 200, "account login remains available while the wallet is frozen");
   const unfrozen = await call("POST", "/api/v1/security/unfreeze", { token: account.accessToken, body: { password: NEW_PASSWORD } });
   assert.equal(unfrozen.status, 200, JSON.stringify(unfrozen.body));
   assert.equal((await call("POST", "/api/v1/auth/login", { body: { email: account.email, password: NEW_PASSWORD } })).status, 200, "the new password is the account password");
@@ -1097,11 +1253,11 @@ test("a registration whose post-commit re-read fails still returns the account i
   assert.equal((await call("POST", "/api/v1/auth/register", { body: { email: account.email, password: PASSWORD, displayName: "Smoke again" } })).status, 409, "registering again is the account_exists conflict, not a success");
 });
 
-test("a custom address replaces the receiving address, stays unique, and is locked for 30 days", async () => {
+test("a custom alias stays separate from the canonical receiving address and is locked for 30 days", async () => {
   const owner = await register("address");
   const other = await register("address-other");
   const generatedAddress = owner.address;
-  assert.match(generatedAddress, /^LMA(-[A-Z0-9]{4}){3}$/);
+  assert.ok(isValidWalletAddress(generatedAddress));
 
   // Handles are unique platform-wide against every account that has ever claimed one, including real
   // accounts on this shared cluster. A hardcoded handle would collide the moment a person takes it,
@@ -1118,7 +1274,7 @@ test("a custom address replaces the receiving address, stays unique, and is lock
   const changed = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: `@${handle}` } });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
   const wallet = changed.body["wallet"] as Record<string, unknown>;
-  assert.equal(wallet["address"], handle, "the handle is normalised: lowercase, without the @ prefix");
+  assert.equal(wallet["address"], generatedAddress, "the canonical address never changes");
   assert.equal(wallet["customAddress"], `@${handle}`);
   assert.ok(typeof wallet["customAddressChangedAt"] === "string", "the cooldown clock starts when it changes");
 
@@ -1131,6 +1287,11 @@ test("a custom address replaces the receiving address, stays unique, and is lock
   await fund(other, FUNDING_MINOR);
   assert.equal((await transfer(`@${handle}`, "1.0000", other.accessToken)).status, 201);
   assert.equal((await transfer(generatedAddress, "1.0000", other.accessToken)).status, 201);
+  assert.equal(
+    await collections.transactions.countDocuments({ senderWalletId: other.walletId, receiverWalletId: owner.walletId, receiverAddress: generatedAddress }),
+    2,
+    "transaction snapshots keep the immutable address even when the transfer used a handle",
+  );
   assert.equal(await balanceOf(owner), "1.9800", "each transfer credits 1.0000 less the 1% fee");
 
   // The handle is locked for 30 days, and a refused change leaves the wallet untouched.
@@ -1138,7 +1299,8 @@ test("a custom address replaces the receiving address, stays unique, and is lock
   assert.equal(cooldown.status, 409, JSON.stringify(cooldown.body));
   assert.equal((cooldown.body["error"] as Record<string, unknown>)["code"], "address_change_cooldown");
   const unchanged = (await call("GET", "/api/v1/wallet", { token: owner.accessToken })).body["wallet"] as Record<string, unknown>;
-  assert.equal(unchanged["address"], `@${handle}`);
+  assert.equal(unchanged["address"], generatedAddress, "the canonical receiving address stays immutable");
+  assert.equal(unchanged["customAddress"], `@${handle}`, "the refused change leaves the alias unchanged");
   assert.equal(unchanged["customAddressChangedAt"], wallet["customAddressChangedAt"]);
 
   await assertLedgerConsistency();

@@ -20,16 +20,19 @@ import {
 } from "./signals.js";
 import {
   buildFeatureMap,
+  CORE_MACHINE_FEATURE_SET,
   decideClusterMatch,
   deviceKeyHash,
   digestFeatureMap,
   hmacHex,
+  isMachineIdentityMatch,
   isNearCloneMatch,
   isPresentationFeature,
   isRenderingFeature,
   learnFeatureProfile,
   machineFeatureMap,
   machineKeyHash,
+  MAX_ENGINE_VARIANT_CORE_MOVES,
   MIN_MACHINE_FEATURES,
   matchDeviceFeatures,
   normalizedDeviceSignature,
@@ -576,6 +579,108 @@ test("a second engine on one computer is a positive match without a memory class
   assert.equal(decideClusterMatch(match, 78, 55), "same");
 });
 
+test("one computer whose engines disagree about the negotiated slots still spends one allowance", () => {
+  // The shape that lands below the "same" line while the machine itself is never in question: the two
+  // engines agree on every identity slot the machine owns except the one each negotiates for itself —
+  // the configuration of the audio context it opens — and disagree about the corroborators as well,
+  // the capture devices one engine enumerates and the memory class only one can report, on top of a
+  // rendering stack that two engines measure differently by construction. The diluted overall score
+  // cannot carry a verdict for that pair, and the near-clone band does not cover it either, because
+  // only one identity slot moved.
+  //
+  // The outcome matters more than the score: `different` does not mean "no opinion". It enrolls the
+  // observation as a new machine with its own immutable anchor, and the anchor is what the shared
+  // 10-hour device allowance is keyed on — so `different` hands one computer a second allowance inside
+  // the same 24-hour window. That is the failure this band exists to prevent, and running two accounts
+  // in two browsers on one machine is the way to reach it.
+  const machine = {
+    screenColorDepth: 24,
+    hdr: false,
+    hardwareConcurrency: 16,
+    pixelRatio: 1.25,
+  };
+  const chrome = profileOf(
+    evidence({ ...machine, audioSampleRate: 48000, audioChannels: 2, deviceMemory: 16, mediaAudioInputs: 1, mediaVideoInputs: 1 }),
+  );
+  const firefox = observedOf(
+    evidence({
+      ...machine,
+      audioSampleRate: 44100,
+      audioChannels: 1,
+      // Firefox cannot report a memory class at all, and enumerates its own capture-device set: fewer
+      // or differently grouped entries for the same hardware, which is engine policy, not hardware.
+      deviceMemory: undefined,
+      mediaAudioInputs: 2,
+      mediaVideoInputs: 1,
+      userAgent: FIREFOX_UA,
+      // Profile-scoped values, which are per browser by construction: each engine keeps its own
+      // locale, language and plugin/PDF-viewer inventory for the very same machine, so a second
+      // browser on one computer reports a different set of them without anything about the machine
+      // having changed.
+      locale: "ar-EG",
+      language: "ar-EG",
+      languages: "ar-EG,ar",
+      pdfViewer: null,
+      plugins: "plugins-firefox",
+      keyboardLayout: "arabic",
+      webglVendor: "Mozilla",
+      webglRenderer: "Mozilla",
+      webglLimitsHash: "limits-firefox",
+      webglExtensionsHash: "extensions-firefox",
+      webglHash: "webgl-firefox",
+      canvasHash: "canvas-firefox",
+      audioHash: "audio-firefox",
+      fontsHash: "fonts-firefox",
+      codecsHash: "codecs-firefox",
+      mimeTypesHash: "mime-types-firefox",
+      speechVoicesHash: "voices-firefox",
+    }),
+  );
+  const match = matchDeviceFeatures(
+    { featureProfile: chrome.profile, featureSnapshot: null, browserKeyPublicKey: "key-chrome", fingerprintVisitorIdHash: "visitor-chrome" },
+    firefox.features,
+    SECRET,
+  );
+  assert.deepEqual(match.classDrifted, [], "no class trait was contradicted");
+  assert.equal(
+    match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length,
+    MAX_ENGINE_VARIANT_CORE_MOVES,
+    "only the one negotiated identity slot moved",
+  );
+  assert.ok(match.matchedMachine.length >= 3, `the machine traits agree, got ${match.matchedMachine.join(",")}`);
+  assert.equal(match.matchedGraphics, false, "the rendering stack disagreed, so it cannot be what matches");
+  // The measured reason the near-clone band alone was not enough here: the drift lands the machine
+  // score under the "same" line, so nothing above it can rescue the verdict.
+  assert.ok(match.machineScore < 78, `the machine score is below the \"same\" line, got ${match.machineScore}`);
+  assert.equal(isNearCloneMatch(match), false, "two moved identity slots are what the near clone needs");
+  // Both verdict paths above the band are therefore closed, and so is the one below it: the overall
+  // agreement is diluted by the rendering stack, so before the machine band existed this comparison
+  // fell all the way through to `different`. That is the assertion that makes this test a
+  // reproduction rather than a preference.
+  assert.ok(match.score < 55, `the overall agreement is below the ambiguous line, got ${match.score}`);
+  // So the verdict has to come from the machine evidence, and it stays in the middle: the record is
+  // not merged, a live lease on the known machine still refuses the start, and the allowance the
+  // second browser spends is the one computer's.
+  assert.equal(decideClusterMatch(match, 78, 55), "ambiguous");
+  assert.equal(isMachineIdentityMatch(match, 55), true);
+});
+
+test("the shared-allowance band stops at a machine class contradiction", () => {
+  // A CPU class the known machine never reported is a different machine, or an observation that is
+  // not describing its own hardware truthfully. Either way it may not spend the known machine's
+  // allowance, however much else the two sides agree about.
+  const base = evidence({ audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 });
+  const known = profileOf(base);
+  const otherClass = observedOf({ ...base, hardwareConcurrency: 32 });
+  const match = matchDeviceFeatures(
+    { featureProfile: known.profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+    otherClass.features,
+    SECRET,
+  );
+  assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
+  assert.equal(isMachineIdentityMatch(match, 55), false);
+});
+
 test("too little hardware evidence yields no machine key rather than a fake identity", () => {
   const thin = observedOf(
     evidence({
@@ -590,13 +695,13 @@ test("too little hardware evidence yields no machine key rather than a fake iden
   assert.equal(machineKeyHash(SECRET, thin.features.raw), null, "a thin report must not become an identity");
 });
 
-test("editing CPU class and another core slot cannot escape the shared quota band", () => {
+test("a CPU class contradiction keeps a near match outside the shared quota band", () => {
   const base = evidence({ audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 });
   const known = profileOf(base);
   const edited = observedOf({ ...base, hardwareConcurrency: 32, colorGamut: "p3" });
   const match = matchDeviceFeatures({ featureProfile: known.profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null }, edited.features, SECRET);
   assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
-  assert.equal(isNearCloneMatch(match), true);
+  assert.equal(isNearCloneMatch(match), false);
   assert.notEqual(decideClusterMatch(match, 78, 55), "same", "quota sharing does not merge device records");
 });
 

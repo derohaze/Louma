@@ -66,8 +66,9 @@ export default {
     earned: "Earned this cycle",
     alreadyCollected: "{amount} already collected",
     progressAria: "Mining cycle progress",
-    elapsed: "{time} elapsed",
-    window: "10:00:00 max per window",
+    minedThisWindow: "{time} mined this window",
+    windowRemaining: "{time} remaining · {max} max",
+    currentSession: "Current session: {time}",
     facts: {
       rate: "Mining rate",
       pool: "Pool",

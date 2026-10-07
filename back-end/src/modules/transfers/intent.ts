@@ -14,8 +14,8 @@ import {
 } from "../../shared/types.js";
 
 export const MAX_RECIPIENT_LENGTH = 128;
-/** A Louma wallet address (three groups of four) or a public `@handle`. The client checks the same shape. */
-export const RECIPIENT_PATTERN = /^(?:LMA(?:-[A-Z0-9]{4}){3}|@[a-z0-9_]{4,24})$/i;
+/** A canonical Louma wallet address or a public `@handle`. The client checks the same shape. */
+export const RECIPIENT_PATTERN = /^(?:LMA[0-7][0-9A-HJKMNP-TV-Z]{27}|@[a-z0-9_]{4,24})$/i;
 /** A server-issued approval id: the uuid the preview endpoint mints. */
 const AUTHORIZATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
@@ -39,10 +39,11 @@ const AUTHORIZATION_FAILURE_LIMIT = 10;
  * fees are recomputed from the amount and checked against the stored pair before anything commits —
  * and nothing cosmetic: the addresses the ledger uses are the wallet ids, not the spelling typed.
  */
-export function intentHashOf(intent: TransferIntent): string {
+export function intentHashOf(intent: TransferIntent, senderWalletId: string): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
+        senderWalletId,
         recipientWalletId: intent.recipientWalletId,
         recipientUserId: intent.recipientUserId,
         recipientAddress: intent.recipientAddress.toLowerCase(),
@@ -120,10 +121,11 @@ export async function assertTransferAuthorizationAttemptsRemain(input: { collect
 export async function findCommittedTransfer(input: {
   collections: Collections;
   ownerUserId: string;
+  senderWalletId: string;
   idempotencyKey: string;
   requestFingerprint: string;
 }): Promise<{ record: TransferTransactionRecord; public: PublicTransaction & { balanceAfter: string } } | null> {
-  const duplicate = await input.collections.transactions.findOne({ type: "transfer", senderUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey });
+  const duplicate = await input.collections.transactions.findOne({ type: "transfer", senderWalletId: input.senderWalletId, idempotencyKey: input.idempotencyKey });
   if (!duplicate) return null;
   if (!isTransferTransaction(duplicate)) return null;
   if (duplicate.requestFingerprint !== input.requestFingerprint) throw conflict("idempotency_key_reused", "This idempotency key was already used for a different transfer.");
@@ -166,7 +168,7 @@ export function parseRecipientAddress(value: unknown): string {
   if (!RECIPIENT_PATTERN.test(address)) {
     throw badRequest("invalid_recipient", "Enter a valid Louma wallet address or @handle.");
   }
-  return address;
+  return address.slice(0, 3).toUpperCase() === "LMA" ? address.toUpperCase() : `@${address.replace(/^@/, "").toLowerCase()}`;
 }
 
 /**

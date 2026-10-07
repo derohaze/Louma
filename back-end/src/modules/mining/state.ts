@@ -95,12 +95,23 @@ function loadLatestSession(collections: Collections, ownerUserId: string): Promi
   return collections.miningSessions.findOne({ ownerUserId }, { sort: { createdAt: -1, publicId: -1 } });
 }
 
-export async function loadWalletAndAccount(collections: Collections, ownerUserId: string): Promise<{ wallet: WalletRecord; walletAccount: LedgerAccountRecord }> {
-  const wallet = await collections.wallets.findOne({ ownerUserId });
+export async function loadWalletAndAccount(
+  collections: Collections,
+  ownerUserId: string,
+  walletId?: string,
+  walletAccountId?: string,
+): Promise<{ wallet: WalletRecord; walletAccount: LedgerAccountRecord }> {
+  const wallet = await collections.wallets.findOne(walletId ? { ownerUserId, publicId: walletId } : { ownerUserId, isPrimary: true });
   if (!wallet) throw notFound();
-  const walletAccount = await collections.ledgerAccounts.findOne({ walletId: wallet.publicId, accountType: "wallet", currency: "LMA" });
+  const walletAccount = await collections.ledgerAccounts.findOne({
+    walletId: wallet.publicId,
+    ...(walletAccountId ? { publicId: walletAccountId } : {}),
+    accountType: "wallet",
+    currency: "LMA",
+  });
   // A wallet without its ledger account is a data-integrity fault, not a zero balance.
   if (!walletAccount) throw new Error(`Wallet ${wallet.publicId} has no LMA ledger account`);
+  if (walletAccountId && walletAccount.publicId !== walletAccountId) throw new Error(`Mining session ledger account does not match wallet ${wallet.publicId}`);
   return { wallet, walletAccount };
 }
 
