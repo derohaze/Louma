@@ -15,6 +15,7 @@ import { createTransfer, previewTransfer } from "../modules/transfers/service.js
 import { encryptSecret } from "../modules/security/crypto.js";
 import { isTransferTransaction } from "../shared/types.js";
 import { resetFinancialControlsCache, setFinancialControls } from "../modules/financial-controls/service.js";
+import { generateWalletAddress } from "../modules/wallets/address.js";
 
 /**
  * The adversarial suite for the transfer authorization state machine.
@@ -93,7 +94,7 @@ async function createAccountRecord(label: string): Promise<Account> {
   const userId = randomUUID();
   const walletId = randomUUID();
   const ledgerAccountId = randomUUID();
-  const address = `LMA-${randomUUID().slice(0, 4)}-${randomUUID().slice(0, 4)}-${randomUUID().slice(0, 4)}`.toUpperCase();
+  const address = generateWalletAddress();
   await collections.users.insertOne({
     _id: new ObjectId(),
     publicId: userId,
@@ -110,7 +111,9 @@ async function createAccountRecord(label: string): Promise<Account> {
     publicId: walletId,
     address,
     addressNormalized: address,
+    addressVersion: 1,
     ownerUserId: userId,
+    isPrimary: true,
     status: "active",
     financialVersion: 0,
     createdAt: now,

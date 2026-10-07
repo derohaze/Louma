@@ -686,8 +686,8 @@ export type ClusterVerdict = "same" | "ambiguous" | "different";
  * on at least `MIN_CORE_IDENTITY_AGREEMENTS` core identity slots while at least
  * `MIN_CORE_IDENTITY_MOVES` of them moved.
  *
- * Submitted class traits can be edited too. A class contradiction must not open a fresh allowance
- * when a majority of the core identity slots still agrees; it still prevents merging the records.
+ * A class contradiction excludes the band: an honest computer does not change its CPU or memory
+ * class, and two records that disagree there must not share an economic allowance.
  *
  * Exported because it is not only a verdict. A caller that binds an *economic* limit to the machine
  * (the shared 10h device quota) has to recognise the same band: a near clone is enrolled as its own
@@ -700,6 +700,7 @@ export function isNearCloneMatch(match: ClusterMatch): boolean {
   const matchedCoreSlots = match.matchedMachine.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
   const movedCoreSlots = match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
   return (
+    match.classDrifted.length === 0 &&
     match.classCompared.length >= MIN_MACHINE_CLASS_FEATURES &&
     matchedCoreSlots >= MIN_CORE_IDENTITY_AGREEMENTS &&
     movedCoreSlots >= MIN_CORE_IDENTITY_MOVES

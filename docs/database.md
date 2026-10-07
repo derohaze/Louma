@@ -20,12 +20,28 @@ nothing and risk a production migration. Deliberately NOT merged
 
 Every index names the query it serves (see definitions.ts comments). Compound
 indexes follow Equality -> Sort -> Range. Uniqueness is a correctness tool:
-transactions_transfer_id_unique, transactions_idempotency_unique (transfer
+transactions_transfer_id_unique, transactions_sender_wallet_idempotency_unique (transfer
 scope), transactions_mining_session_sequence_unique + transactions_mining_idempotency_unique
 (mining scope), mining_sessions_one_active_per_user, transfer_authorizations_consumed_by_unique,
-two_factor_uses_step_unique, wallets_owner_unique, ledger_accounts_wallet_unique,
+two_factor_uses_step_unique, wallets_owner_primary_unique, wallets_address_unique, ledger_accounts_wallet_unique,
 treasury/revenue uniqueness. Never remove a unique index for looking redundant;
 never add an index without a measured query.
+
+`wallets.ownerUserId` is one-to-many. The partial unique
+`wallets_owner_primary_unique` enforces at most one primary wallet per owner;
+`wallets_owner_list` serves the owner wallet-list ordering query when that backend
+capability is added. Current customer endpoints still resolve only the primary
+wallet. `wallets_address_unique` remains global so address routing cannot collide.
+`wallets_address_legacy_migration` serves the bounded version-0 migration batches
+and the startup readiness check; its partial index is empty after cutover.
+Future sharding of `wallets` must preserve globally enforceable uniqueness for
+`addressNormalized`; sharding by `ownerUserId` alone would not satisfy that invariant.
+
+Wallet addresses are versioned. Version 0 is accepted only so the one-time address
+migration can update existing documents; a serving process refuses to start until
+all wallet rows are version 1. Version 1 is `LMA` + 26 uppercase Crockford Base32
+symbols from 128 CSPRNG bits + a 2-symbol SHA-256 checksum. `address` is canonical
+and immutable after provisioning; custom handles remain separate aliases.
 
 ## Validators
 

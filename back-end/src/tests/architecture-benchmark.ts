@@ -19,6 +19,7 @@ import { getCollections } from "../infrastructure/mongodb/collections.js";
 import { loadMiningSettings } from "../modules/mining/settings.js";
 import { RedisHandle } from "../infrastructure/redis/client.js";
 import { readThrough, miningSettingsKey } from "../infrastructure/redis/cache.js";
+import { generateWalletAddress } from "../modules/wallets/address.js";
 
 const ITERATIONS = 25;
 
@@ -75,12 +76,15 @@ async function main(): Promise<void> {
     const collections = getCollections(db);
     const anyUser = await collections.users.findOne({}, { projection: { publicId: 1 } });
     const ownerUserId = anyUser?.publicId ?? "benchmark-no-user";
+    const primaryWallet = await collections.wallets.findOne({ ownerUserId, isPrimary: true }, { projection: { publicId: 1, addressNormalized: 1 } });
+    const senderWalletId = primaryWallet?.publicId ?? "benchmark-no-wallet";
+    const walletAddress = primaryWallet?.addressNormalized ?? generateWalletAddress();
 
     console.log("--- query latency (25 iterations) ---");
     await time("user lookup by publicId", () => collections.users.findOne({ publicId: ownerUserId }));
-    await time("wallet lookup by owner", () => collections.wallets.findOne({ ownerUserId }));
+    await time("primary wallet lookup by owner", () => collections.wallets.findOne({ ownerUserId, isPrimary: true }));
     await time("wallet+ledger balance (2 reads)", async () => {
-      const wallet = await collections.wallets.findOne({ ownerUserId });
+      const wallet = await collections.wallets.findOne({ ownerUserId, isPrimary: true });
       if (wallet) await collections.ledgerAccounts.findOne({ walletId: wallet.publicId, accountType: "wallet" });
     });
     await time("transfer history page (participants)", () =>
@@ -97,7 +101,7 @@ async function main(): Promise<void> {
       await collections.notifications.countDocuments({ ownerUserId, readAt: null });
     });
     await time("idempotency lookup", () =>
-      collections.transactions.findOne({ type: "transfer", senderUserId: ownerUserId, idempotencyKey: "benchmark-no-such-key" }));
+      collections.transactions.findOne({ type: "transfer", senderWalletId, idempotencyKey: "benchmark-no-such-key" }));
 
     console.log("--- explain plans (IXSCAN expected, bounded examines) ---");
     const explainFind = (
@@ -107,7 +111,9 @@ async function main(): Promise<void> {
     ): (() => Promise<unknown>) =>
       () => collection.find(filter as never).sort(sort as never).limit(5).explain();
     await explain(explainFind(collections.transactions, { type: "transfer", participants: ownerUserId }, { createdAt: -1, publicId: -1 }), "transactions", { type: "transfer", participants: ownerUserId });
-    await explain(explainFind(collections.transactions, { type: "transfer", senderUserId: ownerUserId, idempotencyKey: "x" }, { _id: 1 }), "transactions", { type: "transfer", senderUserId: ownerUserId, idempotencyKey: "x" });
+    await explain(explainFind(collections.wallets, { ownerUserId, isPrimary: true }, { _id: 1 }), "wallets", { ownerUserId, isPrimary: true });
+    await explain(explainFind(collections.wallets, { addressNormalized: walletAddress }, { _id: 1 }), "wallets", { addressNormalized: walletAddress });
+    await explain(explainFind(collections.transactions, { type: "transfer", senderWalletId, idempotencyKey: "x" }, { _id: 1 }), "transactions", { type: "transfer", senderWalletId, idempotencyKey: "x" });
     await explain(explainFind(collections.transactions, { type: "mining", miningSessionId: "x", sequenceNumber: 1 }, { _id: 1 }), "transactions", { type: "mining", miningSessionId: "x", sequenceNumber: 1 });
     await explain(explainFind(collections.ledgerEntries, { ledgerAccountId: "x" }, { _id: 1 }), "ledger_entries", { ledgerAccountId: "x" });
     await explain(explainFind(collections.miningSessions, { ownerUserId, status: "active" }, { _id: 1 }), "mining_sessions", { ownerUserId, status: "active" });

@@ -24,10 +24,11 @@ server.ts → app.ts → modules/http → modules/<feature> → shared/ + infras
 
 1. `shared/` never imports from `modules/`, `app.ts`, or `server.ts`.
 2. HTTP layer holds no business logic — it parses, calls one service, returns.
-3. One feature never imports another feature's internals, except the single
-   documented orchestration edge: `transfers → mining.settleMiningForOwner`
-   (balance must reflect accrued mining before spending). No other cross-feature
-   imports; `mining → mining-device` is guard calls through its public service.
+3. Feature imports stay on documented public service edges: `auth → wallets`
+   provisions the primary wallet inside registration's existing transaction and
+   resolves it for the account response; `transfers → mining.settleMiningForOwner`
+   settles accrued rewards before spending; `mining → mining-device` calls its
+   public guard service. No feature imports another feature's private modules.
 4. No per-request dynamic `import()` — all module imports are static at top level.
 5. No dead code: `src/tests/tmp-orphan-audit.ts` (one-off forensic script, header
    said "Deleted after use") was deleted.

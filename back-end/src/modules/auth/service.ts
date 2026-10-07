@@ -19,9 +19,9 @@ import {
   type SessionRecord,
   type SignupLocation,
   type UserRecord,
-  type WalletRecord,
 } from "../../shared/types.js";
 import { badRequest, conflict, forbidden, notFound, unauthorized } from "../../shared/errors.js";
+import { findPrimaryWallet, provisionPrimaryWallet, withWalletAddressCollisionRetry } from "../wallets/service.js";
 
 const EMAIL_MAX_LENGTH = 254;
 const DISPLAY_NAME_MAX_LENGTH = 32;
@@ -135,48 +135,31 @@ export async function register(input: {
     createdAt: now,
     updatedAt: now,
   } satisfies Omit<UserRecord, "_id">;
-  const walletPublicId = randomUUID();
-  const walletAddress = `LMA-${randomBytes(6).toString("hex").toUpperCase().match(/.{1,4}/g)?.join("-")}`;
-  const wallet = {
-    publicId: walletPublicId,
-    address: walletAddress,
-    addressNormalized: walletAddress,
-    ownerUserId: user.publicId,
-    status: "active",
-    financialVersion: 0,
-    createdAt: now,
-    updatedAt: now,
-    customAddressChangedAt: null,
-    customAddress: null,
-    customAddressNormalized: null,
-  } satisfies Omit<WalletRecord, "_id">;
-  const mongoSession = input.mongoClient.startSession();
-  let userId: string | undefined;
-
-  try {
-    await mongoSession.withTransaction(async () => {
-      try {
-        await input.collections.users.insertOne(user as UserRecord, { session: mongoSession });
-      } catch (error) {
-        if (typeof error === "object" && error !== null && "code" in error && error.code === 11000) throw conflict("account_exists", "An account with this email already exists.");
-        throw error;
-      }
-      userId = user.publicId;
-      await input.collections.wallets.insertOne(wallet as WalletRecord, { session: mongoSession });
-      await input.collections.ledgerAccounts.insertOne({ publicId: randomUUID(), walletId: walletPublicId, accountType: "wallet", currency: "LMA", balanceMinor: 0, createdAt: now } as never, { session: mongoSession });
-      await input.collections.ledgerAccounts.updateOne(
-        { accountType: "fee_revenue", currency: "LMA" },
-        { $setOnInsert: { publicId: randomUUID(), walletId: null, accountType: "fee_revenue", currency: "LMA", balanceMinor: 0, createdAt: now } },
-        { upsert: true, session: mongoSession },
-      );
-      await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "registration", outcome: "success", correlationId: input.requestId, mongoSession });
-    });
-  } catch (error) {
-    if (!userId && typeof error === "object" && error !== null && "code" in error && error.code === 11000) throw conflict("account_exists", "An account with this email already exists.");
-    throw error;
-  } finally {
-    await mongoSession.endSession();
-  }
+  const wallet = await withWalletAddressCollisionRetry(async () => {
+    const mongoSession = input.mongoClient.startSession();
+    try {
+      const provisionedWallet = await mongoSession.withTransaction(async () => {
+        try {
+          await input.collections.users.insertOne(user as UserRecord, { session: mongoSession });
+        } catch (error) {
+          if (typeof error === "object" && error !== null && "code" in error && error.code === 11000) throw conflict("account_exists", "An account with this email already exists.");
+          throw error;
+        }
+        const wallet = await provisionPrimaryWallet({ collections: input.collections, ownerUserId: user.publicId, session: mongoSession, now });
+        await input.collections.ledgerAccounts.updateOne(
+          { accountType: "fee_revenue", currency: "LMA" },
+          { $setOnInsert: { publicId: randomUUID(), walletId: null, accountType: "fee_revenue", currency: "LMA", balanceMinor: 0, createdAt: now } },
+          { upsert: true, session: mongoSession },
+        );
+        await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "registration", outcome: "success", correlationId: input.requestId, mongoSession });
+        return wallet;
+      }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } });
+      if (!provisionedWallet) throw new Error("Registration committed without a primary wallet");
+      return provisionedWallet;
+    } finally {
+      await mongoSession.endSession();
+    }
+  });
   /**
    * The transaction above committed the account, so everything after it only *formats* the answer.
    * The stored row is preferred because it is the row as written, but a read that fails must not
@@ -190,7 +173,7 @@ export async function register(input: {
     registered = null;
   }
   const tokens = await issueSession({ ...input, user: registered ?? (user as UserRecord) });
-  return { ...tokens, wallet: { id: walletPublicId, address: walletAddress } };
+  return { ...tokens, wallet: { id: wallet.publicId, address: wallet.address } };
 }
 
 /**
@@ -245,11 +228,6 @@ export async function login(input: {
   if (!user || !matches || user.status !== "active") {
     await recordSecurityEvent({ collections: input.collections, ownerUserId: user?.publicId ?? null, eventType: "login_failed", outcome: "failure", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("login_failed", error));
     throw unauthorized();
-  }
-  const wallet = await input.collections.wallets.findOne({ ownerUserId: user.publicId });
-  if (wallet?.status === "frozen") {
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "login_blocked_wallet_frozen", outcome: "failure", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure("login_blocked_wallet_frozen", error));
-    throw forbidden("wallet_frozen", "This wallet is frozen. Unfreeze it from an active session before signing in.");
   }
   const twoFactor = await input.collections.twoFactorCredentials.findOne({ ownerUserId: user.publicId, enabledAt: { $ne: null } });
   return issueSession({ ...input, user, ...(twoFactor ? { status: "pending_two_factor" as const } : {}) });
@@ -377,9 +355,10 @@ export async function listSessions(input: { collections: Collections; ownerUserI
 export async function getCurrentUser(input: { collections: Collections; ownerUserId: string }) {
   const user = await input.collections.users.findOne({ publicId: input.ownerUserId, status: "active" });
   if (!user) throw unauthorized();
-  const wallet = await input.collections.wallets.findOne({ ownerUserId: user.publicId });
+  const wallet = await findPrimaryWallet(input.collections, user.publicId);
   const ledgerAccount = wallet ? await input.collections.ledgerAccounts.findOne({ walletId: wallet.publicId, accountType: "wallet" }, { projection: { balanceMinor: 1 } }) : null;
-  return { user: toPublicUser(user), wallet: wallet ? { id: wallet.publicId, address: wallet.customAddress ?? wallet.address, status: wallet.status, balance: formatMoney(ledgerAccount?.balanceMinor ?? 0), currency: "LMA", createdAt: wallet.createdAt.toISOString(), customAddressChangedAt: wallet.customAddressChangedAt?.toISOString() ?? null, customAddress: wallet.customAddress } : null };
+  if (wallet && !ledgerAccount) throw new Error(`Wallet ${wallet.publicId} has no LMA ledger account`);
+  return { user: toPublicUser(user), wallet: wallet ? { id: wallet.publicId, address: wallet.address, status: wallet.status, balance: formatMoney(ledgerAccount?.balanceMinor ?? 0), currency: "LMA", createdAt: wallet.createdAt.toISOString(), customAddressChangedAt: wallet.customAddressChangedAt?.toISOString() ?? null, customAddress: wallet.customAddress } : null };
 }
 
 export async function updateProfile(input: { collections: Collections; ownerUserId: string; displayName?: unknown; country?: unknown; requestId: string; redis?: RedisHandle }) {

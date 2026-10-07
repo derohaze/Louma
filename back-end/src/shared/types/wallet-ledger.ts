@@ -16,7 +16,9 @@ export interface WalletRecord {
   publicId: string;
   address: string;
   addressNormalized: string;
+  addressVersion: 0 | 1;
   ownerUserId: string;
+  isPrimary: boolean;
   status: WalletStatus;
   /**
    * Write-conflict guard for wallet-affecting financial operations, not a balance: a transfer

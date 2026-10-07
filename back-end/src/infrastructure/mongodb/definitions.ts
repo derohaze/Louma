@@ -31,12 +31,30 @@ export async function createIndexMigratingOptions(db: Db, collection: string, ke
  * definition should go with it.
  */
 export async function ensureCoreIndexes(db: Db): Promise<void> {
+  const wallets = db.collection("wallets");
+  await wallets.createIndex({ publicId: 1 }, { unique: true, name: "wallets_public_id_unique" });
+  await wallets.createIndex({ addressNormalized: 1 }, { unique: true, name: "wallets_address_unique" });
+  // Serves the bounded address-migration batches and the startup readiness count; it contains only
+  // legacy-version rows and is empty after migration completes.
+  await wallets.createIndex({ addressVersion: 1, _id: 1 }, { partialFilterExpression: { addressVersion: 0 }, name: "wallets_address_legacy_migration" });
+  // Build the replacement owner invariant before dropping the one-wallet-per-owner index, so
+  // primary uniqueness is never absent during an application rollout.
+  await wallets.createIndex({ ownerUserId: 1, isPrimary: 1 }, { unique: true, partialFilterExpression: { isPrimary: true }, name: "wallets_owner_primary_unique" });
+  await wallets.createIndex({ ownerUserId: 1, createdAt: -1, publicId: -1 }, { name: "wallets_owner_list" });
+  await dropIndexIfExists(db, "wallets", "wallets_owner_unique");
+
+  const transactions = db.collection("transactions");
+  await createIndexMigratingOptions(db, "transactions", { transferId: 1 }, { unique: true, partialFilterExpression: { type: "transfer" }, name: "transactions_transfer_id_unique" });
+  // Per-wallet idempotency becomes authoritative before the legacy account-scoped index is removed.
+  await transactions.createIndex(
+    { senderWalletId: 1, idempotencyKey: 1 },
+    { unique: true, partialFilterExpression: { type: "transfer" }, name: "transactions_sender_wallet_idempotency_unique" },
+  );
+  await dropIndexIfExists(db, "transactions", "transactions_idempotency_unique");
+
   await Promise.all([
     db.collection("users").createIndex({ publicId: 1 }, { unique: true, name: "users_public_id_unique" }),
     db.collection("users").createIndex({ email: 1 }, { unique: true, name: "users_email_unique" }),
-    db.collection("wallets").createIndex({ publicId: 1 }, { unique: true, name: "wallets_public_id_unique" }),
-    db.collection("wallets").createIndex({ addressNormalized: 1 }, { unique: true, name: "wallets_address_unique" }),
-    db.collection("wallets").createIndex({ ownerUserId: 1 }, { unique: true, name: "wallets_owner_unique" }),
     db.collection("wallets").createIndex({ customAddressNormalized: 1 }, { unique: true, partialFilterExpression: { customAddressNormalized: { $type: "string" } }, name: "wallets_custom_address_unique" }),
     db.collection("ledger_accounts").createIndex({ publicId: 1 }, { unique: true, name: "ledger_accounts_public_id_unique" }),
     db.collection("ledger_accounts").createIndex({ walletId: 1, accountType: 1 }, { unique: true, partialFilterExpression: { accountType: "wallet" }, name: "ledger_accounts_wallet_unique" }),
@@ -50,8 +68,6 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     db.collection("transactions").createIndex({ publicId: 1 }, { unique: true, name: "transactions_public_id_unique" }),
     // Scoped to transfers: a mining header has neither a transfer id nor an idempotency key in the
     // customer's namespace, so it must not be forced to invent one to satisfy a unique index.
-    createIndexMigratingOptions(db, "transactions", { transferId: 1 }, { unique: true, partialFilterExpression: { type: "transfer" }, name: "transactions_transfer_id_unique" }),
-    createIndexMigratingOptions(db, "transactions", { senderUserId: 1, idempotencyKey: 1 }, { unique: true, partialFilterExpression: { type: "transfer" }, name: "transactions_idempotency_unique" }),
     db.collection("transactions").createIndex({ senderUserId: 1, createdAt: -1, publicId: -1 }, { name: "transactions_sender_history" }),
     db.collection("transactions").createIndex({ receiverUserId: 1, createdAt: -1, publicId: -1 }, { name: "transactions_receiver_history" }),
     // One index for the history as the wallet asks for it: both directions in one page, in one order.

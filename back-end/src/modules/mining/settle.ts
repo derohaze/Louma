@@ -59,6 +59,9 @@ export interface MiningSettlementInput {
  */
 export async function settleSession(input: MiningSettlementInput): Promise<{ postedMinor: number; session: MiningSessionRecord; confirmed: boolean }> {
   const { collections, config } = input;
+  if (input.session.ownerUserId !== input.wallet.ownerUserId || input.session.walletId !== input.wallet.publicId || input.walletAccount.walletId !== input.wallet.publicId) {
+    throw new Error(`Mining session ${input.session.publicId} wallet binding is inconsistent`);
+  }
   if (!config.mining.settlementEnabled) return { postedMinor: 0, session: input.session, confirmed: true };
   /**
    * Issuance stops when an operator pauses payouts (see financial-controls). Settlement is the only
@@ -258,7 +261,7 @@ export async function settleMining(input: {
   }
   const active = await loadActiveSession(collections, input.ownerUserId);
   if (active) {
-    const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
+    const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId, active.walletId, active.ledgerAccountId);
     const result = await settleSession({ collections, mongoClient: input.mongoClient, config: liveConfig, session: active, wallet, walletAccount, correlationId: input.correlationId });
     if (!result.confirmed) {
       throw serviceUnavailable("mining_settlement_failed", "The reward could not be confirmed. Try again.");
@@ -270,18 +273,15 @@ export async function settleMining(input: {
 /**
  * Settles the account's running cycle as a side effect of another financial operation.
  *
- * A transfer spends the wallet's balance, and the balance only reflects mining once a settlement has
- * posted it. The caller supplies the wallet and its account it has already resolved, so this costs
- * one indexed read of the cycle on the common path and opens a transaction only when there is
- * something to post.
+ * A transfer spends the primary wallet's balance, and the balance only reflects mining once a
+ * settlement has posted it. The stored session selects its reward wallet/account, so an account's
+ * mining cycle remains bound even if the primary-wallet selection changes later.
  */
 export async function settleMiningForOwner(input: {
   collections: Collections;
   mongoClient: MongoClient;
   config: Pick<AppConfig, "mining" | "miningPools">;
   ownerUserId: string;
-  wallet: WalletRecord;
-  walletAccount: LedgerAccountRecord;
   correlationId: string;
   cache?: CacheContext | undefined;
 }): Promise<{ postedMinor: number; confirmed: boolean }> {
@@ -304,13 +304,14 @@ export async function settleMiningForOwner(input: {
   const closedButUnmarked = nowMs >= active.endsAt.getTime() && active.status !== "settled";
   if (accrued <= active.settledMinor && !closedButUnmarked) return { postedMinor: 0, confirmed: true };
 
+  const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId, active.walletId, active.ledgerAccountId);
   const result = await settleSession({
     collections,
     mongoClient: input.mongoClient,
     config: { ...config, mining: live.mining },
     session: active,
-    wallet: input.wallet,
-    walletAccount: input.walletAccount,
+    wallet,
+    walletAccount,
     correlationId: input.correlationId,
   });
   // The transfer path ignores `confirmed`: a side-effect accrual that cannot be confirmed must not
