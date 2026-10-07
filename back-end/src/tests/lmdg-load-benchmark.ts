@@ -12,12 +12,12 @@
  *
  *   setup          register N accounts (each its own peer address) and join a pool
  *   fresh@C        N first starts, C in flight: full enrollment for N distinct machine identities
- *   known@C(level) stop N cycles, then start N again on the same devices: the returning path,
- *                  repeated once per entry in `BENCH_LEVELS` so the same population is measured at
- *                  several concurrency levels. A returning start may come back
- *                  `mining_device_challenge_required` (rapid repeats are exactly the pattern the
- *                  risk policy re-verifies); those accounts then run the full
- *                  challenge -> prove -> retry handshake at the same level, as a browser does
+ *   known@C(level) stop N cycles, rejoin the same room (a stop releases it), then start N again
+ *                  on the same devices: the returning path, repeated once per entry in
+ *                  `BENCH_LEVELS` so the same population is measured at several concurrency levels.
+ *                  A returning start may come back `mining_device_challenge_required` (rapid repeats
+ *                  are exactly the pattern the risk policy re-verifies); those accounts then run the
+ *                  full challenge -> prove -> retry handshake at the same level, as a browser does
  *   status@C       device/status for a sample of the running devices
  *   verify@C       stop a sample, then challenge -> prove -> retry start on the same device
  *
@@ -561,6 +561,11 @@ async function main(): Promise<void> {
     timed(() => call({ method: "POST", url: "/api/v1/mining/start", ip: account.ip, token: account.token, csrf: account.csrf, body: { device: account.evidence } }));
   const stopRequest = (account: Account): Promise<Sample> =>
     timed(() => call({ method: "POST", url: "/api/v1/mining/stop", ip: account.ip, token: account.token, csrf: account.csrf }));
+  // A stop releases the room, and a start without a live hold is refused before device admission —
+  // so every stop-to-start wave rejoins the account's original room first. Without this the first
+  // returning wave would empty the population and every later wave would measure the refusal path.
+  const joinRequest = (account: Account): Promise<Sample> =>
+    timed(() => call({ method: "POST", url: "/api/v1/mining/pools/join", ip: account.ip, token: account.token, csrf: account.csrf, body: { poolId: account.index % 2 === 0 ? "low" : "medium" } }));
   const statusRequest = (account: Account): Promise<Sample> =>
     timed(() => call({ method: "GET", url: "/api/v1/mining/device/status", ip: account.ip, token: account.token }));
 
@@ -619,16 +624,19 @@ async function main(): Promise<void> {
     console.error("WARNING: an allowed request reported zero Mongo operations — per-request attribution may be broken; treat op counts as unreliable.");
   }
 
-  // ------------------------- P2: returning devices, once per concurrency level (stop, then start)
+  // ------------------------- P2: returning devices, once per concurrency level (stop, rejoin, start)
   for (const level of LEVELS) {
     const stopping = running;
     const stopWave = await measureWave(`known@C=${level}.stop`, stopping, level, stopRequest);
     await record(stopWave);
     const stopped = stopping.filter((_, index) => stopWave.samples[index]!.status === 200);
-    const startWave = await measureWave(`known@C=${level}.start`, stopped, level, startRequest);
+    const rejoinWave = await measureWave(`known@C=${level}.rejoin`, stopped, level, joinRequest);
+    await record(rejoinWave);
+    const rejoined = stopped.filter((_, index) => rejoinWave.samples[index]!.status === 200);
+    const startWave = await measureWave(`known@C=${level}.start`, rejoined, level, startRequest);
     await record(startWave);
-    const accepted = stopped.filter((_, index) => startWave.samples[index]!.status === 200);
-    const recovered = await completeChallenges(`known@C=${level}`, stopped, startWave.samples, level);
+    const accepted = rejoined.filter((_, index) => startWave.samples[index]!.status === 200);
+    const recovered = await completeChallenges(`known@C=${level}`, rejoined, startWave.samples, level);
     running = [...accepted, ...recovered];
   }
 
@@ -661,13 +669,17 @@ async function main(): Promise<void> {
     timed(() => call({ method: "POST", url: "/api/v1/mining/device/prove", ip: account.ip, token: account.token, csrf: account.csrf, body: { nonce: challenge.body.nonce, signature, publicKeyJwk: account.jwk, device: account.evidence } })),
   );
   await record(proveWave);
-  const retryWave = await measureWave(`verify@C=${READ_CONCURRENCY}.retry-start`, verifyTargets, READ_CONCURRENCY, startRequest);
+  const verifyStopped = verifyTargets.filter((_, index) => verifyStop.samples[index]!.status === 200);
+  const verifyRejoin = await measureWave(`verify@C=${READ_CONCURRENCY}.rejoin`, verifyStopped, READ_CONCURRENCY, joinRequest);
+  await record(verifyRejoin);
+  const verifyRejoined = verifyStopped.filter((_, index) => verifyRejoin.samples[index]!.status === 200);
+  const retryWave = await measureWave(`verify@C=${READ_CONCURRENCY}.retry-start`, verifyRejoined, READ_CONCURRENCY, startRequest);
   await record(retryWave);
 
   // The verify sample left the running set when it stopped; a successful retry puts it back.
-  const stoppedOk = new Set(verifyTargets.filter((_, index) => verifyStop.samples[index]!.status === 200));
+  const stoppedOk = new Set(verifyStopped);
   running = running.filter((account) => !stoppedOk.has(account));
-  for (const [index, account] of verifyTargets.entries()) {
+  for (const [index, account] of verifyRejoined.entries()) {
     if (retryWave.samples[index]!.status === 200) running.push(account);
   }
 

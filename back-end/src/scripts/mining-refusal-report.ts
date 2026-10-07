@@ -13,11 +13,12 @@ import { getCollections } from "../infrastructure/mongodb/collections.js";
  * that a burst of refusals — a cohort of new accounts that cannot start — is visible as a number
  * *before* it is visible as support tickets.
  *
- * Query shape: one range scan of `security_events` bounded by `createdAt`, then two grouped counts
- * (events per reason, then distinct accounts per reason). The collection's indexes are
- * `{ publicId }` and `{ ownerUserId, createdAt }`, so a global time-window scan is a collection scan
- * by design; that is why the plan is printed with the numbers. If the volume ever makes this scan
- * expensive, the fix is an index decision measured against this query — not a second query path.
+ * Query shape: one indexed match on the refusal event types inside the time window
+ * (`eventType`, `createdAt` — see `security_events_type_time`), then two grouped counts
+ * (events per reason, then distinct accounts per reason). Only refusal rows are grouped, so a
+ * refusal burst never competes with unrelated login and success events for scan cost or table
+ * space. The winning plan is printed with the numbers so a scan is visible if the index is ever
+ * missing.
  *
  * Exit codes: 0 = the report was produced, 2 = the run itself failed.
  */
@@ -95,12 +96,16 @@ async function main(): Promise<void> {
   const { client, db } = await connectMongo(config);
   try {
     const collections = getCollections(db);
+    // Refusals are filtered before grouping: grouping every security event first would scan and
+    // group unrelated login and success rows on every run, at exactly the moment a refusal burst
+    // needs investigating, and those rows could fill the printed table ahead of the refusals.
+    const refusalFilter = { eventType: { $in: [...REFUSAL_EVENT_TYPES] }, createdAt: { $gte: since } };
     // Grouped by account first so "how many people" is answered by the data, not by a bounded sample
     // of rows: a reason hit by 400 accounts once each and a bug hit by one account 400 times are the
     // same event count and completely different incidents.
     const groups = await collections.securityEvents
       .aggregate<{ _id: { eventType: unknown; reason: unknown; scope: unknown }; events: number; accounts: number }>([
-        { $match: { createdAt: { $gte: since } } },
+        { $match: refusalFilter },
         {
           $group: {
             _id: {
@@ -117,21 +122,28 @@ async function main(): Promise<void> {
       ])
       .toArray();
 
-    const planned = await collections.securityEvents.find({ createdAt: { $gte: since } }).explain("queryPlanner");
+    const planned = await collections.securityEvents.find(refusalFilter).explain("queryPlanner");
     const winning = (planned as unknown as { queryPlanner?: { winningPlan?: unknown } }).queryPlanner?.winningPlan ?? null;
     const plan = [...new Set(planStages(winning))];
 
+    // Per-group accounts are distinct within each event/reason group only, so their sum counts an
+    // account once per reason it hit. The headline total is the distinct owners across the report.
+    const distinctOwners = await collections.securityEvents.distinct("ownerUserId", {
+      ...refusalFilter,
+      ownerUserId: { $ne: null },
+    });
     const refusals = groups.filter((group) => REFUSAL_EVENT_TYPES.has(text(group._id.eventType)));
     const totals = {
       hours,
       since: since.toISOString(),
       events: groups.reduce((sum, group) => sum + group.events, 0),
-      accounts: groups.reduce((sum, group) => sum + group.accounts, 0),
+      accounts: distinctOwners.length,
+      groupAccounts: groups.reduce((sum, group) => sum + group.accounts, 0),
       refusalEvents: refusals.reduce((sum, group) => sum + group.events, 0),
       grounds: groups.length,
     };
 
-    console.log(`security_events over the last ${hours}h (since ${totals.since})`);
+    console.log(`mining-start refusals over the last ${hours}h (since ${totals.since})`);
     console.log(`${String("events").padStart(7)} ${String("accounts").padStart(8)}  eventType / reason / scope`);
     for (const group of groups.slice(0, limit)) {
       const line = `${text(group._id.eventType)} / ${text(group._id.reason)}${group._id.scope === undefined ? "" : ` / ${text(group._id.scope)}`}`;
@@ -140,6 +152,7 @@ async function main(): Promise<void> {
     }
     if (groups.length > limit) console.log(`  … ${groups.length - limit} more grounds (raise --limit)`);
     console.log("`!` marks a documented mining-start refusal; events/accounts are the group's totals.");
+    console.log(`${totals.accounts} distinct accounts hit a refusal (per-group accounts sum to ${totals.groupAccounts} and count an account once per reason).`);
 
     console.log(
       JSON.stringify({

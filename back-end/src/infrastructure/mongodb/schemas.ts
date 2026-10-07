@@ -250,6 +250,7 @@ export const schemas: Record<string, Document> = {
         // before the enrollment model existed.
         trustState: { enum: ["provisional", "established", "suspicious", "blocked"] },
         anchorHash: { bsonType: ["string", "null"] },
+        quotaAnchorHash: { bsonType: ["string", "null"] },
         aliasHashes: { bsonType: "array", items: { bsonType: "string" }, maxItems: MAX_CLUSTER_ALIASES },
         // Learned digest history per feature key. Keys come from the fixed server-side signal
         // vocabulary (see normalizeSignals, ~40 keys) and each ring holds at most

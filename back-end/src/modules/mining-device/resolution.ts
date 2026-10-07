@@ -202,7 +202,10 @@ export async function resolveOrCreateDevice(input: {
     machineKey,
     equivalentLeaseKeys: leaseKeysOf(machineKey, args.device, args.device.deviceKeyHash),
     trustState: trustStateOf(args.device),
-    quotaAnchor: args.quotaAnchor ?? null,
+    // An enrolled near clone carries the matched machine's anchor on its own record, so an exact
+    // lookup that lands on it later still binds the shared allowance instead of opening a fresh
+    // one under its own anchor.
+    quotaAnchor: args.quotaAnchor ?? args.device.quotaAnchorHash ?? null,
   });
 
   // 1. Exact continuity: same browser key, same key hash, or same signature. Each of these is a
@@ -330,6 +333,14 @@ export async function resolveOrCreateDevice(input: {
       throw new AppError(403, DEVICE_ENROLLMENT_LIMITED_CODE, DEVICE_ENROLLMENT_LIMITED_MESSAGE);
     }
   }
+  // A near clone is enrolled as its own record, but it is still the machine it matched for every
+  // economic purpose: the shared 10h device quota is keyed on this anchor so editing a hardware
+  // slot cannot buy a second allowance next to the first account's stopped segment. Every other
+  // verdict leaves it null — a weak match must not lend its allowance to an unrelated computer.
+  const nearCloneAnchor =
+    best && isNearCloneMatch(decided)
+      ? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
+      : null;
   const created = await createDevice(
     collections,
     {
@@ -341,6 +352,7 @@ export async function resolveOrCreateDevice(input: {
       keyHash,
       visitorHash,
       machineKey,
+      quotaAnchorHash: nearCloneAnchor,
       browserKeyPublicKey: evidence.browserKeyPublicKey,
       fingerprintVersion: evidence.fingerprintVersion,
       fingerprintConfidence: evidence.fingerprintConfidence,
@@ -353,14 +365,7 @@ export async function resolveOrCreateDevice(input: {
     score: best?.identity ? 100 : decided.score,
     match: decided,
     isNew: true,
-    // A near clone is enrolled as its own record, but it is still the machine it matched for every
-    // economic purpose: the shared 10h device quota is keyed on this anchor so editing a hardware
-    // slot cannot buy a second allowance next to the first account's stopped segment. Every other
-    // verdict leaves it null — a weak match must not lend its allowance to an unrelated computer.
-    quotaAnchor:
-      best && isNearCloneMatch(decided)
-        ? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
-        : null,
+    quotaAnchor: nearCloneAnchor,
   });
 }
 
@@ -376,6 +381,7 @@ interface CreateDeviceInput {
   keyHash: string;
   visitorHash: string | null;
   machineKey: string | null;
+  quotaAnchorHash: string | null;
   browserKeyPublicKey: string | null;
   fingerprintVersion: string | null;
   fingerprintConfidence: number | null;
@@ -396,6 +402,10 @@ async function createDevice(
     // was created under. Later observations may add aliases or move `machineKeyHash`, but the anchor
     // is the value direct lookups resolve and no client payload reaches it.
     anchorHash: input.machineKey,
+    // The shared quota identity when this cluster was enrolled as a near clone of a known machine:
+    // what makes a later exact lookup bind the matched machine's allowance instead of a fresh one.
+    // Written once, like the anchor, and never from a client payload.
+    quotaAnchorHash: input.quotaAnchorHash,
     aliasHashes: [],
     trustState: "provisional",
     enrollmentUserId: input.ownerUserId,
