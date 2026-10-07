@@ -339,7 +339,7 @@ export async function resolveOrCreateDevice(input: {
   // verdict leaves it null — a weak match must not lend its allowance to an unrelated computer.
   const nearCloneAnchor =
     best && isNearCloneMatch(decided)
-      ? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
+      ? best.candidate.quotaAnchorHash ?? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
       : null;
   const created = await createDevice(
     collections,

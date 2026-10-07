@@ -2,6 +2,21 @@
 
 Date: 2026-10-05. Changes are local only; no deployment, commit or production-data repair was performed.
 
+## Policy correction — 2026-10-07
+
+The current start service requires a non-null machine correlation key, derived from at least four
+reported core slots. Generic or missing GPU names alone no longer refuse mining: graphics are
+corroborating evidence, and privacy settings can mask them on an otherwise usable device. Thin and
+key-only payloads still return `mining_device_evidence_required`. Existing device leases, enrollment
+limits, network admission and account/device quotas still apply.
+
+Near clones sharing four core slots retain the original machine's quota even when a submitted CPU
+class differs. A clone of an enrolled clone inherits its stored `quotaAnchorHash`, so a chain cannot
+open a new allowance. Class drift still prevents a positive same-device verdict.
+
+The masked-graphics refusals and acceptance criteria below describe the previous policy and
+historical measurements, superseded by this correction. No new real-browser verification is claimed.
+
 ## Acceptance criteria and behavior
 
 - Reject mining starts with insufficient or masked machine evidence, even when the caller supplies a new browser key or a high fingerprint confidence. This is a mining admission refusal, not an account ban.

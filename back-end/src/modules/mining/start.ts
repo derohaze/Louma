@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { AppConfig } from "../../config/env.js";
-import { recordSecurityEvent } from "../security/audit.js";
+import { logAuditFailure, recordSecurityEvent } from "../security/audit.js";
 import { pickRateUnits, rateToString, totalAccrualMinor } from "./rate.js";
 import { loadMiningSettings } from "./settings.js";
 import { invalidate, poolMembershipKey, type CacheContext } from "../../infrastructure/redis/cache.js";
@@ -28,7 +28,7 @@ import {
   machineFeatureMap,
   machineKeyHash,
 } from "../mining-device/identity.js";
-import { hasIdentifyingGraphics, normalizeSignals, sanitizeEvidence } from "../mining-device/signals.js";
+import { normalizeSignals, sanitizeEvidence } from "../mining-device/signals.js";
 import { isNetworkResident } from "../mining-device/enrollment.js";
 import { networkLockKeyFor } from "../mining-device/lease.js";
 import {
@@ -239,7 +239,7 @@ export async function startMining(input: {
     const preEvidence = sanitizeEvidence(input.device.evidenceRaw);
     const preSignals = normalizeSignals(preEvidence);
     const preMachineKey = machineKeyHash(config.encryptionKey, machineFeatureMap(buildFeatureMap(preSignals)));
-    if (preMachineKey === null || !hasIdentifyingGraphics(preEvidence)) {
+    if (preMachineKey === null) {
       await recordSecurityEvent({
         collections,
         ownerUserId: input.ownerUserId,
@@ -273,7 +273,7 @@ export async function startMining(input: {
       );
     // Defense in depth: the post-resolution check below repeats the same refusal on the resolved
     // identities, in case sanitization and resolution ever disagree about what counts as evidence.
-    if (resolution.machineKey === null || !hasIdentifyingGraphics(resolution.evidence)) {
+    if (resolution.machineKey === null) {
       await recordSecurityEvent({
         collections,
         ownerUserId: input.ownerUserId,
@@ -618,7 +618,7 @@ export async function startMining(input: {
           outcome: "failure",
           correlationId: input.correlationId,
           metadata: { reason: "pool_hold_not_extended", sessionId: session.publicId, poolId: poolDef.id },
-        }).catch(() => undefined);
+        }).catch((error: unknown) => logAuditFailure("mining_started", error));
       }
     })
     .catch((error) => {
