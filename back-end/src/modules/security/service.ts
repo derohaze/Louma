@@ -250,7 +250,7 @@ export async function confirmTwoFactorSetup(input: { collections: Collections; c
   if (!credential) throw conflict("two_factor_setup_expired", "Start two-factor setup again; the verification period expired.");
   const secret = decryptSecret({ encryptedSecret: credential.encryptedSecret, iv: credential.secretIv, authTag: credential.secretAuthTag }, input.config.encryptionKey);
   if (!(await verifyTotpToken(secret, input.code))) {
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_setup_failed", outcome: "failure", correlationId: input.requestId });
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_setup_failed", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
     throw forbidden("invalid_two_factor_code", "That authenticator code is not valid.");
   }
   const recoveryCodes = generateRecoveryCodes();
@@ -259,7 +259,7 @@ export async function confirmTwoFactorSetup(input: { collections: Collections; c
     { $set: { enabledAt: now, pendingExpiresAt: null, recoveryCodeHashes: recoveryCodes.map((code) => hashRecoveryCode(code, input.config.encryptionKey)), updatedAt: now } },
   );
   if (result.modifiedCount !== 1) throw conflict("two_factor_setup_expired", "Start two-factor setup again; the verification period expired.");
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_enabled", outcome: "success", correlationId: input.requestId });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_enabled", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return { enabledAt: now.toISOString(), recoveryCodes };
 }
 
@@ -292,7 +292,7 @@ export async function disableTwoFactor(input: { collections: Collections; config
     if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
     await input.collections.wallets.updateOne({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } });
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_disabled", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_disabled", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } }).catch(() => undefined);
   return { enabled: false };
 }
 
@@ -308,7 +308,10 @@ export async function regenerateRecoveryCodes(input: { collections: Collections;
     { $set: { recoveryCodeHashes: recoveryCodes.map((code) => hashRecoveryCode(code, input.config.encryptionKey)), updatedAt: new Date() } },
   );
   if (result.modifiedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "recovery_codes_regenerated", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } });
+  // Non-fatal, and the most important place in this file for that: the old codes are already gone,
+  // so an audit write that threw here would answer 500 and the caller would never receive the new
+  // ones — a lockout manufactured by the audit trail.
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "recovery_codes_regenerated", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } }).catch(() => undefined);
   return { recoveryCodes };
 }
 
@@ -322,7 +325,7 @@ export async function verifySensitiveAction(input: { collections: Collections; c
     recoveryCodeUsed = verification.recoveryCodeUsed;
     if (recoveryCodeUsed) await consumeRecoveryCode({ collections: input.collections, verification });
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.action, outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed } });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.action, outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed } }).catch(() => undefined);
 }
 
 export async function setTransferPassword(input: { collections: Collections; mongoClient: MongoClient; ownerUserId: string; currentPassword: unknown; newPassword: unknown; requestId: string }) {
@@ -371,7 +374,7 @@ export async function setTransferPassword(input: { collections: Collections; mon
   } finally {
     await session.endSession();
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: existing ? "transfer_password_changed" : "transfer_password_set", outcome: "success", correlationId: input.requestId });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: existing ? "transfer_password_changed" : "transfer_password_set", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return { enabled: true, changedAt: now.toISOString() };
 }
 

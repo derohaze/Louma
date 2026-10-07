@@ -1,7 +1,5 @@
 import NumberFlow from "@number-flow/react";
-import { BitcoinCpuIcon, Coins01Icon } from "@hugeicons/core-free-icons";
-import { Button } from "@/shared/ui/button";
-import { Icon } from "@/shared/ui/page";
+import { Coins01Icon, StopCircleIcon } from "@hugeicons/core-free-icons";
 import { useT } from "@/shared/i18n";
 import { FactList } from "@/shared/ui/panels";
 import { MONEY_SCALE, currency, dateText } from "@/shared/lib/wallet";
@@ -20,7 +18,6 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
   const page = useT("mining.page");
   const {
     session,
-    mining,
     live,
     feed,
     busy,
@@ -31,10 +28,25 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
     accruedMinor,
     progressPercent,
     poolName,
-    start,
     collect,
+    stop,
   } = cycle;
   if (!session) return null;
+  /**
+   * Ends the running segment before its window closes. Stopping is not a cancel: what accrued is
+   * collected and the hours left in the window stay spendable on the next cycle, so the action is
+   * offered whenever a cycle is still running and never while another request is in flight.
+   */
+  const stopButton = (
+    <MiningBusyButton
+      label={page("actions.stop")}
+      icon={StopCircleIcon}
+      busy={busy === "stop"}
+      onAction={stop}
+      disabled={busy !== null}
+      busyLabel={page("actions.stopBusy")}
+    />
+  );
   return (
     <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
       <section
@@ -58,7 +70,7 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
             </p>
           </div>
           <MiningOrb
-            state={session.status === "active" || needsCollection ? "composing" : "shaping"}
+            state={session.status === "active" || needsCollection ? "composing" : "working"}
             size={120}
             label={
               needsCollection
@@ -122,9 +134,7 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
           <FactList
             items={[
               [t("active.facts.rate"), rateText],
-              ...((poolName
-                ? [[t("active.facts.pool"), poolName]]
-                : []) as [string, string][]),
+              ...((poolName ? [[t("active.facts.pool"), poolName]] : []) as [string, string][]),
               [
                 t("active.facts.cycle"),
                 t("active.facts.cycleValue", {
@@ -139,7 +149,7 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
         </div>
 
         {needsCollection && session.canSettle && (
-          <div className="mt-5">
+          <div className="mt-5 flex flex-wrap gap-2">
             <MiningBusyButton
               label={page("actions.collect")}
               icon={Coins01Icon}
@@ -148,36 +158,18 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
               disabled={busy !== null}
               busyLabel={page("actions.collectBusy")}
             />
+            {session.status === "active" && stopButton}
           </div>
         )}
         {needsCollection && !session.canSettle && (
           <p className="mt-5 text-sm text-muted-foreground">{t("active.settlementPaused")}</p>
         )}
-        {!needsCollection && session.status !== "active" && (
-          <p className="mt-5 text-sm text-muted-foreground">{t("active.fullyCollected")}</p>
-        )}
         {!actionsEnabled && (
           <p className="mt-5 text-sm text-muted-foreground">{t("active.miningPaused")}</p>
         )}
-        {actionsEnabled && mining.data?.canStart && session.status !== "active" && (
-          <div className="mt-5">
-            <Button onClick={() => void start()} disabled={busy !== null}>
-              <Icon icon={BitcoinCpuIcon} size={17} />
-              {busy === "start" ? t("active.starting") : page("actions.startNext")}
-            </Button>
-          </div>
-        )}
+        {/* A running cycle with nothing accrued has nothing to collect: end it, hand back the window. */}
         {!needsCollection && session.status === "active" && (
-          <div className="mt-5">
-            <MiningBusyButton
-              label={page("actions.collect")}
-              icon={Coins01Icon}
-              busy={busy === "settle"}
-              onAction={collect}
-              disabled={busy !== null || !needsCollection}
-              busyLabel={page("actions.collectBusy")}
-            />
-          </div>
+          <div className="mt-5">{stopButton}</div>
         )}
       </section>
 

@@ -33,6 +33,32 @@ export const DEFAULT_LANGUAGE: LanguageCode = 'en';
 export const LANGUAGE_COOKIE = 'louma_lang';
 const COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 const COOKIE_PATTERN = new RegExp(`(?:^|;\\s*)${LANGUAGE_COOKIE}=([^;]*)`);
+const COOKIE_PATTERN_GLOBAL = new RegExp(`(?:^|;\\s*)${LANGUAGE_COOKIE}=([^;]*)`, 'g');
+
+/** Every value the browser holds under `LANGUAGE_COOKIE`, in the order it sends them. */
+function languageCookieValues(): string[] {
+  return [...document.cookie.matchAll(COOKIE_PATTERN_GLOBAL)].map((match) => match[1] ?? '');
+}
+
+/**
+ * Removes the host-only cookie left behind by a build that predates the shared parent-domain one.
+ *
+ * Two cookies with the same name but a different `Domain` are two cookies: writing the shared
+ * `.loumapay.com` cookie does not replace the host-only one a visitor already carries, and the
+ * browser sends both, older first. The reader below takes the first match, so the stale host-only
+ * value would win — a language chosen on `app.loumapay.com`, which only the shared cookie carries,
+ * would look undone here.
+ *
+ * Writing the name with no `Domain` attribute addresses the host-only cookie alone (a `Set-Cookie`
+ * without `Domain` only ever matches a host-only cookie); the shared one keeps its own domain and
+ * is untouched. So this can only remove the duplicate that shadows the choice, never the choice
+ * itself. Nothing is written unless a real duplicate exists, so an ordinary visit stays read-only.
+ */
+function dropShadowedHostOnlyCookie(): void {
+  if (typeof document === 'undefined') return;
+  if (languageCookieValues().length < 2) return;
+  document.cookie = `${LANGUAGE_COOKIE}=; path=/; max-age=0; samesite=lax`;
+}
 
 export function isLanguageCode(value: string | null | undefined): value is LanguageCode {
   return LANGUAGES.some((language) => language.code === value);
@@ -69,6 +95,9 @@ export function currentLocale(): string {
 /** The choice this browser holds. */
 export function readLanguageCookie(): LanguageCode {
   if (typeof document === 'undefined') return DEFAULT_LANGUAGE;
+  // Migrate first: while a host-only duplicate is still present the first match is the stale one,
+  // so the reader would report a language the visitor has already changed away from.
+  dropShadowedHostOnlyCookie();
   return parseLanguage(COOKIE_PATTERN.exec(document.cookie)?.[1] ?? null);
 }
 
@@ -83,6 +112,9 @@ export function persistLanguage(code: LanguageCode): void {
   const host = window.location.hostname;
   const domain =
     host === 'loumapay.com' || host.endsWith('.loumapay.com') ? '; domain=.loumapay.com' : '';
+  // A host-only cookie from the previous version would otherwise survive this write and shadow it
+  // (see `dropShadowedHostOnlyCookie`), so clear it first and let the shared cookie be the only one.
+  dropShadowedHostOnlyCookie();
   document.cookie = `${LANGUAGE_COOKIE}=${code}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax${secure}${domain}`;
 }
 

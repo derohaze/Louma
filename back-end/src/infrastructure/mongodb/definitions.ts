@@ -111,9 +111,17 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     // `deviceWindowStart` equality; anchors never move on stop/resume), with a `startedAt`
     // range fallback for pre-quota rows that carry no anchor. The device sum spans accounts
     // on one machine identity.
-    db.collection("mining_sessions").createIndex({ ownerUserId: 1, accountWindowStart: 1 }, { name: "mining_sessions_owner_quota_window" }),
+    // Migrating options: a database created by an earlier release holds this name over
+    // `{ ownerUserId, accountWindowStart, startedAt }`, which conflicts with the anchor-equality
+    // shape the quota sum actually queries (the `startedAt` range fallback has its own index
+    // below). Replacing it keeps startup from wedging on every boot.
+    createIndexMigratingOptions(db, "mining_sessions", { ownerUserId: 1, accountWindowStart: 1 }, { name: "mining_sessions_owner_quota_window" }),
     db.collection("mining_sessions").createIndex({ ownerUserId: 1, startedAt: 1 }, { name: "mining_sessions_owner_started" }),
-    db.collection("mining_sessions").createIndex(
+    // Same migration as the account window above: an earlier release held this name over a key
+    // that also carried `startedAt`.
+    createIndexMigratingOptions(
+      db,
+      "mining_sessions",
       { deviceQuotaKey: 1, deviceWindowStart: 1 },
       { partialFilterExpression: { deviceQuotaKey: { $type: "string" } }, name: "mining_sessions_device_quota_window" },
     ),
@@ -134,6 +142,11 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     // Backs the join race trim's bounded recency scan (`poolId` equality, `updatedAt`/`_id`
     // order, `ownerUserId` covered) so enforcing the cap never blocking-sorts the pool.
     db.collection("mining_pool_members").createIndex({ poolId: 1, updatedAt: 1, _id: 1, ownerUserId: 1 }, { name: "mining_pool_members_pool_recency" }),
+    // A membership is a deadline: a join nobody started from, a cycle that ended, and a released
+    // row kept only as the room-change throttle's anchor are all reaped once `expiresAt` passes.
+    // No read depends on the sweep — every reader requires a live hold — so the documented TTL lag
+    // can only leave an already-dead row on disk, never a membership.
+    db.collection("mining_pool_members").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_pool_members_expires" }),
     db.collection("mining_devices").createIndex({ publicId: 1 }, { unique: true, name: "mining_devices_public_id_unique" }),
     db.collection("mining_devices").createIndex({ deviceKeyHash: 1 }, { name: "mining_devices_key_hash" }),
     // The machine identity is the fan-in of every browser/profile observation of one computer; the
@@ -154,6 +167,9 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     db.collection("mining_devices").createIndex({ lastSeenAt: -1 }, { name: "mining_devices_last_seen" }),
     db.collection("mining_devices").createIndex({ status: 1, lastSeenAt: -1 }, { name: "mining_devices_status_seen" }),
     // One active lease per device cluster: the database guarantee behind "one device, one cycle".
+    // The same index serializes one non-resident cycle per network: a non-resident start takes the
+    // reserved `net:` token as an extra lease key (see `networkLockKeyFor`), so two fresh identities
+    // racing on one network cannot both pass the pre-transaction check and commit.
     db.collection("mining_device_leases").createIndex({ deviceClusterId: 1 }, { unique: true, partialFilterExpression: { status: "active" }, name: "mining_device_leases_one_active_per_device" }),
     db.collection("mining_device_leases").createIndex({ ownerUserId: 1, status: 1 }, { name: "mining_device_leases_owner_active" }),
     db.collection("mining_device_leases").createIndex({ deviceClusterId: 1, leaseEndsAt: -1 }, { name: "mining_device_leases_device_ends" }),

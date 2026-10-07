@@ -213,6 +213,25 @@ export function networkTrustFresh(entry: Pick<MiningDeviceNetworkTrust, "lastAt"
 }
 
 /**
+ * Whether a cluster is a resident of one network: it has credited activity *there*, at the
+ * establishment threshold, inside the freshness window. The single source of the exemption used by
+ * the network rule and by the per-network lease token (see `networkLockKeyFor`).
+ */
+export function isNetworkResident(
+  device: Pick<MiningDeviceRecord, "networkTrusts">,
+  ipHashValue: string,
+  policy: { establishMinAdmissions: number; networkTrustFreshnessSeconds: number },
+  nowMs: number,
+): boolean {
+  const trust = networkTrustOf(device, ipHashValue);
+  return Boolean(
+    trust &&
+      networkTrustEstablished(trust, policy.establishMinAdmissions) &&
+      networkTrustFresh(trust, nowMs, policy.networkTrustFreshnessSeconds * 1000),
+  );
+}
+
+/**
  * The entry written when a network first appears on a device's credited activity.
  *
  * Credits are not merged in application memory: `applyCommittedCredit` increments the matching entry

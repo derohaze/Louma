@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BitcoinCpuIcon, UserGroupIcon } from "@hugeicons/core-free-icons";
+import { BitcoinCpuIcon, Logout01Icon, UserGroupIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { useWallet } from "@/shared/hooks";
-import { api, messageForError, type ApiMiningPoolsState } from "@/shared/api";
+import { ApiError, api, messageForError, type ApiMiningPoolsState } from "@/shared/api";
 import {
   accountFetchers,
   hasBrowserSession,
@@ -20,12 +20,16 @@ import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
 /**
  * Community mining rooms (MVP): the two system pools.
  *
- * Joining is mandatory before Start is accepted — the mining page reads the same
- * membership and refuses to offer Start while `poolId` is null. The reward math
- * itself stays on the server: each cycle draws the base rate, then one bounded
- * pool factor from the room's env-configured band, so pool choice adds variance,
- * never issuance. Every number on the cards (members, cap, speed, share) comes
- * from the same endpoint, so the page can never disagree with the gate.
+ * A room is a HOLD, not a permanent membership: it is taken before a start, extended to the end of
+ * the cycle it started, and released the moment that cycle ends — by a stop, or by the window
+ * itself. The mining page reads the same live hold and refuses to offer Start while it is absent,
+ * so "you are mining here" and "this room is yours" can never drift apart. Leaving is refused (and
+ * the button hidden) while a cycle runs, and changing rooms is limited to once per cooldown; taking
+ * the room already held, or the one just left, is always available. The reward math itself stays on
+ * the server: each cycle draws the base rate, then one bounded pool factor from the room's
+ * env-configured band, so pool choice adds variance, never issuance. Every number on the cards
+ * (members, cap, speed, share) comes from the same endpoint, so the page can never disagree with
+ * the gate.
  */
 /**
  * The two system rooms are named and described by the server, but their copy is part of the screen:
@@ -38,6 +42,10 @@ const poolName = (id: string, fallback: string): string =>
 const poolDescription = (id: string, fallback: string): string =>
   id === "low" || id === "medium" ? translate(`mining.pools.descriptions.${id}`) : fallback;
 
+/** Whole minutes until a server instant, at least one: the room-change cooldown, said plainly. */
+const minutesUntil = (iso: string): number =>
+  Math.max(1, Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000));
+
 export function MiningPools() {
   const t = useT("mining.pools");
   const { refresh } = useWallet();
@@ -48,28 +56,45 @@ export function MiningPools() {
     staleTime: serverStateFreshness.miningMs,
     enabled: hasBrowserSession,
   });
-  const [joining, setJoining] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState("");
 
-  const join = async (poolId: string) => {
-    if (joining) return;
-    setJoining(poolId);
+  /**
+   * Both room writes go through here: the server decides whether the change is allowed (a running
+   * cycle owns its room, and changes are throttled), and the mining state is re-read afterwards
+   * because the pool gate lives on it.
+   */
+  const changeRoom = async (action: string, request: () => Promise<unknown>) => {
+    if (pending) return;
+    setPending(action);
     setError("");
     try {
-      await api.post<ApiMiningPoolsState>("/api/v1/mining/pools/join", {
-        poolId,
-      });
+      await request();
       await queryClient.invalidateQueries({
         queryKey: serverStateKeys.miningPools,
       });
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
       await refresh();
     } catch (cause) {
-      setError(messageForError(cause));
+      // The two rules a customer can hit here are named in their own language; anything else is
+      // reported in the server's words, which are the authoritative ones anyway.
+      if (cause instanceof ApiError && cause.code === "mining_pool_switch_cooldown")
+        setError(t("errors.switchCooldown"));
+      else if (cause instanceof ApiError && cause.code === "mining_cycle_active")
+        setError(t("errors.cycleActive"));
+      else setError(messageForError(cause));
     } finally {
-      setJoining(null);
+      setPending(null);
     }
   };
+
+  const join = (poolId: string) =>
+    changeRoom(poolId, () =>
+      api.post<ApiMiningPoolsState>("/api/v1/mining/pools/join", { poolId }),
+    );
+
+  const leave = () =>
+    changeRoom("leave", () => api.post<ApiMiningPoolsState>("/api/v1/mining/pools/leave"));
 
   if (pools.isError && !pools.data) {
     return (
@@ -90,6 +115,8 @@ export function MiningPools() {
 
   const state = pools.data;
   const joinedPool = state?.pools.find((pool) => pool.joined) ?? null;
+  const cycleActive = state?.cycleActive === true;
+  const switchingIn = state?.switchAvailableAt ? minutesUntil(state.switchAvailableAt) : null;
 
   return (
     <>
@@ -116,11 +143,19 @@ export function MiningPools() {
 
       {joinedPool && (
         <p className="mb-4 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm">
-          {t("joined", {
-            pool: poolName(joinedPool.id, joinedPool.name),
-            power: joinedPool.effectivePower.toFixed(2),
-            share: joinedPool.mySharePercent.toFixed(1),
-          })}
+          {cycleActive
+            ? t("joinedMining", {
+                pool: poolName(joinedPool.id, joinedPool.name),
+                power: joinedPool.effectivePower.toFixed(2),
+                share: joinedPool.mySharePercent.toFixed(1),
+              })
+            : t("joinedReady", { pool: poolName(joinedPool.id, joinedPool.name) })}
+        </p>
+      )}
+
+      {!joinedPool && switchingIn !== null && (
+        <p className="mb-4 rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
+          {t("switchWait", { minutes: switchingIn })}
         </p>
       )}
 
@@ -202,19 +237,33 @@ export function MiningPools() {
 
               <div className="mt-4">
                 {pool.joined ? (
-                  <Button variant="outline" disabled>
-                    <Icon icon={UserGroupIcon} size={17} />
-                    {t("actions.currentRoom")}
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" disabled>
+                      <Icon icon={UserGroupIcon} size={17} />
+                      {t("actions.currentRoom")}
+                    </Button>
+                    {/* While a cycle runs the room is held for it: the server refuses a leave, so
+                        the action is not offered. Stopping releases the room instead. */}
+                    {!cycleActive && (
+                      <Button
+                        variant="outline"
+                        onClick={() => void leave()}
+                        disabled={pending !== null}
+                      >
+                        <Icon icon={Logout01Icon} size={17} />
+                        {pending === "leave" ? t("actions.leaving") : t("actions.leave")}
+                      </Button>
+                    )}
+                  </div>
                 ) : pool.full ? (
                   <Button disabled>
                     <Icon icon={UserGroupIcon} size={17} />
                     {t("actions.roomFull")}
                   </Button>
                 ) : (
-                  <Button onClick={() => void join(pool.id)} disabled={joining !== null}>
+                  <Button onClick={() => void join(pool.id)} disabled={pending !== null}>
                     <Icon icon={UserGroupIcon} size={17} />
-                    {joining === pool.id
+                    {pending === pool.id
                       ? t("actions.joining")
                       : joinedPool
                         ? t("actions.switchTo", { pool: poolName(pool.id, pool.name) })
@@ -233,6 +282,8 @@ export function MiningPools() {
             items={[
               [t("how.membership"), t("how.membershipValue")],
               [t("how.gate"), t("how.gateValue")],
+              [t("how.release"), t("how.releaseValue")],
+              [t("how.changes"), t("how.changesValue")],
               [t("how.cycleLength"), t("how.cycleLengthValue")],
               [t("how.rewards"), t("how.rewardsValue")],
             ]}

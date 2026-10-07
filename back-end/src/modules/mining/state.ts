@@ -12,8 +12,10 @@ import {
   currentAccountWindowStart,
   remainingSeconds,
 } from "./quota.js";
-import { poolMembershipKey, readThrough, type CacheContext } from "../../infrastructure/redis/cache.js";
+import type { CacheContext } from "../../infrastructure/redis/cache.js";
 import { notFound } from "../../shared/errors.js";
+// One definition of "holds a room": the live-hold predicate lives with the membership it reads.
+import { loadPoolId } from "./pools.js";
 import type {
   LedgerAccountRecord,
   MiningEffectiveStatus,
@@ -238,29 +240,14 @@ export async function getMiningState(input: {
       // reflects the reset instead of the previous window's exhaustion.
       quota.windowEndsAt = new Date(current.windowStartMs + MINING_QUOTA_WINDOW_MS).toISOString();
     } else {
-      const windowSessions = await loadAccountWindowSessions(input.collections, input.ownerUserId, current.windowStartMs).catch(() => []);
+      // A failed window sum is a failed read, never an empty window: swallowing it here would
+      // report zero consumption and a full 10 hours remaining, i.e. `canStart: true` for an
+      // account that has already used its quota. The neighbouring reads in this function are
+      // not caught either, so a database that cannot answer this one has already failed the
+      // request above; letting it surface keeps the state honest instead of inventing one.
+      const windowSessions = await loadAccountWindowSessions(input.collections, input.ownerUserId, current.windowStartMs);
       quota = quotaFromSessions(windowSessions, current.windowStartMs, nowMs);
     }
   }
   return stateFromRecord(record, nowMs, live.mining.enabled, live.mining.settlementEnabled, live.mining.cycleDurationSeconds, poolId, poolId === null, quota);
-}
-
-/** One account's pool room, cached: join/leave are the only writers and invalidate eagerly. */
-export async function loadPoolId(
-  collections: Collections,
-  ownerUserId: string,
-  cache?: CacheContext | undefined,
-): Promise<string | null> {
-  if (!cache) {
-    const membership = await collections.miningPoolMembers.findOne({ ownerUserId });
-    return (membership?.poolId as string | undefined) ?? null;
-  }
-  const read = await readThrough({
-    redis: cache.redis,
-    key: poolMembershipKey(cache.redis, ownerUserId),
-    ttlSeconds: cache.ttlSeconds,
-    load: () => collections.miningPoolMembers.findOne({ ownerUserId }, { projection: { poolId: 1 } }),
-  });
-  const poolId = (read.value as { poolId?: unknown } | null)?.poolId;
-  return typeof poolId === "string" ? poolId : null;
 }

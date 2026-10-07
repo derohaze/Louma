@@ -339,6 +339,18 @@ export function gpuOf(evidence: DeviceEvidence): string {
   return `${vendor}~${renderer}`.slice(0, 256);
 }
 
+/**
+ * A masked graphics identity is shared by many physical computers. It cannot corroborate a
+ * machine key; accepting it as a new device lets privacy profiles mint independent quotas.
+ * This is an evidence policy, not browser-name detection or hardware attestation.
+ */
+export function hasIdentifyingGraphics(evidence: DeviceEvidence): boolean {
+  const vendor = clean(evidence.webglVendor);
+  const renderer = clean(evidence.webglRenderer);
+  const masked = new Set(["unknown", "mozilla", "webkit", "webkit webgl", "webgl", "brave", "google inc."]);
+  return !masked.has(renderer) && vendor !== "unknown" && !FAILURE_MARKERS.has(renderer);
+}
+
 export function parseOsFamily(userAgent: string | null, platform: string | null): string {
   const ua = (userAgent ?? "").toLowerCase();
   const pf = (platform ?? "").toLowerCase();

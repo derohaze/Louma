@@ -1,5 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { ChartIncreaseIcon, Timer01Icon, UserGroupIcon } from "@hugeicons/core-free-icons";
+import {
+  ChartIncreaseIcon,
+  PauseIcon,
+  Timer01Icon,
+  UserGroupIcon,
+} from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { Icon } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
@@ -110,6 +115,10 @@ export function MiningInfoCard({ delayMs }: { delayMs?: number } = {}) {
       <p className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
         <Icon icon={Timer01Icon} size={15} className="mt-0.5 shrink-0" />
         {t("info.noteSession")}
+      </p>
+      <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
+        <Icon icon={PauseIcon} size={15} className="mt-0.5 shrink-0" />
+        {t("info.noteStop")}
       </p>
       <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
         <Icon icon={ChartIncreaseIcon} size={15} className="mt-0.5 shrink-0" />

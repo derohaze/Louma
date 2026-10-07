@@ -106,7 +106,9 @@ export function resolveMiningSettingsFromDocs(
 ): SettingsResolution {
   const warnings: string[] = [];
   const mining: MiningConfig = { ...defaults.mining, rate: { ...defaults.mining.rate } };
+  // Spread first: the hold/cooldown policy is env-only and every stored pool override must keep it.
   const pools: MiningPoolsConfig = {
+    ...defaults.miningPools,
     low: { ...defaults.miningPools.low },
     medium: { ...defaults.miningPools.medium },
   };

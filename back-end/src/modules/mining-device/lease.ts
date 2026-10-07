@@ -2,6 +2,22 @@ import { randomUUID } from "node:crypto";
 import { ObjectId, type ClientSession } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import { ipHash } from "./identity.js";
+import { NETWORK_LOCK_KEY_PREFIX } from "./policy.js";
+import { findLiveLeasesForOwner } from "./repository.js";
+
+/**
+ * The reserved `deviceClusterId` of one network's admission token.
+ *
+ * A start that must pass the network rule (not a resident of its network) takes this lease along
+ * with its device leases. Two fresh identities racing on one network then collide on the unique
+ * active-lease index: one commits, and the loser's transaction is refused and re-reads the committed
+ * state, where the winner's live lease turns the race into the ordinary "network already mining"
+ * refusal. The token is released with its cycle and cleaned by `releaseInactiveLeases` like any
+ * other lease row; device identities are server-derived digests and can never carry this prefix.
+ */
+export function networkLockKeyFor(ipHashValue: string): string {
+  return `${NETWORK_LOCK_KEY_PREFIX}${ipHashValue}`;
+}
 
 /**
  * Inserts the lease rows inside the caller's transaction. The partial unique index is the lock.
@@ -52,10 +68,10 @@ export async function getDeviceStatus(input: {
   nowMs?: number;
 }): Promise<{ bound: boolean; leaseEndsAt: string | null; deviceId: string | null }> {
   const nowMs = input.nowMs ?? Date.now();
-  const lease = await input.collections.miningDeviceLeases.findOne(
-    { ownerUserId: input.ownerUserId, status: "active" },
-    { sort: { leaseEndsAt: -1 } },
-  );
-  if (!lease || lease.leaseEndsAt.getTime() <= nowMs) return { bound: false, leaseEndsAt: null, deviceId: null };
+  // A row still marked active is not proof of a binding (see `findLiveLeasesForOwner`): the
+  // referenced session must still be running and owned by this account, so a cycle that ended by
+  // any path stops claiming the device the moment it is over.
+  const lease = (await findLiveLeasesForOwner(input.collections, input.ownerUserId, nowMs))[0] ?? null;
+  if (!lease) return { bound: false, leaseEndsAt: null, deviceId: null };
   return { bound: true, leaseEndsAt: lease.leaseEndsAt.toISOString(), deviceId: lease.deviceClusterId };
 }

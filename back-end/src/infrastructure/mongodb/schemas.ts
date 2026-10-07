@@ -419,6 +419,15 @@ export const schemas: Record<string, Document> = {
       properties: {
         ownerUserId: { bsonType: "string" },
         poolId: { enum: ["low", "medium"] },
+        // The hold: `held` while the room is this account's for a start or a running cycle,
+        // `released` once it left. Optional for rows written before holds existed — a row without
+        // it reads as released (see `isLiveMembership`).
+        status: { enum: ["held", "released"] },
+        // When the hold ends: the cycle's end, or the join grace. The TTL index reaps past it.
+        expiresAt: { bsonType: "date" },
+        // When a change to a different room becomes available again (application clock, duration).
+        changeAvailableAt: { bsonType: "date" },
+        releasedAt: { bsonType: ["date", "null"] },
         joinedAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
       },

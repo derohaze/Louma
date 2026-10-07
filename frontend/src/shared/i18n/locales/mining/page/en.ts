@@ -1,7 +1,8 @@
 export default {
   title: "Mining",
-  description: "A 24-hour cycle at a rate chosen for your account by the server.",
-  shortDescription: "Earn LMA by mining a 24-hour cycle.",
+  description:
+    "Up to 10 hours of mining in every 24-hour window, at a rate chosen for your account by the server.",
+  shortDescription: "Earn LMA by mining up to 10 hours a day.",
   loadError: {
     title: "Couldn't load mining state",
     retry: "Try again",
@@ -16,7 +17,8 @@ export default {
     startBusy: "Start mining in progress",
     collect: "Collect reward",
     collectBusy: "Collecting reward",
-    startNext: "Start next cycle",
+    stop: "Stop mining",
+    stopBusy: "Stopping mining",
   },
   historyLink: "View cycle history",
   historyNote: "— every past cycle with its earnings.",

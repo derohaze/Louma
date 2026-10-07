@@ -37,7 +37,7 @@ import { Switch } from "@/shared/ui/switch";
 import { cn } from "@/shared/lib/platform";
 import { findActiveSection, navSections, type NavHref } from "@/shared/lib/wallet";
 import { LIMITS } from "@/shared/lib/platform";
-import { currency, dateText } from "@/shared/lib/wallet";
+import { currency, dateText, loadLocalNote } from "@/shared/lib/wallet";
 import { EmptyState, Icon } from "@/shared/ui/page";
 import { MobileMoreSheet, MobileTabBar, RailLink, SidebarNav } from "@/app/shell/shell-nav";
 import {
@@ -82,7 +82,8 @@ export function WalletPage({
  * A new page only has to register its path in shared/skeletons — the shell needs no change.
  */
 function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: TranslationPath }) {
-  const { user, wallet, transactions, security, loading, error, refresh, signOut } = useWallet();
+  const { user, userId, wallet, transactions, security, loading, error, refresh, signOut } =
+    useWallet();
   const { isDark, toggle } = useTheme();
   /** Both hooks subscribe to the language, so a switch re-renders the whole chrome at once. */
   const t = useT("shell");
@@ -152,7 +153,11 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
     ? []
     : transactions
         .filter((tx) =>
-          `${tx.counterpartyAddress} ${tx.note} ${tx.transferId}`.toLowerCase().includes(query),
+          // Both notes are searched, the same way the transactions page searches them: the one on
+          // record and the personal one this device holds.
+          `${tx.counterpartyAddress} ${tx.note} ${loadLocalNote(userId, tx.transferId)} ${tx.transferId}`
+            .toLowerCase()
+            .includes(query),
         )
         .slice(0, searchTransactionLimit)
         .map((tx) => ({

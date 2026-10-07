@@ -155,7 +155,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "color-scheme", content: "light dark" },
       // Private wallet app: never indexed, never followed. Belt and suspenders with
-      // robots.txt (Disallow: /) so a mis-served header cannot expose auth routes.
+      // robots.txt (Disallow: /) so a mis-served header cannot expose auth routes. The
+      // page-level directive is the one that holds for a URL someone already knows and
+      // links to: robots.txt only asks crawlers not to fetch, it never removes a page
+      // that was discovered elsewhere from an index.
+      { name: "robots", content: "noindex, nofollow" },
       { title: translateIn(match.context.language, "shell.document.title") },
       {
         name: "description",

@@ -9,6 +9,7 @@ import {
   buildFeatureMap,
   buildNormalizedVector,
   decideClusterMatch,
+  isNearCloneMatch,
   deviceKeyHash,
   digestFeatureMap,
   ipHash,
@@ -71,6 +72,16 @@ export interface DeviceResolution {
   machineKey: string | null;
   /** Every identity the resolved record itself is known by (machine key and browser key). */
   equivalentLeaseKeys: string[];
+  /**
+   * The stable anchor of a *known* machine this observation matched as a near clone (the strong
+   * same-model band of `decideClusterMatch`) without being merged into it; null in every other case.
+   *
+   * The new record carries its own immutable anchor, so an economic limit keyed on the anchor alone
+   * would open a second allowance beside the matched machine's stopped segment — one machine
+   * collecting a fresh 10h window per edited hardware slot. Callers that key such a limit (the shared
+   * device quota) use this anchor instead, which keeps one machine to one allowance.
+   */
+  quotaAnchor: string | null;
   isNew: boolean;
   evidence: DeviceEvidence;
   /** Server-owned trust state of the resolved cluster; never derived from the payload. */
@@ -176,6 +187,7 @@ export async function resolveOrCreateDevice(input: {
     score: number;
     match: ClusterMatch;
     isNew: boolean;
+    quotaAnchor?: string | null;
   }): DeviceResolution => ({
     device: args.device,
     signature,
@@ -190,6 +202,7 @@ export async function resolveOrCreateDevice(input: {
     machineKey,
     equivalentLeaseKeys: leaseKeysOf(machineKey, args.device, args.device.deviceKeyHash),
     trustState: trustStateOf(args.device),
+    quotaAnchor: args.quotaAnchor ?? null,
   });
 
   // 1. Exact continuity: same browser key, same key hash, or same signature. Each of these is a
@@ -340,6 +353,14 @@ export async function resolveOrCreateDevice(input: {
     score: best?.identity ? 100 : decided.score,
     match: decided,
     isNew: true,
+    // A near clone is enrolled as its own record, but it is still the machine it matched for every
+    // economic purpose: the shared 10h device quota is keyed on this anchor so editing a hardware
+    // slot cannot buy a second allowance next to the first account's stopped segment. Every other
+    // verdict leaves it null — a weak match must not lend its allowance to an unrelated computer.
+    quotaAnchor:
+      best && isNearCloneMatch(decided)
+        ? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
+        : null,
   });
 }
 

@@ -33,7 +33,11 @@ export interface MiningSessionRecord {
    * Missing on rows written before the quota (treated as `startedAt`).
    */
   accountWindowStart?: Date | null;
-  /** Canonical device quota subject (`machineKey ?? device.publicId`); null when no device was bound. */
+  /**
+   * Canonical device quota subject: the resolved cluster's stable machine anchor, else the
+   * cluster id (see `deviceQuotaKeyFor`). Null when no device identity was available — with
+   * the admission guard switched off and no machine traits in the evidence.
+   */
   deviceQuotaKey?: string | null;
   /** Anchor of the shared 10h/24h device window; null when no device was bound. */
   deviceWindowStart?: Date | null;
