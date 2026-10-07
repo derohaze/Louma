@@ -15,13 +15,6 @@ await redis.connect();
 
 try {
   await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled, observationTtlSeconds: config.lmdg.observationTtlSeconds });
-  const walletsNeedingAddressMigration = await db.collection("wallets").countDocuments({ addressVersion: 0 });
-  if (walletsNeedingAddressMigration > 0) {
-    throw new Error(
-      `Refusing to serve while ${walletsNeedingAddressMigration} wallet addresses are still legacy. ` +
-        "Run the built `migrate-wallet-addresses` script with --execute, --confirm-database=<database>, and --backup-confirmed against the intended database, then restart.",
-    );
-  }
   const app = await buildApp({ config, collections: getCollections(db), mongoClient: client, redis });
   redis.describe().then((state) => {
     app.log.info({ redis: state.status }, "redis_state_at_boot");

@@ -40,8 +40,8 @@ const withoutControlCharacters = (value: string): string =>
 export const sanitizeText = (value: string, maxLength: number): string =>
   withoutControlCharacters(value).replace(/\s+/g, " ").trim().slice(0, maxLength);
 
-/** Canonical wallet address: the fixed prefix, 26 Crockford symbols, and two checksum symbols. */
-const WALLET_ADDRESS_PATTERN = /^LMA[0-7][0-9A-HJKMNP-TV-Z]{27}$/;
+/** Wallet address: the ticker plus three groups of four characters. */
+const WALLET_ADDRESS_PATTERN = /^LMA(-[A-Z0-9]{4}){3}$/;
 /** Public handle, written with the leading "@". */
 const HANDLE_PATTERN = /^@[a-z0-9_]{4,24}$/;
 

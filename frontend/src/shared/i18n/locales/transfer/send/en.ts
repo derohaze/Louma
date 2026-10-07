@@ -7,7 +7,7 @@ export default {
   address: {
     savedRecipients: "Saved recipients",
     label: "Recipient wallet address",
-    placeholder: "LMA… or @handle",
+    placeholder: "LMA-XXXX-XXXX-XXXX or @handle",
     own: "This is your own address.",
     note: "Nothing leaves your wallet at this step: the address is checked against the ledger before an amount is even asked for.",
     checking: "Checking the address…",
@@ -50,7 +50,7 @@ export default {
     send: "Send {amount}",
   },
   errors: {
-    invalidTarget: "Enter a valid Louma wallet address or a @handle.",
+    invalidTarget: "Enter a Louma wallet address (LMA-XXXX-XXXX-XXXX) or a @handle.",
     ownAddress: "This is your own address. Use another wallet.",
     quoteFailed: "The amount could not be quoted. Try again.",
     insufficient: "That is more than this wallet holds. {balance} is available.",

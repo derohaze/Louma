@@ -121,8 +121,7 @@ export async function startMining(input: {
     if (!mining.settlementEnabled) {
       throw serviceUnavailable("mining_settlement_disabled", "Mining settlement is temporarily paused; the finished cycle must be closed before a new one can start.");
     }
-    const bound = await loadWalletAndAccount(collections, input.ownerUserId, active.walletId, active.ledgerAccountId);
-    const closed = await settleSession({ collections, mongoClient: input.mongoClient, config: { ...config, ...poolsLive }, session: active, ...bound, correlationId: input.correlationId });
+    const closed = await settleSession({ collections, mongoClient: input.mongoClient, config: { ...config, ...poolsLive }, session: active, wallet, walletAccount, correlationId: input.correlationId });
     // An unconfirmed close is a failure, not a success: opening a new cycle now would collide
     // with the still-active one on the unique index and converge on the old cycle, reporting
     // "success" for a start that never happened.

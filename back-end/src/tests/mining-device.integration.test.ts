@@ -1082,7 +1082,7 @@ test("NEAR-CLONE QUOTA: an edited identity slot cannot buy a second allowance on
   assert.equal((edited.body["error"] as { code: string }).code, "mining_quota_exhausted");
   assert.match((edited.body["error"] as { message: string }).message, /device/);
   assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: borrower.userId, status: "active" }), 0);
-  // C is close to B but outside A's near-clone band; it must receive its own allowance.
+  // C is close to B but differs from A in four core slots. Its allowance must still follow A.
   const successor = await register("clone-quota-successor");
   const chained = await call("POST", "/api/v1/mining/start", {
     token: successor.accessToken,
@@ -1097,12 +1097,8 @@ test("NEAR-CLONE QUOTA: an edited identity slot cannot buy a second allowance on
       browserKeyPublicKey: `key-clone-quota-c-${RUN}`,
     } },
   });
-  assert.equal(chained.status, 200, JSON.stringify(chained.body));
-  assert.equal((chained.body["session"] as { durationSeconds: number }).durationSeconds, MINING_DAILY_QUOTA_SECONDS);
-  const clone = await collections.miningDevices.findOne({ browserKeyPublicKey: `key-clone-quota-c-${RUN}` });
-  assert.ok(clone);
-  assert.equal(clone.quotaAnchorHash ?? null, null, "C must not inherit A's quota by matching B alone");
-  assert.equal((await call("POST", "/api/v1/mining/stop", { token: successor.accessToken })).status, 200);
+  assert.equal(chained.status, 409, JSON.stringify(chained.body));
+  assert.equal((chained.body["error"] as { code: string }).code, "mining_quota_exhausted");
   const cpuEdited = await register("clone-quota-cpu");
   const changedClass = await call("POST", "/api/v1/mining/start", {
     token: cpuEdited.accessToken,
@@ -1115,9 +1111,8 @@ test("NEAR-CLONE QUOTA: an edited identity slot cannot buy a second allowance on
       browserKeyPublicKey: `key-clone-quota-cpu-${RUN}`,
     } },
   });
-  assert.equal(changedClass.status, 200, JSON.stringify(changedClass.body));
-  assert.equal((changedClass.body["session"] as { durationSeconds: number }).durationSeconds, MINING_DAILY_QUOTA_SECONDS);
-  assert.equal((await call("POST", "/api/v1/mining/stop", { token: cpuEdited.accessToken })).status, 200);
+  assert.equal(changedClass.status, 409, JSON.stringify(changedClass.body));
+  assert.equal((changedClass.body["error"] as { code: string }).code, "mining_quota_exhausted");
   // A genuinely different machine keeps its own allowance: the limit follows the machine the
   // observation matched, never the caller's account or network.
   const other = await startWith(stranger, "laptop-y", nextSlotEditIp(), "clone-quota-other", SLOT_EDIT_PLATFORM);

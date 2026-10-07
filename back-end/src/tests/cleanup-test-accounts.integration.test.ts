@@ -10,7 +10,6 @@ import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
 import { schemas } from "../infrastructure/mongodb/schemas.js";
 import { ensureCollection } from "../infrastructure/mongodb/validators.js";
-import { generateWalletAddress } from "../modules/wallets/address.js";
 
 /**
  * The test-account cleanup's retained-account behavior, run through the real CLI.
@@ -61,7 +60,7 @@ async function seedAccount(email: string, displayName: string): Promise<SeededAc
     userId: randomUUID(),
     walletId: randomUUID(),
     accountId: randomUUID(),
-    address: generateWalletAddress(),
+    address: `LMA-${randomUUID().slice(0, 4)}-${randomUUID().slice(0, 4)}-${randomUUID().slice(0, 4)}`.toUpperCase(),
   };
   await collections.users.insertOne({
     _id: new ObjectId(),
@@ -79,9 +78,7 @@ async function seedAccount(email: string, displayName: string): Promise<SeededAc
     publicId: account.walletId,
     address: account.address,
     addressNormalized: account.address,
-    addressVersion: 1,
     ownerUserId: account.userId,
-    isPrimary: true,
     status: "active",
     financialVersion: 0,
     createdAt: now,

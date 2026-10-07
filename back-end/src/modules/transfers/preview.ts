@@ -3,7 +3,6 @@ import { ObjectId } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import { displayNameKey, readThrough, type CacheContext } from "../../infrastructure/redis/cache.js";
 import { resolveRecipient } from "../wallets/service.js";
-import { findPrimaryWallet } from "../wallets/service.js";
 import { calculateTransferAmounts, formatMoney, parseMoneyToMinorUnits } from "../ledger/money.js";
 import {
   TRANSFER_AUTHORIZATION_RETENTION_MS,
@@ -71,23 +70,23 @@ export async function previewTransfer(input: {
   displayNameCache?: CacheContext | undefined;
 }) {
   const recipientAddress = parseRecipientAddress(input.recipientAddress);
-  const senderWallet = await findPrimaryWallet(input.collections, input.ownerUserId);
-  if (!senderWallet) throw notFound();
   // Resolving is also the check the sender is asking for: a typo, an address that never existed, or
   // the sender's own wallet all fail here, before any amount is discussed.
-  const recipientWallet = await resolveRecipient({ collections: input.collections, address: recipientAddress, senderWalletId: senderWallet.publicId });
+  const recipientWallet = await resolveRecipient({ collections: input.collections, address: recipientAddress, senderUserId: input.ownerUserId });
   // Cosmetic masking only: a stale display name mis-masks, never misroutes (the transfer executes
   // the wallet ids in the approval, resolved fresh above). Cached briefly to keep the preview cheap.
   const displayName = await loadDisplayName(input.collections, recipientWallet.ownerUserId, input.displayNameCache);
   const recipient = {
     /** The canonical address the transfer will credit — not the spelling the sender typed. */
-    address: recipientWallet.address,
+    address: recipientWallet.customAddress ?? recipientWallet.address,
     displayName: maskDisplayName(displayName),
   };
   if (input.amount === undefined) return { recipient, quote: null, authorization: null };
 
   const amounts = calculateTransferAmounts(parseMoneyToMinorUnits(input.amount));
   const note = normalizeNote(input.note);
+  const senderWallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
+  if (!senderWallet) throw notFound();
   const senderAccount = await input.collections.ledgerAccounts.findOne(
     { walletId: senderWallet.publicId, accountType: "wallet", currency: "LMA" },
     { projection: { balanceMinor: 1 } },
@@ -110,7 +109,7 @@ export async function previewTransfer(input: {
     ownerUserId: input.ownerUserId,
     senderWalletId: senderWallet.publicId,
     intent,
-    intentHash: intentHashOf(intent, senderWallet.publicId),
+    intentHash: intentHashOf(intent),
     // The credential versions the approval was *consumed* under, written by the consume itself:
     // what was proven is a fact about the transfer, not about the quote.
     passwordChangedAt: null,

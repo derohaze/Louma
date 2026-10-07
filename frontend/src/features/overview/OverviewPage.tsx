@@ -103,7 +103,7 @@ function amount(value: string | number): string {
 
 /** Two letters to put on a counterparty's avatar, from whichever spelling of the address there is. */
 function initials(address: string): string {
-  return address.replace(/^LMA/i, "").slice(0, 2).toUpperCase() || "?";
+  return address.replace(/^LMA-/i, "").slice(0, 2).toUpperCase() || "?";
 }
 
 /** How long ago a transfer happened, in the words the board prints under its title. */
