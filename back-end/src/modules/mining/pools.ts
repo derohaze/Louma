@@ -457,7 +457,7 @@ export async function extendPoolHoldToCycle(input: {
     { ownerUserId: input.ownerUserId, poolId: input.poolId, status: "held" },
     { $set: { expiresAt: input.endsAt } },
   );
-  return extended.modifiedCount === 1;
+  return extended.matchedCount === 1;
 }
 
 export async function joinMiningPool(input: {
@@ -524,8 +524,6 @@ export async function joinMiningPool(input: {
       { changeAvailableAt: { $exists: false } },
       { changeAvailableAt: { $lte: now } },
       { poolId: pool.id },
-      { status: { $ne: "held" as const } },
-      { expiresAt: { $lte: now } },
     ],
   };
   const joinWrite = [

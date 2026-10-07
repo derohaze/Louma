@@ -618,15 +618,13 @@ after(async () => {
   await client?.close();
 });
 
-test("PRIVACY: masked or key-only evidence cannot start mining even with no competing cycle", async () => {
+test("PRIVACY: thin evidence is refused, but masked graphics with machine evidence can mine", async () => {
   const account = await register("privacy");
   const salt = "privacy";
   const baseline = deviceEvidence("laptop-x", salt);
   const initialDevices = await collections.miningDevices.countDocuments({});
   for (const device of [
     { browserKeyPublicKey: `key-only-${RUN}`, fingerprintConfidence: 1 },
-    { ...baseline, webglVendor: "Mozilla", webglRenderer: "Mozilla", hardwareConcurrency: 2, audioSampleRate: 44100, deviceMemory: null, timezone: "UTC", timezoneOffsetMinutes: 0 },
-    { ...baseline, webglVendor: null, webglRenderer: null, browserKeyPublicKey: null },
     { ...baseline, hardwareConcurrency: null, maxTouchPoints: null, audioSampleRate: null, colorGamut: null, hdr: null, screenColorDepth: null },
   ]) {
     const result = await call("POST", "/api/v1/mining/start", { token: account.accessToken, body: { device } });
@@ -640,7 +638,9 @@ test("PRIVACY: masked or key-only evidence cannot start mining even with no comp
   assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: account.userId }), 0);
   assert.equal(await collections.miningDeviceQuotas.countDocuments({ subject: account.userId }), 0);
   assert.equal((await call("GET", "/api/v1/mining/state", { token: account.accessToken })).status, 200, "account remains accessible");
-  assert.equal((await startWith(account, "laptop-x", undefined, salt)).status, 200, "identifiable evidence still works after refusals");
+  const started = await call("POST", "/api/v1/mining/start", { token: account.accessToken, body: { device: { ...baseline, webglVendor: "Mozilla", webglRenderer: "Mozilla" } } });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal((await call("POST", "/api/v1/mining/stop", { token: account.accessToken })).status, 200);
 });
 
 test("STALE: future-dated leftover leases cannot block mining without a running session", async () => {
@@ -778,18 +778,18 @@ test("N: a second browser on one computer cannot mine (the reported bypass)", as
   const first = await startWith(accountA, "laptop-x", undefined, salt);
   assert.equal(first.status, 200, JSON.stringify(first.body));
   const second = await startWith(accountB, "laptop-x-second-browser", undefined, salt);
-  assert.equal(second.status, 400, `masked device evidence must be refused: ${JSON.stringify(second.body)}`);
-  assert.equal((second.body["error"] as { code: string }).code, "mining_device_evidence_required");
+  assert.equal(second.status, 409, `the same machine must remain occupied: ${JSON.stringify(second.body)}`);
+  assert.equal((second.body["error"] as { code: string }).code, "mining_device_already_in_use");
 
-  // Masked evidence is refused before resolution: no invented identity or trusted observation.
+  // Both browsers resolve to the occupied machine despite different graphics evidence.
   const observations = await collections.miningDeviceObservations
     .find({ ownerUserId: { $in: [accountA.userId, accountB.userId] } })
     .toArray();
-  assert.equal(observations.length, 1, "only the admitted evidence reaches device observation");
+  assert.equal(observations.length, 2, "both browsers reach device observation");
   assert.equal(new Set(observations.map((observation) => observation.deviceId)).size, 1);
   assert.deepEqual(
     [...new Set(observations.map((observation) => observation.ownerUserId))].sort(),
-    [accountA.userId],
+    [accountA.userId, accountB.userId].sort(),
   );
   assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: accountB.userId }), 0);
   assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: accountB.userId }), 0);
@@ -947,14 +947,13 @@ test("REAL-WORLD REPORT: four engines on one computer yield exactly one mining c
   const first = await startWith(chrome, "laptop-x", undefined, salt);
   assert.equal(first.status, 200, JSON.stringify(first.body));
   const edgeStart = await startWith(edge, "laptop-x-second-browser", undefined, salt);
-  assert.equal(edgeStart.status, 400, `masked graphics must be refused before correlation: ${JSON.stringify(edgeStart.body)}`);
+  assert.equal(edgeStart.status, 409, `Edge must resolve to the same machine: ${JSON.stringify(edgeStart.body)}`);
   const firefoxStart = await startWith(firefox, "laptop-x-firefox-engine", undefined, salt);
   assert.equal(firefoxStart.status, 409, `Firefox must resolve to the same machine: ${JSON.stringify(firefoxStart.body)}`);
   const braveStart = await startWith(brave, "laptop-x-second-browser", undefined, salt);
-  assert.equal(braveStart.status, 400, `masked graphics must be refused before correlation: ${JSON.stringify(braveStart.body)}`);
-  // Insufficient evidence is not reported as a live cycle; identifiable Firefox hits the lease.
+  assert.equal(braveStart.status, 409, `Brave must resolve to the same machine: ${JSON.stringify(braveStart.body)}`);
   for (const denied of [edgeStart, braveStart]) {
-    assert.equal((denied.body["error"] as { code: string }).code, "mining_device_evidence_required");
+    assert.equal((denied.body["error"] as { code: string }).code, "mining_device_already_in_use");
   }
   assert.equal((firefoxStart.body["error"] as { code: string }).code, "mining_device_already_in_use");
   const activeLeases = await collections.miningDeviceLeases.countDocuments({ ownerUserId: { $in: [chrome.userId, edge.userId, firefox.userId, brave.userId] }, status: "active" });
@@ -1063,7 +1062,9 @@ test("NEAR-CLONE QUOTA: an edited identity slot cannot buy a second allowance on
   );
   const stopped = await call("POST", "/api/v1/mining/stop", { token: owner.accessToken });
   assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
-  const base = slotEditEvidence("laptop-x-firefox-engine", salt);
+  // Keep corroborators stable here: this test measures quota inheritance, while cross-engine
+  // omission is covered separately. Omitted corroborators can match another test's live fixture.
+  const base = slotEditEvidence("laptop-x", salt);
   const edited = await call("POST", "/api/v1/mining/start", {
     token: borrower.accessToken,
     ip: nextSlotEditIp(),
@@ -1081,6 +1082,37 @@ test("NEAR-CLONE QUOTA: an edited identity slot cannot buy a second allowance on
   assert.equal((edited.body["error"] as { code: string }).code, "mining_quota_exhausted");
   assert.match((edited.body["error"] as { message: string }).message, /device/);
   assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: borrower.userId, status: "active" }), 0);
+  // C is close to B but differs from A in four core slots. Its allowance must still follow A.
+  const successor = await register("clone-quota-successor");
+  const chained = await call("POST", "/api/v1/mining/start", {
+    token: successor.accessToken,
+    ip: nextSlotEditIp(),
+    body: { device: {
+      ...base,
+      colorGamut: base["colorGamut"] === "p3" ? "srgb" : "p3",
+      audioSampleRate: 48000,
+      hdr: !base["hdr"],
+      screenColorDepth: base["screenColorDepth"] === 24 ? 30 : 24,
+      visitorId: `visitor-clone-quota-c-${RUN}`,
+      browserKeyPublicKey: `key-clone-quota-c-${RUN}`,
+    } },
+  });
+  assert.equal(chained.status, 409, JSON.stringify(chained.body));
+  assert.equal((chained.body["error"] as { code: string }).code, "mining_quota_exhausted");
+  const cpuEdited = await register("clone-quota-cpu");
+  const changedClass = await call("POST", "/api/v1/mining/start", {
+    token: cpuEdited.accessToken,
+    ip: nextSlotEditIp(),
+    body: { device: {
+      ...base,
+      hardwareConcurrency: base["hardwareConcurrency"] === 32 ? 2 : 32,
+      colorGamut: base["colorGamut"] === "p3" ? "srgb" : "p3",
+      visitorId: `visitor-clone-quota-cpu-${RUN}`,
+      browserKeyPublicKey: `key-clone-quota-cpu-${RUN}`,
+    } },
+  });
+  assert.equal(changedClass.status, 409, JSON.stringify(changedClass.body));
+  assert.equal((changedClass.body["error"] as { code: string }).code, "mining_quota_exhausted");
   // A genuinely different machine keeps its own allowance: the limit follows the machine the
   // observation matched, never the caller's account or network.
   const other = await startWith(stranger, "laptop-y", nextSlotEditIp(), "clone-quota-other", SLOT_EDIT_PLATFORM);

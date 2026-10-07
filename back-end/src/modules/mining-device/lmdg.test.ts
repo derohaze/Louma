@@ -11,7 +11,6 @@ import {
   bucketScreenDepth,
   bucketTimezoneOffset,
   detectImpossibleUaPlatform,
-  hasIdentifyingGraphics,
   ipFamilyOf,
   normalizeSignals,
   parseBrowserFamily,
@@ -25,6 +24,7 @@ import {
   deviceKeyHash,
   digestFeatureMap,
   hmacHex,
+  isNearCloneMatch,
   isPresentationFeature,
   isRenderingFeature,
   learnFeatureProfile,
@@ -178,17 +178,19 @@ test("collector failures never become shared evidence", () => {
   assert.equal(features.raw["fonts"], "fonts-x");
 });
 
-test("masked graphics cannot identify hardware, regardless of UA, key or confidence", () => {
+test("masked or missing graphics preserve the machine identity when core evidence is available", () => {
+  const core = { audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 };
+  const expected = machineKeyHash(SECRET, observedOf(evidence(core)).features.raw);
+  assert.ok(expected);
   for (const renderer of [null, "Mozilla", "mozilla", "WebKit WebGL", "brave", "no-webgl", "unknown"]) {
-    assert.equal(hasIdentifyingGraphics(sanitizeEvidence(evidence({
+    const observed = observedOf(evidence({
+      ...core,
       webglVendor: "Mozilla", webglRenderer: renderer,
       browserKeyPublicKey: "fresh-key", fingerprintConfidence: 1,
-    }))), false);
+    }));
+    assert.equal(machineKeyHash(SECRET, observed.features.raw), expected);
   }
-  for (const renderer of ["ANGLE (NVIDIA GeForce RTX 3060)", "AMD Radeon RX 6600", "Intel Iris Xe", "Apple M2", "Mesa Intel UHD Graphics"]) {
-    assert.equal(hasIdentifyingGraphics(sanitizeEvidence(evidence({ webglVendor: "vendor", webglRenderer: renderer }))), true);
-  }
-  assert.equal(hasIdentifyingGraphics(sanitizeEvidence({ browserKeyPublicKey: "new-key" })), false);
+  assert.equal(machineKeyHash(SECRET, observedOf({ browserKeyPublicKey: "new-key" }).features.raw), null);
 });
 
 test("device hashes are keyed HMACs, deterministic per secret, and secret-sensitive", () => {
@@ -586,6 +588,16 @@ test("too little hardware evidence yields no machine key rather than a fake iden
   );
   assert.ok(Object.keys(thin.features.machine).length < MIN_MACHINE_FEATURES);
   assert.equal(machineKeyHash(SECRET, thin.features.raw), null, "a thin report must not become an identity");
+});
+
+test("editing CPU class and another core slot cannot escape the shared quota band", () => {
+  const base = evidence({ audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 });
+  const known = profileOf(base);
+  const edited = observedOf({ ...base, hardwareConcurrency: 32, colorGamut: "p3" });
+  const match = matchDeviceFeatures({ featureProfile: known.profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null }, edited.features, SECRET);
+  assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
+  assert.equal(isNearCloneMatch(match), true);
+  assert.notEqual(decideClusterMatch(match, 78, 55), "same", "quota sharing does not merge device records");
 });
 
 test("presentation and rendering features are classified for tamper detection", () => {

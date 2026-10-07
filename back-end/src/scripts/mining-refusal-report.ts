@@ -128,16 +128,17 @@ async function main(): Promise<void> {
 
     // Per-group accounts are distinct within each event/reason group only, so their sum counts an
     // account once per reason it hit. The headline total is the distinct owners across the report.
-    const distinctOwners = await collections.securityEvents.distinct("ownerUserId", {
-      ...refusalFilter,
-      ownerUserId: { $ne: null },
-    });
+    const ownerCount = await collections.securityEvents.aggregate<{ accounts: number }>([
+      { $match: { ...refusalFilter, ownerUserId: { $ne: null } } },
+      { $group: { _id: "$ownerUserId" } },
+      { $count: "accounts" },
+    ], { allowDiskUse: true }).next();
     const refusals = groups.filter((group) => REFUSAL_EVENT_TYPES.has(text(group._id.eventType)));
     const totals = {
       hours,
       since: since.toISOString(),
       events: groups.reduce((sum, group) => sum + group.events, 0),
-      accounts: distinctOwners.length,
+      accounts: ownerCount?.accounts ?? 0,
       groupAccounts: groups.reduce((sum, group) => sum + group.accounts, 0),
       refusalEvents: refusals.reduce((sum, group) => sum + group.events, 0),
       grounds: groups.length,

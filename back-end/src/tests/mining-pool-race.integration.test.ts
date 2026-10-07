@@ -1,13 +1,14 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { Db, MongoClient } from "mongodb";
+import { ObjectId, type Db, type MongoClient } from "mongodb";
 import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
+import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { schemas } from "../infrastructure/mongodb/schemas.js";
 import { ensureCollection } from "../infrastructure/mongodb/validators.js";
-import { joinMiningPool, leaveMiningPool } from "../modules/mining/pools.js";
+import { extendPoolHoldToCycle, joinMiningPool, leaveMiningPool } from "../modules/mining/pools.js";
 import { setMiningSetting } from "../modules/mining/settings.js";
 
 /**
@@ -80,6 +81,7 @@ before(async () => {
   db = connection.db;
   await ensureCollection(db, "mining_pool_members", schemas["mining_pool_members"]!);
   await ensureCollection(db, "mining_settings", schemas["mining_settings"]!);
+  await ensureDatabaseIndexes(db);
   collections = getCollections(db);
   // No room-change throttle here: these tests stage interleavings of the cap trim, and a switcher
   // must be able to move rooms inside one test. The throttle has its own test below, with the
@@ -98,6 +100,33 @@ after(async () => {
   if (!client) return;
   await db.dropDatabase().catch(() => undefined);
   await client.close();
+});
+
+test("a pending join cannot bypass a cooldown after the winning room is released or expires", async () => {
+  const config = { ...poolsConfig, miningPools: { ...poolsConfig.miningPools, switchCooldownSeconds: 60 } };
+  for (const mode of ["released", "expired"] as const) {
+    const ownerUserId = `cooldown-race-${mode}-${RUN}`;
+    const parked = deferred();
+    const release = deferred();
+    const delayed = membershipUpdateDelayedFor(collections.miningPoolMembers, ownerUserId, () => parked.resolve(), release.promise);
+    const pending = joinMiningPool({ collections: { ...collections, miningPoolMembers: delayed }, config, ownerUserId, poolId: "medium" });
+    const refusal = assert.rejects(pending, (error: unknown) => (error as { code?: unknown }).code === "mining_pool_switch_cooldown");
+    await parked.promise;
+    // Write the winning room directly so this scenario is independent of the one-seat capacity test.
+    await collections.miningPoolMembers.insertOne({ _id: new ObjectId(), ownerUserId, poolId: "low", status: mode === "released" ? "released" : "held", expiresAt: new Date(Date.now() - 1000), changeAvailableAt: new Date(Date.now() + 60_000), joinedAt: new Date(), updatedAt: new Date(), releasedAt: mode === "released" ? new Date() : null });
+    release.resolve();
+    await refusal;
+    assert.equal((await collections.miningPoolMembers.findOne({ ownerUserId }))?.poolId, "low");
+    await collections.miningPoolMembers.deleteOne({ ownerUserId });
+  }
+});
+
+test("extending an already aligned hold succeeds without modifying it", async () => {
+  const ownerUserId = `aligned-hold-${RUN}`;
+  const endsAt = new Date(Date.now() + 60_000);
+  await collections.miningPoolMembers.insertOne({ _id: new ObjectId(), ownerUserId, poolId: "medium", status: "held", expiresAt: endsAt, joinedAt: new Date(), updatedAt: new Date(), releasedAt: null });
+  assert.equal(await extendPoolHoldToCycle({ collections, ownerUserId, poolId: "medium", endsAt }), true);
+  await collections.miningPoolMembers.deleteOne({ ownerUserId });
 });
 
 test("a join whose write lands after another join's success loses the seat, not the successful member", async () => {
