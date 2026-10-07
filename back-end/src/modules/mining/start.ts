@@ -5,7 +5,7 @@ import type { AppConfig } from "../../config/env.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { pickRateUnits, rateToString, totalAccrualMinor } from "./rate.js";
 import { loadMiningSettings } from "./settings.js";
-import type { CacheContext } from "../../infrastructure/redis/cache.js";
+import { invalidate, poolMembershipKey, type CacheContext } from "../../infrastructure/redis/cache.js";
 import { badRequest, conflict, forbidden, serviceUnavailable } from "../../shared/errors.js";
 import {
   DEVICE_EVIDENCE_MISSING_CODE,
@@ -14,19 +14,23 @@ import {
   DEVICE_IN_USE_MESSAGE,
   DEVICE_NETWORK_IN_USE_CODE,
   DEVICE_NETWORK_IN_USE_MESSAGE,
+  LMDG_EVENT_TYPES,
 } from "../mining-device/policy.js";
 import { LEDGER_AMOUNT_MAX_MINOR } from "../../shared/types.js";
 import { isDuplicateKeyError } from "../../shared/mongo-retry.js";
 import { allowedSessionSeconds } from "./quota.js";
 import { loadAccountQuota, loadDeviceQuota } from "./quota-store.js";
 import { deviceQuotaKeyFor } from "./quota.js";
-import { applyPoolFactor, drawPoolFactorBps, getPoolById } from "./pools.js";
+import { applyPoolFactor, drawPoolFactorBps, extendPoolHoldToCycle, getPoolById, isLiveMembership } from "./pools.js";
 import {
   buildFeatureMap,
+  ipHash,
   machineFeatureMap,
   machineKeyHash,
 } from "../mining-device/identity.js";
-import { normalizeSignals, sanitizeEvidence } from "../mining-device/signals.js";
+import { hasIdentifyingGraphics, normalizeSignals, sanitizeEvidence } from "../mining-device/signals.js";
+import { isNetworkResident } from "../mining-device/enrollment.js";
+import { networkLockKeyFor } from "../mining-device/lease.js";
 import {
   assessMiningStart,
   creditGrantedStart,
@@ -34,6 +38,7 @@ import {
   resolveIpIntel,
   resolveOrCreateDevice,
 } from "../mining-device/service.js";
+import { findLiveLeases, findLiveLeasesOnNetwork, releaseInactiveLeases } from "../mining-device/repository.js";
 import { settleSession } from "./settle.js";
 import { getMiningState, loadActiveSession, loadWalletAndAccount } from "./state.js";
 import type {
@@ -79,9 +84,11 @@ export async function startMining(input: {
 
   const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
 
-  // Pool gate: mining is only possible from inside one of the two system pools.
+  // Pool gate: mining is only possible from inside one of the two system pools, and only while the
+  // room is actually held — a hold whose deadline passed (a cycle that ended, or a join nobody
+  // started from) is not a membership, so it can never open a cycle.
   const membership = await collections.miningPoolMembers.findOne({ ownerUserId: input.ownerUserId });
-  if (!membership) {
+  if (!membership || !isLiveMembership(membership, Date.now())) {
     await recordSecurityEvent({
       collections,
       ownerUserId: input.ownerUserId,
@@ -184,12 +191,30 @@ export async function startMining(input: {
   // duplicates). A racing start cannot take a duplicate row and open a second cycle on one machine.
   let leaseKeys: string[] = [];
   let leaseDeviceId: string | null = null;
+  // The reserved per-network lease key this start takes to serialize the network admission decision
+  // (null when it takes none: no leases, a resident of the network, or an unobserved peer address).
+  let networkLockKey: string | null = null;
+  // The server-observed network hash of this start, kept for the duplicate-key classification below.
+  let startNetworkHash: string | null = null;
   // The device cluster this start resolves to, credited with one admission once the cycle commits.
   let creditDeviceId: string | null = null;
-  // Machine identity for the shared 10h device quota (`machineKey ?? cluster id`).
-  // Hoisted so the quota intersection below sees the same identity the lease was
-  // assessed on, even in monitor mode (no lease) — quota still binds the machine.
-  let resolvedMachineKey: string | null = null;
+  // Canonical subject of the shared 10h device quota. Hoisted so the quota intersection below sees
+  // the same identity admission was assessed on — including in monitor mode, where no lease is
+  // taken: the quota binds the machine whether or not the lease was enforced.
+  //
+  // It is the cluster's *immutable* machine anchor, never `resolution.machineKey`. The two differ
+  // as soon as a machine's reported traits drift: resolution still converges on the existing
+  // record, but its machine key for this observation is a new value, and keying the quota on it
+  // would let a second account start on a fresh allowance while the first account's stopped
+  // segment sat under the old key — one machine mining 20 hours in one window.
+  //
+  // A near clone (`resolution.quotaAnchor`) matched a known machine strongly enough to be that
+  // machine with edited hardware slots but was *not* merged into it, so its own anchor would start a
+  // second window next to the matched machine's. The matched machine's anchor wins there: accounts
+  // alternating on one machine share one allowance whether or not a slot was edited between them.
+  let deviceQuotaSubject: string | null = null;
+  // The resolved cluster id, stored on the segment as `deviceId`. Null when no cluster was resolved
+  // (guard off, or no evidence supplied): the quota can still bind by machine identity alone.
   let resolvedDevicePublicId: string | null = null;
   if (deviceLeaseEnabled && input.device) {
     // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
@@ -208,15 +233,13 @@ export async function startMining(input: {
       }).catch(() => undefined);
       throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
     }
-    const intel = await resolveIpIntel({ config, ip: input.device.ip });
-    // Evidence with neither a machine identity nor a browser key cannot name a device. This is
-    // checked from the sanitized evidence *before* registration: resolving first would insert a
-    // device row that the insufficient-evidence rejection then abandons, so repeated rejected
-    // junk requests would accumulate unused records in `miningDevices`.
+    // Require machine evidence before registration or network calls. A caller can generate any
+    // number of browser keys; possession of a new key must never substitute for missing or masked
+    // machine evidence. Refusing a start here creates no cluster, lease, quota or account block.
     const preEvidence = sanitizeEvidence(input.device.evidenceRaw);
     const preSignals = normalizeSignals(preEvidence);
     const preMachineKey = machineKeyHash(config.encryptionKey, machineFeatureMap(buildFeatureMap(preSignals)));
-    if (preMachineKey === null && !preEvidence.browserKeyPublicKey) {
+    if (preMachineKey === null || !hasIdentifyingGraphics(preEvidence)) {
       await recordSecurityEvent({
         collections,
         ownerUserId: input.ownerUserId,
@@ -228,6 +251,7 @@ export async function startMining(input: {
       }).catch(() => undefined);
       throw badRequest(DEVICE_EVIDENCE_MISSING_CODE, DEVICE_EVIDENCE_MISSING_MESSAGE);
     }
+    const intel = await resolveIpIntel({ config, ip: input.device.ip });
     const resolution = await resolveOrCreateDevice({
       collections,
       config,
@@ -237,11 +261,19 @@ export async function startMining(input: {
       ownerUserId: input.ownerUserId,
       correlationId: input.correlationId,
     });
-    resolvedMachineKey = resolution.machineKey;
     resolvedDevicePublicId = resolution.device.publicId;
+    // The quota subject is the cluster's anchor — the server-owned machine digest written once at
+    // enrollment and never rewritten — falling back to the record's current machine key for rows
+    // written before the anchor existed, then to the cluster id for a browser-only identity.
+    deviceQuotaSubject =
+      resolution.quotaAnchor ??
+      deviceQuotaKeyFor(
+        resolution.device.anchorHash ?? resolution.device.machineKeyHash ?? null,
+        resolution.device.publicId,
+      );
     // Defense in depth: the post-resolution check below repeats the same refusal on the resolved
     // identities, in case sanitization and resolution ever disagree about what counts as evidence.
-    if (resolution.machineKey === null && !resolution.evidence.browserKeyPublicKey) {
+    if (resolution.machineKey === null || !hasIdentifyingGraphics(resolution.evidence)) {
       await recordSecurityEvent({
         collections,
         ownerUserId: input.ownerUserId,
@@ -316,13 +348,24 @@ export async function startMining(input: {
           }).catch(() => undefined);
           throw conflict(DEVICE_NETWORK_IN_USE_CODE, DEVICE_NETWORK_IN_USE_MESSAGE);
         }
-        throw forbidden("mining_device_rejected", DEVICE_IN_USE_MESSAGE);
+        throw forbidden("mining_device_rejected", "Mining could not pass the device security checks. Your account remains available; try again later or use a browser that exposes device information.");
       }
       if (eligibility.decision === "challenge") {
         throw conflict("mining_device_challenge_required", "Additional device verification is required before mining can start.");
       }
       leaseKeys = eligibility.equivalentLeaseKeys;
       leaseDeviceId = eligibility.device.publicId;
+      // Serialize the network admission decision: a non-resident start leases the reserved network
+      // token, so a second fresh identity racing on this network collides on the unique active-lease
+      // index instead of passing the pre-transaction check before the winner commits. Residents are
+      // exempt here exactly as they are exempt from the rule itself (see ENROLL-C).
+      if (config.lmdg.networkLeaseLock && leaseKeys.length > 0 && input.device?.ip) {
+        const networkHash = ipHash(config.encryptionKey, input.device.ip);
+        if (networkHash && !isNetworkResident(eligibility.device, networkHash, config.lmdg, Date.now())) {
+          startNetworkHash = networkHash;
+          networkLockKey = networkLockKeyFor(networkHash);
+        }
+      }
     } else {
       // Rollout mode: a conflict is audited above and never enforced — including the lease it would
       // otherwise have taken, which is the whole point of running in monitor. Enforce mode (the
@@ -333,9 +376,23 @@ export async function startMining(input: {
     // A cycle is about to be created on this cluster whichever mode ran (monitor only skips the
     // lease, not the cycle), so the admission is credited to it once the session commits below.
     creditDeviceId = eligibility.device.publicId;
-    // Monitor may have refused the lease but still resolved the machine: keep the
-    // resolution identity for quota (quota binds even when the lease is skipped).
-    if (resolvedDevicePublicId === null) resolvedDevicePublicId = eligibility.device.publicId;
+    // Monitor mode deliberately clears the lease keys above, but it must not clear the quota
+    // subject: the device quota is an economic limit, not an admission rule, so it binds the
+    // machine even when the lease it would have taken is skipped. Nothing to re-read here —
+    // `eligibility.device` is `resolution.device`, so the subject set after resolution stands.
+  } else if (input.device) {
+    // The admission guard is switched off (`LMDG_ENABLED=false` / `LMDG_DEVICE_LEASE_ENABLED=false`).
+    // That is the operational escape hatch for admission control, and it must not double as a
+    // switch for the per-device quota: turning the guard off would otherwise silently lift the
+    // 10h machine limit along with the lease, and store a null quota key on every segment.
+    //
+    // The identity is therefore derived straight from the sanitized evidence — pure arithmetic, no
+    // registration, no observation, no enrollment budget, so the escape hatch keeps working and a
+    // start cannot be refused by device machinery that was switched off. Only the machine-key case
+    // is covered: without resolution there is no cluster to fall back to, so evidence carrying too
+    // few machine traits leaves the account-only quota (the documented browser-only degradation).
+    const guardOffSignals = normalizeSignals(sanitizeEvidence(input.device.evidenceRaw));
+    deviceQuotaSubject = machineKeyHash(config.encryptionKey, machineFeatureMap(buildFeatureMap(guardOffSignals)));
   }
 
   // 10h/24h quota intersection, computed on the server clock after admission so a
@@ -360,8 +417,8 @@ export async function startMining(input: {
   }
   let deviceQuotaKey: string | null = null;
   let deviceQuota: { remainingSeconds: number; windowRemainingSeconds: number; windowStartMs: number } | null = null;
-  if (resolvedDevicePublicId !== null) {
-    deviceQuotaKey = deviceQuotaKeyFor(resolvedMachineKey, resolvedDevicePublicId);
+  if (deviceQuotaSubject !== null) {
+    deviceQuotaKey = deviceQuotaSubject;
     const loaded = await loadDeviceQuota(collections, deviceQuotaKey, quotaNowMs);
     deviceQuota = loaded;
     if (loaded.remainingSeconds <= 0) {
@@ -446,26 +503,20 @@ export async function startMining(input: {
   };
 
   if (leaseKeys.length > 0) {
-    // Expired rows stay `active` in the database — expiry is a fact about the clock, not a write —
-    // and the partial unique index still refuses a new lease while one exists. Admission already
-    // ignores expired leases, so release them here (any owner's: an expired lease protects nothing)
-    // before the insert, or the new account would fail with `mining_start_failed` until the former
-    // owner starts again or the row is released by hand.
-    await collections.miningDeviceLeases.updateMany(
-      { deviceClusterId: { $in: leaseKeys }, status: "active", leaseEndsAt: { $lte: new Date(Date.now()) } },
-      { $set: { status: "released", updatedAt: new Date(Date.now()) } },
-    ).catch(() => undefined);
     // Atomic commit: the cycle and its device lease land together or not at all. The partial
     // unique index on active leases is the concurrency lock — two accounts racing on one device
-    // cannot both insert; the loser maps to the dedicated rejection code below.
+    // cannot both insert; the loser maps to the dedicated rejection code below. The network token is
+    // part of the same insert, so it serializes racing starts on one network the same way.
+    const transactionLeaseKeys = networkLockKey === null ? leaseKeys : [...leaseKeys, networkLockKey];
     const mongoSession: ClientSession = input.mongoClient.startSession();
     try {
       await mongoSession.withTransaction(
         async () => {
+          await releaseInactiveLeases(collections, transactionLeaseKeys, Date.now(), mongoSession);
           await collections.miningSessions.insertOne({ _id: new ObjectId(), ...session } as MiningSessionRecord, { session: mongoSession });
           await insertLeaseInSession({
             collections,
-            leaseKeys,
+            leaseKeys: transactionLeaseKeys,
             deviceId: leaseDeviceId,
             // The network this cycle is taken from is recorded on its lease, so the network lock can
             // read live leases per network instead of guessing from device records.
@@ -483,9 +534,29 @@ export async function startMining(input: {
       if (isDuplicateKeyError(error)) {
         // Distinguish the loser's cause: a lease conflict means another account holds this
         // device; otherwise it was this account's own concurrent start converging.
-        const lease = await collections.miningDeviceLeases.findOne({ deviceClusterId: { $in: leaseKeys }, status: "active" });
-        if (lease && lease.ownerUserId !== input.ownerUserId && lease.leaseEndsAt.getTime() > Date.now()) {
+        const lease = (await findLiveLeases(collections, leaseKeys, Date.now())).find((entry) => entry.ownerUserId !== input.ownerUserId);
+        if (lease) {
           throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
+        }
+        // The loser of the network serialization is refused with the network code: another identity
+        // committed a live cycle on this network while this start was in flight, which the
+        // pre-transaction check could not see.
+        if (networkLockKey !== null && startNetworkHash !== null) {
+          const foreignNetworkLease = (await findLiveLeasesOnNetwork(collections, startNetworkHash, Date.now())).find(
+            (entry) => entry.ownerUserId !== input.ownerUserId,
+          );
+          if (foreignNetworkLease) {
+            await recordSecurityEvent({
+              collections,
+              ownerUserId: input.ownerUserId,
+              sessionId: null,
+              eventType: LMDG_EVENT_TYPES.networkInUse,
+              outcome: "failure",
+              correlationId: input.correlationId,
+              metadata: { deviceId: leaseDeviceId, reason: "network_lease_race" },
+            }).catch(() => undefined);
+            throw conflict(DEVICE_NETWORK_IN_USE_CODE, DEVICE_NETWORK_IN_USE_MESSAGE);
+          }
         }
         const converged = await getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
         // A duplicate that leaves the account with no running cycle means the start did not land and
@@ -517,6 +588,25 @@ export async function startMining(input: {
     }
   }
 
+  // The cycle is committed: the room it started in is held for exactly as long as the cycle runs.
+  // From here the hold's deadline is the cycle's end, so the room is released — by every reader at
+  // once — the moment mining stops, and the TTL index reaps the row behind it. Never fails the
+  // committed request, but never disappears either: logged, and the hold then falls back to the
+  // join grace it was created with.
+  await extendPoolHoldToCycle({
+    collections,
+    ownerUserId: input.ownerUserId,
+    poolId: poolDef.id,
+    endsAt: session.endsAt,
+  })
+    .then(async () => {
+      const handle = input.membershipCache?.redis ?? input.cache?.redis;
+      if (handle) await invalidate(handle, poolMembershipKey(handle, input.ownerUserId));
+    })
+    .catch((error) => {
+      console.error(`[mining] pool hold not extended for session ${session.publicId}:`, error);
+    });
+
   // The cycle and its lease are committed: credit the resolved device cluster with one admission on
   // the network this start was taken from. This is the only writer of admissions, so `established`
   // counts cycles that actually started — never requests that merely reached admission control, and
@@ -536,6 +626,11 @@ export async function startMining(input: {
       });
   }
 
+  // The cycle and its lease are already committed: the success audit write must never turn a start
+  // that happened into an error. Reporting a failure here would leave the customer with an error
+  // for a cycle that is running (their next attempt then reads `mining_cycle_active`), which is the
+  // exact shape a first-time user reports as "mining is broken". The same `.catch` discipline the
+  // rest of this service applies to audit writes applies here; the loss is logged, not silent.
   await recordSecurityEvent({
     collections,
     ownerUserId: input.ownerUserId,
@@ -544,6 +639,8 @@ export async function startMining(input: {
     outcome: "success",
     correlationId: input.correlationId,
     metadata: { sessionId: session.publicId, cycleNumber: session.cycleNumber, rate: session.rate, endsAt: session.endsAt.toISOString(), poolId: poolDef.id },
+  }).catch((error) => {
+    console.error(`[mining] start audit not written for session ${session.publicId}:`, error);
   });
 
   return getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });

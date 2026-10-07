@@ -11,6 +11,7 @@ import {
   bucketScreenDepth,
   bucketTimezoneOffset,
   detectImpossibleUaPlatform,
+  hasIdentifyingGraphics,
   ipFamilyOf,
   normalizeSignals,
   parseBrowserFamily,
@@ -175,6 +176,19 @@ test("collector failures never become shared evidence", () => {
   assert.equal(features.raw["canvas"], undefined);
   assert.equal(features.raw["audio"], undefined);
   assert.equal(features.raw["fonts"], "fonts-x");
+});
+
+test("masked graphics cannot identify hardware, regardless of UA, key or confidence", () => {
+  for (const renderer of [null, "Mozilla", "mozilla", "WebKit WebGL", "brave", "no-webgl", "unknown"]) {
+    assert.equal(hasIdentifyingGraphics(sanitizeEvidence(evidence({
+      webglVendor: "Mozilla", webglRenderer: renderer,
+      browserKeyPublicKey: "fresh-key", fingerprintConfidence: 1,
+    }))), false);
+  }
+  for (const renderer of ["ANGLE (NVIDIA GeForce RTX 3060)", "AMD Radeon RX 6600", "Intel Iris Xe", "Apple M2", "Mesa Intel UHD Graphics"]) {
+    assert.equal(hasIdentifyingGraphics(sanitizeEvidence(evidence({ webglVendor: "vendor", webglRenderer: renderer }))), true);
+  }
+  assert.equal(hasIdentifyingGraphics(sanitizeEvidence({ browserKeyPublicKey: "new-key" })), false);
 });
 
 test("device hashes are keyed HMACs, deterministic per secret, and secret-sensitive", () => {

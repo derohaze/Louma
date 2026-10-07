@@ -108,6 +108,10 @@ export async function issueChallenge(input: {
     // and can never satisfy a start: a proof that names nothing proves nothing here.
     boundAnchorHash: input.binding?.anchorHash ?? null,
     boundClusterId: input.binding?.clusterId ?? null,
+    // The key material the evidence named at issuance (null when it named no well-formed key). The
+    // proof that consumes this nonce must be signed by exactly this key, so a challenge accepted by a
+    // different key cannot mint a verified handshake for a possession that was never proven.
+    boundBrowserKeyFingerprint: p256KeyFingerprint(input.binding?.browserKeyText ?? null),
     nonce,
     issuedAt: new Date(nowMs),
     expiresAt,
@@ -327,6 +331,16 @@ export async function verifyProof(input: {
     const signingKey = p256KeyFingerprint(JSON.stringify(input.publicKeyJwk));
     const namedKey = p256KeyFingerprint(input.binding?.browserKeyText ?? null);
     if (signingKey === null || namedKey === null || signingKey !== namedKey) return fail("device_binding_mismatch");
+  }
+  // The signing key must be the key the challenge was issued for. Evidence that named a browser key
+  // at issuance bound this handshake to that key's material, so a proof signed with any other key is
+  // refused before the nonce is consumed: the handshake proves possession of *that* key or it proves
+  // nothing. Compared by key material (`p256KeyFingerprint`), never by serialization, so a re-encoded
+  // JWK of the same key still verifies.
+  const issuedKeyFingerprint = (record as { boundBrowserKeyFingerprint?: string | null }).boundBrowserKeyFingerprint ?? null;
+  if (issuedKeyFingerprint !== null) {
+    const signingKey = p256KeyFingerprint(JSON.stringify(input.publicKeyJwk));
+    if (signingKey === null || signingKey !== issuedKeyFingerprint) return fail("device_binding_mismatch");
   }
   // A nonce with no anchor and no cluster was issued without device evidence (a legacy client): it
   // binds no enrollment, so verification still runs but no cluster can be credited from it.

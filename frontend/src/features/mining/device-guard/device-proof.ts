@@ -1,4 +1,5 @@
 import { api, ApiError } from "@/shared/api";
+import { translate } from "@/shared/i18n";
 import {
   audioDeviceInfo,
   audioSignature,
@@ -247,7 +248,7 @@ export async function startMiningWithGuard(): Promise<unknown> {
 }
 
 export const DEVICE_EVIDENCE_MISSING_MESSAGE =
-  "We could not verify this device, so mining cannot start. Reload the page — and if it keeps failing, turn off content blockers for this site — then try again.";
+  "Mining cannot start because this browser hides or does not provide enough device information. Your account is not blocked.";
 
 export const POOL_REQUIRED_MESSAGE =
   "Join a mining pool before starting a cycle. Open Mining Pools and pick Low or Medium.";
@@ -260,7 +261,11 @@ export function messageForMiningError(
     return POOL_REQUIRED_MESSAGE;
   if (error instanceof ApiError && error.code === "mining_device_already_in_use")
     return DEVICE_IN_USE_MESSAGE;
+  // The network refusal is its own message: the device may be clean, but another account is
+  // already mining from this network, so the customer is told what to wait for.
+  if (error instanceof ApiError && error.code === "mining_device_network_in_use")
+    return translate("mining.cycle.errors.networkInUse");
   if (error instanceof ApiError && error.code === "mining_device_evidence_required")
-    return DEVICE_EVIDENCE_MISSING_MESSAGE;
+    return translate("mining.cycle.errors.deviceEvidenceRequired");
   return fallback(error);
 }

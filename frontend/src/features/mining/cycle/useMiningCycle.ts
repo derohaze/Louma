@@ -42,7 +42,7 @@ export function useMiningCycle() {
 
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const [tick, setTick] = useState(() => Date.now());
-  const [busy, setBusy] = useState<"start" | "settle" | null>(null);
+  const [busy, setBusy] = useState<"start" | "settle" | "stop" | null>(null);
   const [error, setError] = useState("");
   /** Cycles whose completion the page has already asked to settle, so it asks exactly once each. */
   const settleRequested = useRef<Set<string>>(new Set());
@@ -123,6 +123,8 @@ export function useMiningCycle() {
       setError("");
       await api.post("/api/v1/mining/settle");
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
+      // A settlement closes a finished cycle, and a cycle's end is also its room's end.
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.miningPools });
       // A settlement moves the wallet balance, so the balance shown elsewhere has to be re-read.
       await refresh();
       return true;
@@ -243,9 +245,7 @@ export function useMiningCycle() {
     settleInFlight.current.add(session.id);
     if (!feedAnnounced.current.has(`auto-${session.id}`)) {
       feedAnnounced.current.add(`auto-${session.id}`);
-      pushFeed(
-        translate("mining.cycle.feed.autoCollecting", { number: session.cycleNumber }),
-      );
+      pushFeed(translate("mining.cycle.feed.autoCollecting", { number: session.cycleNumber }));
     }
     void settle().then((ok) => {
       settleInFlight.current.delete(session.id);
@@ -309,23 +309,72 @@ export function useMiningCycle() {
     }
   };
 
+  /**
+   * Stops the running cycle early.
+   *
+   * The server truncates the segment at its own clock, posts what accrued through the ledger and
+   * releases the device lease in the same transaction, so the hours left in the window stay
+   * spendable on the next cycle. This is the only way a customer can end a segment before its
+   * window closes without waiting: `settle` pays an already-finished cycle, it never ends one.
+   *
+   * Confirmation follows the same rule as collection: the fresh server state has to show the cycle
+   * is no longer running, or the request is reported as unconfirmed rather than as a stop that
+   * never happened.
+   */
+  const stop = async () => {
+    setBusy("stop");
+    setError("");
+    pushFeed(translate("mining.cycle.feed.stopRequest"));
+    try {
+      await api.post("/api/v1/mining/stop");
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
+      // A stop releases the room with the cycle, so the pools page must re-read its hold too.
+      await queryClient.invalidateQueries({ queryKey: serverStateKeys.miningPools });
+      // A stop pays out whatever accrued, so the balance shown elsewhere has to be re-read.
+      await refresh();
+      const fresh = await refetch();
+      const next = fresh.data?.session;
+      if (next && next.status !== "active") {
+        toast.success(translate("mining.cycle.toasts.stopped"), { position: "top-center" });
+        pushFeed(translate("mining.cycle.feed.stopped"));
+      } else {
+        setError(translate("mining.cycle.errors.stopNotConfirmed"));
+        pushFeed(translate("mining.cycle.feed.stopFailed"));
+      }
+    } catch (cause) {
+      setError(messageForError(cause));
+      pushFeed(translate("mining.cycle.feed.stopFailed"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const loading = mining.isPending && !mining.data;
   // A device-guard block replaces the whole Ready card instead of rendering
-  // above it: the message is the verdict, so it owns the card's content.
-  const isDeviceBlocked = !session && error === DEVICE_IN_USE_MESSAGE;
-  const isChecking = !session && busy === "start";
-  // Pool gate: without membership Start is refused server-side, so the page offers the
-  // pools page instead of a button that can only fail.
-  const poolRequired = !session && mining.data?.poolRequired === true;
+  // above it: the message is the verdict, so it owns the card's content. Both
+  // flags describe that Ready card, which is also what a finished cycle falls
+  // back to, so neither is scoped to "no cycle on screen".
+  const isDeviceBlocked = error === DEVICE_IN_USE_MESSAGE;
+  const isChecking = busy === "start";
+  // Room gate: a cycle only opens from inside a held room, and the server reports whether one is
+  // held right now (a stop, and a window that ended, both release it). Where it is absent the page
+  // offers the pools instead of a Start that could only be refused.
+  const poolRequired = mining.data?.poolRequired === true;
   /** The room's own name, in the language the page is being read in. */
   const poolId = mining.data?.poolId ?? session?.poolId ?? null;
-  const poolName = poolId ? translate(`mining.cycle.pools.${poolId === "medium" ? "medium" : "low"}`) : null;
+  const poolName = poolId
+    ? translate(`mining.cycle.pools.${poolId === "medium" ? "medium" : "low"}`)
+    : null;
   const rateText = session ? translate("mining.cycle.ratePerHour", { rate: session.rate }) : "—";
   const remaining = live?.remainingSeconds ?? session?.remainingSeconds ?? 0;
   const accruedMinor = live?.accruedMinor ?? session?.accruedMinor ?? 0;
   const progressPercent =
     session && live ? Math.min(100, (live.elapsedSeconds / session.durationSeconds) * 100) : 0;
   const needsCollection = session ? session.settledMinor < accruedMinor : false;
+  // A cycle that is over and has nothing left to collect has no card of its own: the page goes
+  // back to the ready panel (pool gate or Start) instead of parking on a settled record, and the
+  // earnings stay reachable in cycle history.
+  const cycleComplete = session !== null && session.status !== "active" && !needsCollection;
   const actionsEnabled = mining.data?.enabled === true;
 
   return {
@@ -346,9 +395,11 @@ export function useMiningCycle() {
     accruedMinor,
     progressPercent,
     needsCollection,
+    cycleComplete,
     actionsEnabled,
     start,
     collect,
+    stop,
   };
 }
 

@@ -3,10 +3,11 @@ import type { ClientSession, MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { AppConfig } from "../../config/env.js";
 import { postBalancedJournal } from "../../infrastructure/mongodb/repositories.js";
-import type { CacheContext } from "../../infrastructure/redis/cache.js";
+import { invalidate, poolMembershipKey, type CacheContext } from "../../infrastructure/redis/cache.js";
 import { ensureTreasuryAccount } from "../wallets/service.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { readFinancialControls } from "../financial-controls/service.js";
+import { releasePoolHold } from "./pools.js";
 import { totalAccrualMinor } from "./rate.js";
 import { loadMiningSettings } from "./settings.js";
 import { serviceUnavailable } from "../../shared/errors.js";
@@ -177,6 +178,18 @@ export async function stopMining(input: {
             { session: mongoSession },
           );
 
+          // Free the room in the same commit: mining and holding a room are the same fact, so a
+          // stop that ended the cycle must end its hold too — never leaving an account inside a
+          // room it is no longer mining in. The row stays behind as the room-change throttle's
+          // anchor until its cooldown passes (the TTL index reaps it after that).
+          await releasePoolHold({
+            collections,
+            ownerUserId: active.ownerUserId,
+            cooldownSeconds: live.miningPools.switchCooldownSeconds,
+            nowMs,
+            session: mongoSession,
+          });
+
           await recordSecurityEvent({
             collections,
             ownerUserId: active.ownerUserId,
@@ -202,6 +215,11 @@ export async function stopMining(input: {
     } finally {
       await mongoSession.endSession();
     }
+
+    // The room hold changed above: drop the cached membership after the commit. MongoDB first,
+    // cache second — a lost invalidation only serves the held room until the TTL.
+    const membershipHandle = input.membershipCache?.redis ?? input.cache?.redis;
+    if (membershipHandle) await invalidate(membershipHandle, poolMembershipKey(membershipHandle, input.ownerUserId));
 
     return getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
   }

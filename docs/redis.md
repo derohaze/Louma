@@ -9,11 +9,13 @@ site; services use `cache.ts`, `rate-limit.ts`, `locks.ts` — never raw command
 
 - `louma:cache:mining-settings:v1` — raw settings docs, TTL 30s. Operator
   writes invalidate eagerly; TTL bounds only a lost-invalidation race.
-- `louma:cache:pool-membership:<userId>` — one account's pool room, TTL 60s.
-  Join/leave invalidate eagerly. The cached copy feeds only the state/pools
-  display reads: `startMining`'s pool gate reads MongoDB directly, so a stale
-  room can mis-show a membership until the TTL but can never gate a start on
-  it or move money.
+- `louma:cache:pool-membership:<userId>` — one account's pool hold, TTL 60s.
+  Join/leave/stop invalidate eagerly, and the cached copy carries the hold's
+  `status` and deadline, which the read evaluates against the clock — so a
+  stale entry can never outlive the hold it describes. It feeds only the state
+  read: `startMining`'s room gate reads MongoDB directly, so a cached room can
+  mis-show a hold for at most its TTL but can never gate a start on it or move
+  money.
 - `louma:cache:display-name:<userId>` — preview masking only, TTL 5min.
   Cosmetic: transfers execute wallet ids, never this string. Profile update
   invalidates.

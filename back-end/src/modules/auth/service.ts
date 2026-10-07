@@ -100,7 +100,7 @@ async function issueSession(input: {
   const accessToken = session.status === "active"
     ? await createAccessToken({ userId: input.user.publicId, sessionId }, input.config.accessTokenSecret)
     : null;
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.user.publicId, sessionId, eventType: session.status === "active" ? "login" : "login_pending_two_factor", outcome: "success", correlationId: input.requestId });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.user.publicId, sessionId, eventType: session.status === "active" ? "login" : "login_pending_two_factor", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return { user: toPublicUser(input.user), accessToken, refreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId };
 }
 
@@ -177,9 +177,19 @@ export async function register(input: {
   } finally {
     await mongoSession.endSession();
   }
-  const result = await input.collections.users.findOne({ publicId: user.publicId });
-  if (!result) throw new Error("Registration did not create the account");
-  const tokens = await issueSession({ ...input, user: result });
+  /**
+   * The transaction above committed the account, so everything after it only *formats* the answer.
+   * The stored row is preferred because it is the row as written, but a read that fails must not
+   * report a registered account as an error: the account exists, and the caller's retry would only
+   * be answered `account_exists`. The row built for the transaction carries every field needed here.
+   */
+  let registered: UserRecord | null = null;
+  try {
+    registered = await input.collections.users.findOne({ publicId: user.publicId });
+  } catch {
+    registered = null;
+  }
+  const tokens = await issueSession({ ...input, user: registered ?? (user as UserRecord) });
   return { ...tokens, wallet: { id: walletPublicId, address: walletAddress } };
 }
 
@@ -233,12 +243,12 @@ export async function login(input: {
     ? await argon2.verify(user.passwordHash, password).catch(() => false)
     : await argon2.verify(await getDummyPasswordHash(), password).catch(() => false);
   if (!user || !matches || user.status !== "active") {
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user?.publicId ?? null, eventType: "login_failed", outcome: "failure", correlationId: input.requestId });
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: user?.publicId ?? null, eventType: "login_failed", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
     throw unauthorized();
   }
   const wallet = await input.collections.wallets.findOne({ ownerUserId: user.publicId });
   if (wallet?.status === "frozen") {
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "login_blocked_wallet_frozen", outcome: "failure", correlationId: input.requestId });
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, eventType: "login_blocked_wallet_frozen", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
     throw forbidden("wallet_frozen", "This wallet is frozen. Unfreeze it from an active session before signing in.");
   }
   const twoFactor = await input.collections.twoFactorCredentials.findOne({ ownerUserId: user.publicId, enabledAt: { $ne: null } });
@@ -283,7 +293,7 @@ export async function refreshSession(input: {
     if (!raced) throw unauthorized();
     if (now.getTime() - raced.lastActiveAt.getTime() > REFRESH_REUSE_GRACE_MS) {
       await input.collections.sessions.updateMany({ ownerUserId: raced.ownerUserId, status: "active" }, { $set: { status: "revoked", revokedAt: now, refreshTokenHash: null } });
-      await recordSecurityEvent({ collections: input.collections, ownerUserId: raced.ownerUserId, sessionId: raced.publicId, eventType: "refresh_token_reuse_detected", outcome: "failure", correlationId: input.requestId });
+      await recordSecurityEvent({ collections: input.collections, ownerUserId: raced.ownerUserId, sessionId: raced.publicId, eventType: "refresh_token_reuse_detected", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
       throw unauthorized();
     }
     // Inside the grace window this is a second tab, not a replay: the session is rotated again so
@@ -320,7 +330,7 @@ export async function completeTwoFactor(input: {
   }
   if (!valid) {
     await input.collections.sessions.updateOne({ _id: session._id, status: "pending_two_factor", twoFactorAttempts: { $lt: 5 } }, { $inc: { twoFactorAttempts: 1 } });
-    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, sessionId: session.publicId, eventType: "two_factor_login_failed", outcome: "failure", correlationId: input.requestId });
+    await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, sessionId: session.publicId, eventType: "two_factor_login_failed", outcome: "failure", correlationId: input.requestId }).catch(() => undefined);
     throw unauthorized();
   }
 
@@ -350,13 +360,13 @@ export async function revokeSession(input: { collections: Collections; ownerUser
   if (input.sessionId === input.currentSessionId) throw notFound();
   const result = await input.collections.sessions.updateOne({ publicId: input.sessionId, ownerUserId: input.ownerUserId, status: "active" }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
   if (result.matchedCount === 0) throw notFound();
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "session_revoked", outcome: "success", correlationId: input.requestId });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "session_revoked", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
 }
 
 export async function revokeCurrentSession(input: { collections: Collections; ownerUserId: string; sessionId: string; requestId: string }): Promise<void> {
   const now = new Date();
   await input.collections.sessions.updateOne({ publicId: input.sessionId, ownerUserId: input.ownerUserId, status: { $ne: "revoked" } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: now } });
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "logout", outcome: "success", correlationId: input.requestId });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "logout", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
 }
 
 export async function listSessions(input: { collections: Collections; ownerUserId: string; currentSessionId: string }) {
@@ -392,7 +402,7 @@ export async function updateProfile(input: { collections: Collections; ownerUser
   if ("profile.displayName" in changes && input.redis) {
     await invalidate(input.redis, displayNameKey(input.redis, input.ownerUserId));
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "profile_updated", outcome: "success", correlationId: input.requestId, metadata: { displayNameChanged: "profile.displayName" in changes, countryChanged: "profile.country" in changes } });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "profile_updated", outcome: "success", correlationId: input.requestId, metadata: { displayNameChanged: "profile.displayName" in changes, countryChanged: "profile.country" in changes } }).catch(() => undefined);
   return (await getCurrentUser({ collections: input.collections, ownerUserId: input.ownerUserId })).user;
 }
 
@@ -412,7 +422,9 @@ export async function changePassword(input: { collections: Collections; ownerUse
   const updated = await input.collections.users.updateOne({ _id: user._id, passwordHash: user.passwordHash }, { $set: { passwordHash: await argon2.hash(input.newPassword, ARGON2_OPTIONS), updatedAt: new Date() } });
   if (updated.modifiedCount !== 1) throw badRequest("password_change_conflict", "The password changed. Sign in again and retry.");
   await input.collections.sessions.updateMany({ ownerUserId: input.ownerUserId, status: { $in: ["active", "pending_two_factor"] }, publicId: { $ne: input.sessionId } }, { $set: { status: "revoked", refreshTokenHash: null, previousRefreshTokenHash: null, revokedAt: new Date() } });
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "password_changed", outcome: "success", correlationId: input.requestId });
+  // The password and the sibling sessions are already changed by the time this runs, and the old
+  // password no longer exists, so this write must never be the reason the caller sees an error.
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, sessionId: input.sessionId, eventType: "password_changed", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return { changed: true };
 }
 

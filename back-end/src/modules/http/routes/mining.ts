@@ -27,9 +27,13 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
   );
 
   /**
-   * Community mining rooms (MVP): two system pools, membership required to start.
-   * Join is an idempotent upsert (switching pools just moves the membership; the running
-   * cycle keeps the pool it started in). Counts are live member counts.
+   * Community mining rooms (MVP): two system pools, a held room required to start.
+   *
+   * A membership is a hold that ends with the cycle it justified: joining grants the room for the
+   * join -> start step, a start extends it to the cycle's end, and stopping or finishing releases
+   * it. Joining the room already held is an idempotent no-op; changing rooms is refused while a
+   * cycle runs (stop first — stopping releases the room) and throttled once per cooldown. Counts
+   * are live holds only.
    */
   app.get("/api/v1/mining/pools", authenticated, async (request) =>
     pools.getMiningPoolsState({
@@ -41,26 +45,35 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
     }),
   );
 
-  app.post("/api/v1/mining/pools/join", authenticated, async (request) => {
-    const body = parseBody(z.object({ poolId: z.enum(["low", "medium"]) }).strict(), request.body ?? {});
-    return pools.joinMiningPool({
-      collections: app.collections,
-      config: app.config,
-      ownerUserId: getAuth(request).userId,
-      poolId: body.poolId,
-      cache: settingsCache(app),
-      membershipCache: membershipCache(app),
-    });
-  });
+  // Room changes are writes with a churn cost, so both are bounded per caller on top of the
+  // server-side cooldown (which is what actually throttles switching, with or without Redis).
+  app.post(
+    "/api/v1/mining/pools/join",
+    { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 60_000 } } },
+    async (request) => {
+      const body = parseBody(z.object({ poolId: z.enum(["low", "medium"]) }).strict(), request.body ?? {});
+      return pools.joinMiningPool({
+        collections: app.collections,
+        config: app.config,
+        ownerUserId: getAuth(request).userId,
+        poolId: body.poolId,
+        cache: settingsCache(app),
+        membershipCache: membershipCache(app),
+      });
+    },
+  );
 
-  app.post("/api/v1/mining/pools/leave", authenticated, async (request) =>
-    pools.leaveMiningPool({
-      collections: app.collections,
-      config: app.config,
-      ownerUserId: getAuth(request).userId,
-      cache: settingsCache(app),
-      membershipCache: membershipCache(app),
-    }),
+  app.post(
+    "/api/v1/mining/pools/leave",
+    { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 60_000 } } },
+    async (request) =>
+      pools.leaveMiningPool({
+        collections: app.collections,
+        config: app.config,
+        ownerUserId: getAuth(request).userId,
+        cache: settingsCache(app),
+        membershipCache: membershipCache(app),
+      }),
   );
 
   app.post(

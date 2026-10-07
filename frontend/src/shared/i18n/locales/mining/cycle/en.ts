@@ -2,7 +2,7 @@ export default {
   ready: {
     poolTitle: "Join a mining pool first",
     poolBody:
-      "Mining is only possible from inside a pool. Pick Low for steadier rewards or Medium for higher variance — both pay the same on average.",
+      "Mining is only possible from inside a pool, and a pool is held only while you mine in it: a stop or a finished cycle releases it, so take one again to keep mining. Pick Low for steadier rewards or Medium for higher variance — both pay the same on average.",
     openPools: "Open mining pools",
     checkingTitle: "Running security check",
     checkingBody:
@@ -12,9 +12,9 @@ export default {
       "This decision comes from the protection system, not from this browser. Mining will not start on this device until the current cycle ends.",
     readyTitle: "Ready to mine",
     readyBody:
-      "Start a cycle and the server assigns your rate for the next 24 hours. The rate is drawn per cycle and cannot be changed while the cycle runs.",
+      "Start a cycle and the server assigns your rate for it. Mining runs for up to 10 hours inside each 24-hour window, and the rate cannot be changed while a cycle runs.",
     chips: {
-      lock: "24-hour lock",
+      lock: "Rate fixed per cycle",
       rate: "Server-assigned rate",
       resumes: "Resumes on any device",
     },
@@ -32,8 +32,8 @@ export default {
   info: {
     title: "How mining works",
     description: "What the server guarantees.",
-    cycleLength: "Cycle length",
-    cycleLengthValue: "Exactly 24 hours",
+    cycleLength: "Mining per window",
+    cycleLengthValue: "Up to 10 hours, inside a 24-hour window",
     rate: "Rate",
     rateValue: "Chosen per cycle on the server",
     accrual: "Accrual",
@@ -42,6 +42,8 @@ export default {
     storageValue: "Held on your account, not in this browser",
     noteSession:
       "Closing the tab or switching devices never stops or loses a cycle: reopening the page re-reads the same state from the server.",
+    noteStop:
+      "Stopping is always available: mining pauses, what you earned is collected, your pool is released, and the hours left in the window stay yours to resume with.",
     noteCounter:
       "The counter you see is a display of the server's reward. Only the server decides how much LMA is credited.",
   },
@@ -65,7 +67,7 @@ export default {
     alreadyCollected: "{amount} already collected",
     progressAria: "Mining cycle progress",
     elapsed: "{time} elapsed",
-    window: "24:00:00 cycle",
+    window: "10:00:00 max per window",
     facts: {
       rate: "Mining rate",
       pool: "Pool",
@@ -76,10 +78,8 @@ export default {
     },
     settlementPaused:
       "Settlement is paused on this network, so collection is unavailable right now. Your earned reward stays on your account and nothing is lost.",
-    fullyCollected: "This cycle is fully collected. Start a new one to keep mining.",
     miningPaused:
       "Mining is paused on this network, so actions are unavailable. Your earned reward stays on your account and nothing is lost.",
-    starting: "Starting…",
     rateCard: "Mining rate",
     rateNote: "Drawn by the server for this cycle and fixed until it ends.",
   },
@@ -96,6 +96,9 @@ export default {
     settled: "Reward settled · in your wallet",
     startRequest: "Starting cycle request…",
     startRefused: "Start request refused",
+    stopRequest: "Stopping mining…",
+    stopped: "Mining stopped · reward collected",
+    stopFailed: "Stop not confirmed · try again",
     collectingRequest: "Collecting reward…",
     collectionFailed: "Collection not confirmed · try again",
     collected: "Reward collected · {amount}",
@@ -103,9 +106,16 @@ export default {
   toasts: {
     complete: "Mining cycle complete — collect your reward.",
     collected: "Reward collected into your wallet.",
+    stopped:
+      "Mining stopped — your pool was released, and the hours left in the window stay yours.",
   },
   errors: {
+    deviceEvidenceRequired:
+      "Mining cannot start because this browser hides or does not provide enough device information. Use a browser that exposes device information or allow it for this site, then try again. Your account is not blocked.",
+    networkInUse:
+      "Mining is already active from this network. Try again after the current cycle ends, or continue on a device that has already mined here.",
     notConfirmed: "The reward could not be confirmed yet. Try again.",
+    stopNotConfirmed: "Mining could not be stopped. Try again.",
   },
   pools: {
     low: "Low Pool",

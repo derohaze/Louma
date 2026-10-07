@@ -277,6 +277,13 @@ export async function createTransfer(input: {
 
   const transactionOptions = { readConcern: { level: "snapshot" as const }, writeConcern: { w: "majority" as const } };
   let committed = false;
+  /**
+   * The header this call itself posted inside its winning transaction, so the answer below never
+   * depends on a *second* read succeeding: the commit already happened and the money facts are in
+   * this object. `_id` exists for the record shape only — it is never written and never published
+   * (`publicTransaction` keys its answer on `publicId`).
+   */
+  let posted: TransferTransactionRecord | null = null;
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= MAX_TRANSACTION_ATTEMPTS && !committed; attempt += 1) {
     if (attempt > 1) {
@@ -416,6 +423,7 @@ export async function createTransfer(input: {
             },
             session,
           );
+          posted = { ...transaction, _id: new ObjectId() };
           maybeAbort({ abortSignal: input.abortSignal, point: "after_transaction_record" });
           maybeAbort({ abortSignal: input.abortSignal, point: "after_ledger_insert" });
           // Both sides are told inside the same transaction: a transfer that rolls back notifies
@@ -495,11 +503,27 @@ export async function createTransfer(input: {
   }
 
   if (!committed) throw lastError ?? new Error("Transfer transaction did not commit");
-  const completed = await input.collections.transactions.findOne({ type: "transfer", senderUserId: input.ownerUserId, idempotencyKey });
-  if (!completed || !isTransferTransaction(completed)) throw new Error("Transfer transaction did not commit");
+  /**
+   * The commit is authoritative: everything below only *formats* the answer, and no formatting step
+   * may turn a transfer that already moved money into an error. The canonical answer is the stored
+   * row — it is also what a replay returns, including a row another request committed under the same
+   * key — so it is read first, but a read that fails or finds nothing falls back to the header this
+   * call posted. Only when both are unavailable (this call converged on a duplicate and the read that
+   * would have identified it failed) is the outcome unknown here: that answers the designed retryable
+   * failure, and the client's retry with the same idempotency key returns the committed transfer.
+   */
+  let completed: TransferTransactionRecord | null = null;
+  try {
+    const stored = await input.collections.transactions.findOne({ type: "transfer", senderUserId: input.ownerUserId, idempotencyKey });
+    if (stored && isTransferTransaction(stored)) completed = stored;
+  } catch {
+    completed = null;
+  }
+  const record = completed ?? posted;
+  if (!record) throw serviceUnavailable("transfer_conflict", "The transfer could not be completed. Try again.");
   return {
-    ...publicTransaction(completed, input.ownerUserId, completed.balanceAfterMinor) as PublicTransaction & { balanceAfter: string },
-    balanceAfter: formatMoney(completed.balanceAfterMinor),
-    replayed: completed.publicId !== transactionPublicId,
+    ...publicTransaction(record, input.ownerUserId, record.balanceAfterMinor) as PublicTransaction & { balanceAfter: string },
+    balanceAfter: formatMoney(record.balanceAfterMinor),
+    replayed: record.publicId !== transactionPublicId,
   };
 }

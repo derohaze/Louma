@@ -1,0 +1,789 @@
+{
+  "generatedAt": "2026-10-05T02:05:27.262Z",
+  "run": "66998822",
+  "database": "louma_load_probe_v4",
+  "host": {
+    "node": "v24.17.0",
+    "platform": "win32",
+    "cpus": 16
+  },
+  "engine": {
+    "transport": "app.inject (in-process; HTTP/TLS/network excluded)",
+    "redis": "disabled handle — cache/rate-limit/lock fallbacks are MongoDB/in-process",
+    "mongo": "the configured deployment; one client process; majority writes, snapshot transactions"
+  },
+  "input": {
+    "accounts": 2000,
+    "accountsReady": 2000,
+    "setupFailures": [],
+    "setupMs": 367895.76,
+    "freshConcurrency": 256,
+    "levels": [
+      16,
+      64,
+      256
+    ],
+    "readConcurrency": 64,
+    "statusSample": 500,
+    "verifySample": 200
+  },
+  "lmdg": {
+    "enabled": true,
+    "leaseEnabled": true,
+    "riskMode": "enforce",
+    "networkLeaseLock": true,
+    "browserKeyRequired": false,
+    "establishMinAdmissions": 3,
+    "highConfidenceThreshold": 78,
+    "ambiguousThreshold": 55
+  },
+  "phases": {
+    "fresh@C=256": {
+      "phase": "fresh@C=256",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 61998.53,
+      "requestsPerSecond": 32.26,
+      "allowedPerSecond": 32.26,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 4481.82,
+        "p50": 8340.56,
+        "p95": 8581.84,
+        "p99": 8601.9,
+        "max": 8629.93,
+        "mean": 7765.15
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 42.87,
+          "max": 43
+        },
+        "mongoWrites": {
+          "mean": 13,
+          "max": 13
+        },
+        "docsScanned": {
+          "mean": 336.68,
+          "max": 378
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.findOne": 12000,
+        "miningDevices.findOne": 12000,
+        "miningDeviceLeases.find": 10000,
+        "miningDeviceQuotas.countDocuments": 8000,
+        "miningDeviceObservations.distinct": 8000,
+        "miningDevices.find": 5744,
+        "miningSettings.find": 4000,
+        "miningPoolMembers.findOne": 4000,
+        "securityEvents.countDocuments": 4000,
+        "miningSessions.find": 4000,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "ledgerAccounts.findOne": 2000,
+        "miningDeviceLeases.distinct": 2000,
+        "miningDeviceNonces.find": 2000,
+        "miningDeviceObservations.findOne": 2000
+      },
+      "mongoWritesByMethod": {
+        "miningDeviceQuotas.insertOne": 6000,
+        "miningDevices.updateOne": 6000,
+        "securityEvents.insertOne": 4000,
+        "miningDevices.insertOne": 2000,
+        "miningDeviceObservations.insertOne": 2000,
+        "miningSessions.insertOne": 2000,
+        "miningDeviceLeases.insertMany": 2000,
+        "miningDevices.findOneAndUpdate": 2000
+      }
+    },
+    "known@C=16.stop": {
+      "phase": "known@C=16.stop",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 14970.64,
+      "requestsPerSecond": 133.59,
+      "allowedPerSecond": 133.59,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 13.37,
+        "p50": 30.28,
+        "p95": 456.98,
+        "p99": 1653.73,
+        "max": 6786.15,
+        "mean": 116.3
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 13.85,
+          "max": 16
+        },
+        "mongoWrites": {
+          "mean": 13.65,
+          "max": 103
+        },
+        "docsScanned": {
+          "mean": 9.83,
+          "max": 10
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.findOne": 6000,
+        "ledgerAccounts.findOne": 5678,
+        "miningSettings.find": 4000,
+        "miningSessions.find": 4000,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "miningPoolMembers.findOne": 2000,
+        "financialControls.findOne": 30
+      },
+      "mongoWritesByMethod": {
+        "ledgerAccounts.updateOne": 12980,
+        "miningSessions.updateOne": 6651,
+        "miningDeviceLeases.updateMany": 2000,
+        "securityEvents.insertOne": 2000,
+        "transactions.insertOne": 1831,
+        "ledgerEntries.insertMany": 1831
+      }
+    },
+    "known@C=16.start": {
+      "phase": "known@C=16.start",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 50335.36,
+      "requestsPerSecond": 39.73,
+      "allowedPerSecond": 39.73,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 144.73,
+        "p50": 401.6,
+        "p95": 440.36,
+        "p99": 476,
+        "max": 586.78,
+        "mean": 402
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 38.99,
+          "max": 39
+        },
+        "mongoWrites": {
+          "mean": 8,
+          "max": 8
+        },
+        "docsScanned": {
+          "mean": 330.51,
+          "max": 337
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.find": 14000,
+        "miningSessions.findOne": 12000,
+        "miningDeviceLeases.find": 10000,
+        "miningDeviceObservations.distinct": 8000,
+        "miningSettings.find": 4000,
+        "miningPoolMembers.findOne": 4000,
+        "securityEvents.countDocuments": 4000,
+        "miningDevices.find": 3984,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "ledgerAccounts.findOne": 2000,
+        "miningDevices.findOne": 2000,
+        "miningDeviceLeases.distinct": 2000,
+        "miningDeviceQuotas.countDocuments": 2000,
+        "miningDeviceNonces.find": 2000,
+        "miningDeviceObservations.findOne": 2000
+      },
+      "mongoWritesByMethod": {
+        "miningDevices.updateOne": 6000,
+        "miningDeviceObservations.insertOne": 2000,
+        "miningSessions.insertOne": 2000,
+        "miningDeviceLeases.insertMany": 2000,
+        "miningDevices.findOneAndUpdate": 2000,
+        "securityEvents.insertOne": 2000
+      }
+    },
+    "known@C=64.stop": {
+      "phase": "known@C=64.stop",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 20141.05,
+      "requestsPerSecond": 99.3,
+      "allowedPerSecond": 99.3,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 16.07,
+        "p50": 63.41,
+        "p95": 3618.1,
+        "p99": 6918.36,
+        "max": 11417.92,
+        "mean": 612.4
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 13.9,
+          "max": 15
+        },
+        "mongoWrites": {
+          "mean": 23.31,
+          "max": 166
+        },
+        "docsScanned": {
+          "mean": 10.86,
+          "max": 11
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.findOne": 6000,
+        "ledgerAccounts.findOne": 5724,
+        "miningSettings.find": 4000,
+        "miningSessions.find": 4000,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "miningPoolMembers.findOne": 2000,
+        "financialControls.findOne": 83
+      },
+      "mongoWritesByMethod": {
+        "ledgerAccounts.updateOne": 25842,
+        "miningSessions.updateOne": 13059,
+        "miningDeviceLeases.updateMany": 2000,
+        "securityEvents.insertOne": 2000,
+        "transactions.insertOne": 1862,
+        "ledgerEntries.insertMany": 1862
+      }
+    },
+    "known@C=64.start": {
+      "phase": "known@C=64.start",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 53173.57,
+      "requestsPerSecond": 37.61,
+      "allowedPerSecond": 37.61,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 665.82,
+        "p50": 1717.28,
+        "p95": 1824.79,
+        "p99": 1883.08,
+        "max": 1974.36,
+        "mean": 1691.08
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 38.97,
+          "max": 39
+        },
+        "mongoWrites": {
+          "mean": 8,
+          "max": 8
+        },
+        "docsScanned": {
+          "mean": 331.07,
+          "max": 341
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.find": 14000,
+        "miningSessions.findOne": 12000,
+        "miningDeviceLeases.find": 10000,
+        "miningDeviceObservations.distinct": 8000,
+        "miningSettings.find": 4000,
+        "miningPoolMembers.findOne": 4000,
+        "securityEvents.countDocuments": 4000,
+        "miningDevices.find": 3936,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "ledgerAccounts.findOne": 2000,
+        "miningDevices.findOne": 2000,
+        "miningDeviceLeases.distinct": 2000,
+        "miningDeviceQuotas.countDocuments": 2000,
+        "miningDeviceNonces.find": 2000,
+        "miningDeviceObservations.findOne": 2000
+      },
+      "mongoWritesByMethod": {
+        "miningDevices.updateOne": 6000,
+        "miningDeviceObservations.insertOne": 2000,
+        "miningSessions.insertOne": 2000,
+        "miningDeviceLeases.insertMany": 2000,
+        "miningDevices.findOneAndUpdate": 2000,
+        "securityEvents.insertOne": 2000
+      }
+    },
+    "known@C=256.stop": {
+      "phase": "known@C=256.stop",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 64610.97,
+      "requestsPerSecond": 30.95,
+      "allowedPerSecond": 30.95,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 31.8,
+        "p50": 3489.43,
+        "p95": 34273.93,
+        "p99": 53467.09,
+        "max": 63902.83,
+        "mean": 7999.84
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 14.16,
+          "max": 15
+        },
+        "mongoWrites": {
+          "mean": 107.51,
+          "max": 736
+        },
+        "docsScanned": {
+          "mean": 12,
+          "max": 12
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.findOne": 6000,
+        "ledgerAccounts.findOne": 6000,
+        "miningSettings.find": 4000,
+        "miningSessions.find": 4000,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "miningPoolMembers.findOne": 2000,
+        "financialControls.findOne": 314
+      },
+      "mongoWritesByMethod": {
+        "ledgerAccounts.updateOne": 138010,
+        "miningSessions.updateOne": 69005,
+        "transactions.insertOne": 2000,
+        "ledgerEntries.insertMany": 2000,
+        "miningDeviceLeases.updateMany": 2000,
+        "securityEvents.insertOne": 2000
+      }
+    },
+    "known@C=256.start": {
+      "phase": "known@C=256.start",
+      "requests": 2000,
+      "allowed": 2000,
+      "wallMs": 64801.38,
+      "requestsPerSecond": 30.86,
+      "allowedPerSecond": 30.86,
+      "outcomes": {
+        "200:-": 2000
+      },
+      "latencyMs": {
+        "min": 6176.15,
+        "p50": 8402.37,
+        "p95": 9029.13,
+        "p99": 9054.67,
+        "max": 9070.1,
+        "mean": 8119.45
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 38.87,
+          "max": 39
+        },
+        "mongoWrites": {
+          "mean": 8,
+          "max": 8
+        },
+        "docsScanned": {
+          "mean": 309.82,
+          "max": 345
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.find": 14000,
+        "miningSessions.findOne": 12000,
+        "miningDeviceLeases.find": 10000,
+        "miningDeviceObservations.distinct": 8000,
+        "miningSettings.find": 4000,
+        "miningPoolMembers.findOne": 4000,
+        "securityEvents.countDocuments": 4000,
+        "miningDevices.find": 3744,
+        "sessions.findOne": 2000,
+        "users.findOne": 2000,
+        "wallets.findOne": 2000,
+        "ledgerAccounts.findOne": 2000,
+        "miningDevices.findOne": 2000,
+        "miningDeviceLeases.distinct": 2000,
+        "miningDeviceQuotas.countDocuments": 2000,
+        "miningDeviceNonces.find": 2000,
+        "miningDeviceObservations.findOne": 2000
+      },
+      "mongoWritesByMethod": {
+        "miningDevices.updateOne": 6000,
+        "miningDeviceObservations.insertOne": 2000,
+        "miningSessions.insertOne": 2000,
+        "miningDeviceLeases.insertMany": 2000,
+        "miningDevices.findOneAndUpdate": 2000,
+        "securityEvents.insertOne": 2000
+      }
+    },
+    "status@C=64": {
+      "phase": "status@C=64",
+      "requests": 500,
+      "allowed": 500,
+      "wallMs": 717.55,
+      "requestsPerSecond": 696.82,
+      "allowedPerSecond": 696.82,
+      "outcomes": {
+        "200:-": 500
+      },
+      "latencyMs": {
+        "min": 60.33,
+        "p50": 90.84,
+        "p95": 107.42,
+        "p99": 111.38,
+        "max": 114.64,
+        "mean": 89.83
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 4,
+          "max": 4
+        },
+        "mongoWrites": {
+          "mean": 0,
+          "max": 0
+        },
+        "docsScanned": {
+          "mean": 6,
+          "max": 6
+        },
+        "transactions": {
+          "mean": 0,
+          "max": 0
+        }
+      },
+      "mongoReadsByMethod": {
+        "sessions.findOne": 500,
+        "users.findOne": 500,
+        "miningDeviceLeases.find": 500,
+        "miningSessions.find": 500
+      },
+      "mongoWritesByMethod": {}
+    },
+    "verify@C=64.stop": {
+      "phase": "verify@C=64.stop",
+      "requests": 200,
+      "allowed": 200,
+      "wallMs": 4170.08,
+      "requestsPerSecond": 47.96,
+      "allowedPerSecond": 47.96,
+      "outcomes": {
+        "200:-": 200
+      },
+      "latencyMs": {
+        "min": 23.45,
+        "p50": 480.93,
+        "p95": 3210.06,
+        "p99": 3586.51,
+        "max": 4169.93,
+        "mean": 949.45
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 14.33,
+          "max": 15
+        },
+        "mongoWrites": {
+          "mean": 31.33,
+          "max": 76
+        },
+        "docsScanned": {
+          "mean": 13,
+          "max": 13
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.findOne": 600,
+        "ledgerAccounts.findOne": 600,
+        "miningSettings.find": 400,
+        "miningSessions.find": 400,
+        "sessions.findOne": 200,
+        "users.findOne": 200,
+        "wallets.findOne": 200,
+        "miningPoolMembers.findOne": 200,
+        "financialControls.findOne": 66
+      },
+      "mongoWritesByMethod": {
+        "ledgerAccounts.updateOne": 3644,
+        "miningSessions.updateOne": 1822,
+        "transactions.insertOne": 200,
+        "ledgerEntries.insertMany": 200,
+        "miningDeviceLeases.updateMany": 200,
+        "securityEvents.insertOne": 200
+      }
+    },
+    "verify@C=64.challenge": {
+      "phase": "verify@C=64.challenge",
+      "requests": 200,
+      "allowed": 200,
+      "wallMs": 624.5,
+      "requestsPerSecond": 320.26,
+      "allowedPerSecond": 320.26,
+      "outcomes": {
+        "200:-": 200
+      },
+      "latencyMs": {
+        "min": 52.97,
+        "p50": 194.01,
+        "p95": 213.53,
+        "p99": 218.16,
+        "max": 220.67,
+        "mean": 189.98
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 4,
+          "max": 4
+        },
+        "mongoWrites": {
+          "mean": 2,
+          "max": 2
+        },
+        "docsScanned": {
+          "mean": 3,
+          "max": 3
+        },
+        "transactions": {
+          "mean": 0,
+          "max": 0
+        }
+      },
+      "mongoReadsByMethod": {
+        "sessions.findOne": 200,
+        "users.findOne": 200,
+        "miningDevices.findOne": 200,
+        "miningDeviceNonces.countDocuments": 200
+      },
+      "mongoWritesByMethod": {
+        "miningDeviceNonces.insertOne": 200,
+        "securityEvents.insertOne": 200
+      }
+    },
+    "verify@C=64.prove": {
+      "phase": "verify@C=64.prove",
+      "requests": 200,
+      "allowed": 200,
+      "wallMs": 1085.61,
+      "requestsPerSecond": 184.23,
+      "allowedPerSecond": 184.23,
+      "outcomes": {
+        "200:-": 200
+      },
+      "latencyMs": {
+        "min": 75.9,
+        "p50": 336.89,
+        "p95": 375.39,
+        "p99": 384.78,
+        "max": 385.84,
+        "mean": 330.03
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 6,
+          "max": 6
+        },
+        "mongoWrites": {
+          "mean": 6,
+          "max": 6
+        },
+        "docsScanned": {
+          "mean": 5,
+          "max": 5
+        },
+        "transactions": {
+          "mean": 0,
+          "max": 0
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningDevices.findOne": 400,
+        "sessions.findOne": 200,
+        "users.findOne": 200,
+        "securityEvents.countDocuments": 200,
+        "miningDeviceNonces.findOne": 200
+      },
+      "mongoWritesByMethod": {
+        "miningDevices.updateOne": 600,
+        "miningDeviceNonces.updateOne": 200,
+        "miningDevices.findOneAndUpdate": 200,
+        "securityEvents.insertOne": 200
+      }
+    },
+    "verify@C=64.retry-start": {
+      "phase": "verify@C=64.retry-start",
+      "requests": 200,
+      "allowed": 200,
+      "wallMs": 6940.3,
+      "requestsPerSecond": 28.82,
+      "allowedPerSecond": 28.82,
+      "outcomes": {
+        "200:-": 200
+      },
+      "latencyMs": {
+        "min": 300.18,
+        "p50": 2193.13,
+        "p95": 2352.42,
+        "p99": 2368.86,
+        "max": 2377.35,
+        "mean": 2148.29
+      },
+      "refusedLatencyMs": null,
+      "perAllowed": {
+        "mongoReads": {
+          "mean": 40,
+          "max": 40
+        },
+        "mongoWrites": {
+          "mean": 8,
+          "max": 8
+        },
+        "docsScanned": {
+          "mean": 350.32,
+          "max": 351
+        },
+        "transactions": {
+          "mean": 1,
+          "max": 1
+        }
+      },
+      "mongoReadsByMethod": {
+        "miningSessions.find": 1400,
+        "miningSessions.findOne": 1200,
+        "miningDeviceLeases.find": 1000,
+        "miningDeviceObservations.distinct": 800,
+        "miningSettings.find": 400,
+        "miningPoolMembers.findOne": 400,
+        "miningDevices.find": 400,
+        "securityEvents.countDocuments": 400,
+        "sessions.findOne": 200,
+        "users.findOne": 200,
+        "wallets.findOne": 200,
+        "ledgerAccounts.findOne": 200,
+        "miningDevices.findOne": 200,
+        "miningDeviceLeases.distinct": 200,
+        "miningDeviceQuotas.countDocuments": 200,
+        "miningDeviceNonces.find": 200,
+        "securityEvents.findOne": 200,
+        "miningDeviceObservations.findOne": 200
+      },
+      "mongoWritesByMethod": {
+        "miningDevices.updateOne": 600,
+        "miningDeviceObservations.insertOne": 200,
+        "miningSessions.insertOne": 200,
+        "miningDeviceLeases.insertMany": 200,
+        "miningDevices.findOneAndUpdate": 200,
+        "securityEvents.insertOne": 200
+      }
+    }
+  },
+  "processLoad": {
+    "rssPeakMb": 952.34,
+    "eventLoopDelayMs": {
+      "p50": 21.36,
+      "p95": 45.32,
+      "p99": 146.54,
+      "max": 1016.07
+    },
+    "note": "sampled over the measured waves only, in the single benchmark process"
+  },
+  "verify": {
+    "stopped": 200,
+    "challenged": 200,
+    "proved": 200,
+    "retried": 200
+  },
+  "stateAfter": {
+    "runningCycles": 2000,
+    "activeSessions": 2000,
+    "activeDeviceLeaseKeys": 6000,
+    "activeCyclesWithDeviceLease": 2000,
+    "deviceLeaseKeysPerCycle": {
+      "min": 3,
+      "max": 3
+    },
+    "activeNetworkTokens": 0,
+    "maxActiveSessionsPerAccount": 1,
+    "sessionsWithoutActiveDeviceLease": 0,
+    "leasesWithoutRunningSession": 0,
+    "activeCyclesWithoutDevice": 0,
+    "devicesEnrolled": 2000,
+    "deviceObservations": 8200,
+    "enrollmentQuotaRows": 6000,
+    "negativeQuotaRefs": 0
+  },
+  "integrity": {
+    "violations": [],
+    "passed": true
+  },
+  "notes": [
+    "latency/op stats are over ALLOWED requests only; refusals are reported separately",
+    "peer addresses are private 10.x test addresses: IP-intelligence providers are not consulted",
+    "device evidence is synthetic and unique per account so every cycle owns one machine identity",
+    "not a production capacity number: one local MongoDB, no Redis, in-process transport",
+    "waves run in sequence on the same population, so later levels see matured trust state and a larger history",
+    "returning starts refused with mining_device_challenge_required are answered with a real challenge/prove/retry at the same concurrency level"
+  ]
+}

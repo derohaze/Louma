@@ -7,7 +7,7 @@ import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
 import { schemas } from "../infrastructure/mongodb/schemas.js";
 import { ensureCollection } from "../infrastructure/mongodb/validators.js";
-import { joinMiningPool } from "../modules/mining/pools.js";
+import { joinMiningPool, leaveMiningPool } from "../modules/mining/pools.js";
 import { setMiningSetting } from "../modules/mining/settings.js";
 
 /**
@@ -81,7 +81,10 @@ before(async () => {
   await ensureCollection(db, "mining_pool_members", schemas["mining_pool_members"]!);
   await ensureCollection(db, "mining_settings", schemas["mining_settings"]!);
   collections = getCollections(db);
-  poolsConfig = { mining: config.mining, miningPools: config.miningPools };
+  // No room-change throttle here: these tests stage interleavings of the cap trim, and a switcher
+  // must be able to move rooms inside one test. The throttle has its own test below, with the
+  // policy configured explicitly.
+  poolsConfig = { mining: config.mining, miningPools: { ...config.miningPools, switchCooldownSeconds: 0 } };
   // Exactly one seat in the Low room: the race is for the last seat.
   await setMiningSetting({
     collections,
@@ -130,6 +133,38 @@ test("a join whose write lands after another join's success loses the seat, not 
   const restored = await collections.miningPoolMembers.findOne({ ownerUserId: switcher });
   assert.equal(restored?.poolId, "medium", "the late switcher returns to its previous room");
   assert.equal(await collections.miningPoolMembers.countDocuments({ poolId: "low" }), 1, "the cap still holds");
+});
+
+test("room changes are throttled, while the room already held stays free to re-join", async () => {
+  const throttleConfig: Pick<AppConfig, "mining" | "miningPools"> = {
+    mining: poolsConfig.mining,
+    miningPools: { ...poolsConfig.miningPools, switchCooldownSeconds: 60 },
+  };
+  const account = `throttle-${RUN}`;
+
+  const first = await joinMiningPool({ collections, config: throttleConfig, ownerUserId: account, poolId: "medium" });
+  assert.equal(first.poolId, "medium");
+  assert.ok(first.switchAvailableAt, "the anchor publishes when the next change becomes available");
+  assert.ok(first.holdExpiresAt, "and the hold publishes when the room lapses without a start");
+
+  await assert.rejects(
+    joinMiningPool({ collections, config: throttleConfig, ownerUserId: account, poolId: "low" }),
+    (error: unknown) => (error as { code?: unknown }).code === "mining_pool_switch_cooldown",
+  );
+  // The room already held is always available: continuing to mine is never the churn being bounded.
+  const again = await joinMiningPool({ collections, config: throttleConfig, ownerUserId: account, poolId: "medium" });
+  assert.equal(again.poolId, "medium");
+
+  // Leaving releases the room but keeps the anchor: another room still waits the cooldown out...
+  const left = await leaveMiningPool({ collections, config: throttleConfig, ownerUserId: account });
+  assert.equal(left.poolId, null);
+  await assert.rejects(
+    joinMiningPool({ collections, config: throttleConfig, ownerUserId: account, poolId: "low" }),
+    (error: unknown) => (error as { code?: unknown }).code === "mining_pool_switch_cooldown",
+  );
+  // ...while the room it just left can be taken again immediately.
+  const back = await joinMiningPool({ collections, config: throttleConfig, ownerUserId: account, poolId: "medium" });
+  assert.equal(back.poolId, "medium");
 });
 
 test("racing joins never leave a caller told it joined without a membership", async () => {

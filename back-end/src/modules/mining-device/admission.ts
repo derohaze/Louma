@@ -17,13 +17,9 @@ import {
   DEVICE_NETWORK_IN_USE_CODE,
   LIVE_LEASE_BACKSTOP_LIMIT,
   LMDG_EVENT_TYPES,
+  NETWORK_LOCK_KEY_PATTERN,
 } from "./policy.js";
-import {
-  networkTrustEstablished,
-  networkTrustFresh,
-  networkTrustOf,
-  recentClusterChurn,
-} from "./enrollment.js";
+import { isNetworkResident, recentClusterChurn } from "./enrollment.js";
 import { detectEvidenceContradictions, detectSimultaneousTraitReplacement, isEnvironmentFeatureKey } from "./consistency.js";
 import {
   findLiveLeases,
@@ -117,7 +113,13 @@ export async function assessMiningStart(input: {
   // whole active mining population (see `LIVE_LEASE_BACKSTOP_LIMIT`): the exact guarantees are the
   // identity checks above (a lease on any identity this observation produces, or that its record is
   // known by) and the per-network lease query below, both of which are indexed and complete.
-  const liveLeaseFilter = { status: "active", leaseEndsAt: { $gt: new Date(nowMs) } } as const;
+  const liveLeaseFilter = {
+    status: "active",
+    leaseEndsAt: { $gt: new Date(nowMs) },
+    // The reserved network token is not a device lease: counting it in the bounded page could flag
+    // the backstop as truncated with no device behind it, and it correlates with no record.
+    deviceClusterId: { $not: { $regex: NETWORK_LOCK_KEY_PATTERN } },
+  } as const;
   // One row past the cap answers "was the comparison complete?" without a second query: the newest
   // `LIVE_LEASE_BACKSTOP_LIMIT` leases are compared, and a row beyond them flags the residual gap
   // (see `leaseBackstopTruncated` in the risk input).
@@ -125,8 +127,7 @@ export async function assessMiningStart(input: {
     .find(liveLeaseFilter, { projection: { deviceClusterId: 1, deviceId: 1 } })
     .sort({ leasedAt: -1 })
     .limit(LIVE_LEASE_BACKSTOP_LIMIT + 1)
-    .toArray()
-    .catch(() => []);
+    .toArray();
   const leaseBackstopTruncated = liveLeases.length > LIVE_LEASE_BACKSTOP_LIMIT;
   const comparedLeases = liveLeases.slice(0, LIVE_LEASE_BACKSTOP_LIMIT);
   const liveLeaseKeys = [...new Set(comparedLeases.map((lease) => lease.deviceClusterId))].filter(Boolean);
@@ -138,8 +139,7 @@ export async function assessMiningStart(input: {
     ? []
     : await collections.miningDevices
         .find({ $or: [{ publicId: { $in: liveDeviceIds } }, { machineKeyHash: { $in: liveLeaseKeys } }, { deviceKeyHash: { $in: liveLeaseKeys } }] })
-        .toArray()
-        .catch(() => []);
+        .toArray();
   for (const entry of leasedRecords) {
     if (!knownIds.has(entry.publicId)) {
       sweep.push(entry);
@@ -163,13 +163,15 @@ export async function assessMiningStart(input: {
     const identityMatch = machineKey !== null && candidate.machineKeyHash === machineKey;
     const score = identityMatch ? 100 : match.score;
     if (score > bestScore) bestScore = score;
-    if (score > knownMachineScore) {
+    const keys = recordLeaseKeys(candidate);
+    const verdict = identityMatch ? "same" : decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+    // Similar generic traits on an unrelated computer do not establish a tampered known machine.
+    // Only a positive correlation may attribute its presentation/rendering drift to this caller.
+    if (verdict === "same" && score > knownMachineScore) {
       knownMachine = match;
       knownMachineIsIdentity = identityMatch;
       knownMachineScore = score;
     }
-    const keys = recordLeaseKeys(candidate);
-    const verdict = identityMatch ? "same" : decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
     if (verdict === "same") {
       sameClusterKeys.push(...keys);
       if (match.missingHighEntropy) missingHighEntropyFields = true;
@@ -190,12 +192,7 @@ export async function assessMiningStart(input: {
     networkLeases.find(
       (lease) => lease.ownerUserId !== input.ownerUserId && !ownKeySet.has(lease.deviceClusterId) && lease.deviceId !== device.publicId,
     ) ?? null;
-  const networkTrust = networkHash ? networkTrustOf(device, networkHash) : null;
-  const networkResident = Boolean(
-    networkTrust &&
-      networkTrustEstablished(networkTrust, config.lmdg.establishMinAdmissions) &&
-      networkTrustFresh(networkTrust, nowMs, config.lmdg.networkTrustFreshnessSeconds * 1000),
-  );
+  const networkResident = networkHash ? isNetworkResident(device, networkHash, config.lmdg, nowMs) : false;
   // A satisfied proof-of-possession this start can present, bound to this cluster (see
   // `verifyProof` and `findBoundProof`). Computed lazily and memoised: it costs two indexed reads
   // and is only ever consulted when a browser key is actually presented — by the risk-challenge

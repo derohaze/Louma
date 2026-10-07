@@ -45,6 +45,11 @@ recoveryCodeHashes <= 16, notification title/body lengths, security metadata
 
 sessions.expiresAt, nonces, quotas, observations (clamped >= 30d: the risk
 engine's window), authorizations/two-factor-uses retainUntil (retention, never
-validity). Retention TTLs for notifications/security_events are opt-in
+validity), mining_pool_members.expiresAt. A pool row is a *hold*, not a
+membership: `expiresAt` is the deadline (the cycle's end, or the join grace)
+and every reader requires a live hold, so the sweep only clears what is
+already dead — a room joined but never started, a cycle that ended, or a
+released row kept while it anchors the room-change throttle. Retention TTLs
+for notifications/security_events are opt-in
 (RETENTION_TTL_ENABLED) and never touch unread notices. Financial facts
 (transactions, ledger_entries) NEVER expire.

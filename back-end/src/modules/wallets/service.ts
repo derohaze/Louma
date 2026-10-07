@@ -42,7 +42,7 @@ export async function setWalletFrozen(input: { collections: Collections; ownerUs
     const wallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
     if (!wallet) throw notFound();
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.frozen ? "wallet_frozen" : "wallet_unfrozen", outcome: "success", correlationId: input.requestId });
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.frozen ? "wallet_frozen" : "wallet_unfrozen", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return getWallet({ collections: input.collections, ownerUserId: input.ownerUserId });
 }
 
@@ -63,7 +63,9 @@ export async function setCustomAddress(input: { collections: Collections; ownerU
     if (typeof error === "object" && error !== null && "code" in error && error.code === 11000) throw conflict("address_unavailable", "That custom address is already in use.");
     throw error;
   }
-  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "wallet_address_changed", outcome: "success", correlationId: input.requestId });
+  // The change above already landed and its 30-day cooldown is spent, so the audit write must not
+  // turn it into a failure a retry cannot undo.
+  await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "wallet_address_changed", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return getWallet({ collections: input.collections, ownerUserId: input.ownerUserId });
 }
 

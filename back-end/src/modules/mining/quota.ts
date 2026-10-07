@@ -15,8 +15,9 @@
  * deviceWindowRemaining)` so it can never cross its window.
  *
  * Device quota is shared by every account mining under the same machine
- * identity (`machineKey ?? device.publicId`). Account quota holds across
- * devices because it sums all of the account's segments in its window.
+ * identity — the resolved cluster's stable machine anchor, else the cluster id
+ * (see `deviceQuotaKeyFor`). Account quota holds across devices because it sums
+ * all of the account's segments in its window.
  */
 
 /** Actual mining allowed per 24h window. */
@@ -166,11 +167,17 @@ export function allowedSessionSeconds(input: {
 }
 
 /**
- * Canonical device quota subject: the stable machine identity when the client
- * reported enough machine traits, else the resolved cluster id. Two accounts
- * on one machine share the machine key, so they share the quota; two machines
- * never do. A browser-only identity degrades to per-cluster (documented).
+ * Canonical device quota subject: the resolved cluster's stable machine identity when the
+ * server holds one, else the resolved cluster id. Two accounts on one machine share the
+ * anchor, so they share the quota; two machines never do. A browser-only identity degrades
+ * to per-cluster (documented).
+ *
+ * `machineAnchor` must be a *stable* identity — the record's immutable anchor, or the key it
+ * was enrolled with — and never the machine key of the current observation. That key moves
+ * when the machine's traits drift, while resolution still converges on the same record, so
+ * keying the quota on it would split one machine's usage across two keys and hand a second
+ * account a fresh allowance next to the first account's stopped segment.
  */
-export function deviceQuotaKeyFor(machineKey: string | null, devicePublicId: string): string {
-  return machineKey ?? devicePublicId;
+export function deviceQuotaKeyFor(machineAnchor: string | null, devicePublicId: string): string {
+  return machineAnchor ?? devicePublicId;
 }

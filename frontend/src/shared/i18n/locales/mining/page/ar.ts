@@ -3,8 +3,8 @@ import type { Strings } from "@/shared/i18n/types";
 
 const ar: Strings<typeof en> = {
   title: "التعدين",
-  description: "دورة مدتها 24 ساعة بمعدل يختاره الخادم لحسابك.",
-  shortDescription: "اكسب LMA بتعدين دورة مدتها 24 ساعة.",
+  description: "حتى 10 ساعات من التعدين في كل نافذة مدتها 24 ساعة، بمعدل يختاره الخادم لحسابك.",
+  shortDescription: "اكسب LMA بتعدين حتى 10 ساعات يوميًا.",
   loadError: {
     title: "تعذّر تحميل حالة التعدين",
     retry: "إعادة المحاولة",
@@ -19,7 +19,8 @@ const ar: Strings<typeof en> = {
     startBusy: "جارٍ بدء التعدين",
     collect: "تحصيل المكافأة",
     collectBusy: "جارٍ تحصيل المكافأة",
-    startNext: "بدء الدورة التالية",
+    stop: "إيقاف التعدين",
+    stopBusy: "جارٍ إيقاف التعدين",
   },
   historyLink: "عرض سجل الدورات",
   historyNote: "— كل دورة سابقة مع أرباحها.",

@@ -13,6 +13,7 @@ import { EmptyState, Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { useWallet } from "@/shared/hooks";
 import { parseAmount } from "@/shared/lib/platform";
+import { displayNote, loadLocalNote } from "@/shared/lib/wallet";
 import { downloadCsv, transactionsToCsv } from "@/shared/lib/wallet";
 import { currency, dateText, moneyToMinorUnits, sumMoney } from "@/shared/lib/wallet";
 
@@ -38,9 +39,12 @@ export function TransactionsPage() {
   const hasAdvanced = Boolean(dateFrom || dateTo || minAmount.trim() || maxAmount.trim());
   const filtered = transactions.filter((transaction) => {
     if (filter !== "all" && transaction.direction !== filter) return false;
+    // The note is part of what a customer remembers about a transfer, so it is searchable on both
+    // sides: the one on record and the personal one this device holds.
+    const localNote = loadLocalNote(userId, transaction.transferId);
     if (
       query &&
-      !`${transaction.counterpartyAddress} ${transaction.transferId}`
+      !`${transaction.counterpartyAddress} ${transaction.note} ${localNote} ${transaction.transferId}`
         .toLowerCase()
         .includes(query.toLowerCase())
     )
@@ -224,6 +228,10 @@ export function TransactionsPage() {
         {shown.length ? (
           shown.map((transaction, row) => {
             const isSent = transaction.direction === "sent";
+            const rowNote = displayNote(
+              transaction.note,
+              loadLocalNote(userId, transaction.transferId),
+            );
             return (
               <div
                 key={transaction.id}
@@ -242,7 +250,10 @@ export function TransactionsPage() {
                   <p className="break-all text-sm font-semibold">
                     {transaction.counterpartyAddress}
                   </p>
-                  <p className="text-xs text-muted-foreground">{dateText(transaction.createdAt)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {dateText(transaction.createdAt)}
+                    {rowNote ? ` · ${rowNote}` : ""}
+                  </p>
                 </Link>
                 {/*
                  * A received transfer credits the net amount: the amount the sender paid includes

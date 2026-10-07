@@ -50,6 +50,20 @@ export interface MiningPoolSpec {
 export interface MiningPoolsConfig {
   low: MiningPoolSpec;
   medium: MiningPoolSpec;
+  /**
+   * How long a joined room is held before a cycle starts, and each time a cycle is created.
+   *
+   * A room is a *hold*, not a permanent membership: joining grants the room for this long, a start
+   * extends it to the cycle's end, and the hold ends (releasing the room) the moment the cycle
+   * ends. The grace exists so the join -> start step of one person is never a race.
+   */
+  holdSeconds: number;
+  /**
+   * Minimum time between two room changes (a join or switch to a different room). The cooldown is
+   * anchored on the account's last membership write, so churn between rooms is bounded while
+   * continuing in the same room — the normal stop/resume loop — is never throttled.
+   */
+  switchCooldownSeconds: number;
 }
 
 export type LmdgRiskMode = "monitor" | "challenge" | "enforce";
@@ -76,9 +90,16 @@ export interface LmdgConfig {
   enrollmentEnabled: boolean;
   /** New device clusters one account may enroll per rolling 24h. */
   maxNewClustersPerAccountPerDay: number;
-  /** New device clusters one network context (server-observed IP) may enroll per rolling hour. */
+  /**
+   * New device clusters one network context (server-observed IP) may enroll per rolling hour.
+   *
+   * Sized for a *shared* address, not for one person: a NAT or carrier-grade NAT puts many
+   * unrelated customers behind one observed IP, so a bound tuned to one person's habits refuses
+   * honest first-time users as if they were churn (see `loadLmdgConfig`). The per-account budget
+   * stays the per-person limit.
+   */
   maxNewClustersPerNetworkPerHour: number;
-  /** New device clusters one network context may enroll per rolling 24h. */
+  /** New device clusters one network context may enroll per rolling 24h. Same shared-address sizing. */
   maxNewClustersPerNetworkPerDay: number;
   /**
    * When a network context already holds another account's live mining lease, a cluster that has not
@@ -435,6 +456,10 @@ function loadMiningPoolsConfig(values: NodeJS.ProcessEnv): MiningPoolsConfig {
   return {
     low: loadMiningPoolSpec(values, "MINING_POOL_LOW", 8500, 11500),
     medium: loadMiningPoolSpec(values, "MINING_POOL_MEDIUM", 7000, 13000),
+    // Ten minutes to press Start, and one room change per fifteen minutes: long enough that a
+    // person moving between rooms is never surprised, short enough to bound churn.
+    holdSeconds: positiveInteger("MINING_POOL_HOLD_SECONDS", values["MINING_POOL_HOLD_SECONDS"] ?? "600"),
+    switchCooldownSeconds: positiveInteger("MINING_POOL_SWITCH_COOLDOWN_SECONDS", values["MINING_POOL_SWITCH_COOLDOWN_SECONDS"] ?? "900"),
   };
 }
 
@@ -470,8 +495,27 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
   if (rawMode !== "monitor" && rawMode !== "challenge" && rawMode !== "enforce") throw new Error("LMDG_RISK_MODE must be monitor, challenge, or enforce");
   const enrollmentEnabled = booleanFlag("LMDG_ENROLLMENT_ENABLED", values["LMDG_ENROLLMENT_ENABLED"], true);
   const maxNewClustersPerAccountPerDay = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_ACCOUNT_PER_DAY", values["LMDG_MAX_NEW_CLUSTERS_PER_ACCOUNT_PER_DAY"] ?? "3", 1);
-  const maxNewClustersPerNetworkPerHour = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR", values["LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR"] ?? "8", 1);
-  const maxNewClustersPerNetworkPerDay = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY", values["LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY"] ?? "20", 1);
+  // The network-scoped counters are both a churn backstop and the *only* bound on one machine
+  // multiplying its mining allowance by editing hardware slots — they have to do two jobs, and their
+  // magnitude is the balance between them.
+  //
+  // They are not a per-person limit: an address is shared, and behind a NAT or a carrier-grade NAT
+  // many unrelated customers arrive from one observed IP. The measured legitimate demand of one
+  // address is small and bursty (the suites and probes mine ten machines from one IP in a run), so
+  // the hour cap keeps a 2x headroom over that and the day cap a 4x one.
+  //
+  // They are the allowance bound because a *fresh* device allowance always costs a new machine
+  // identity (an existing machine returning after its window closed opens the next window on its
+  // own anchor and spends nothing here), and no similarity rule can see an identity that moved three
+  // or more of the six engine-stable slots: measured, such an observation is `different` from the
+  // machine it was copied from on every signal the server has, exactly like an unrelated machine
+  // (see docs/mining-device-privacy-verification.md, sixth pass). So the step between one address
+  // and the next machine identity is the fixed point of the whole swap: 20 identities an hour and
+  // 40 a day bound one network to 40 fresh device allowances a day, where the shared 10h device
+  // quota wants one. Lowering them further trades honest NATs for margin; raising them reopens the
+  // multiplication, which is why they stay real, tunable bounds.
+  const maxNewClustersPerNetworkPerHour = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR", values["LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR"] ?? "20", 1);
+  const maxNewClustersPerNetworkPerDay = positiveInteger("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY", values["LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY"] ?? "40", 1);
   if (maxNewClustersPerNetworkPerDay < maxNewClustersPerNetworkPerHour) {
     throw new Error("LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_DAY must be at least LMDG_MAX_NEW_CLUSTERS_PER_NETWORK_PER_HOUR");
   }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { MongoClient } from "mongodb";
-import { MongoServerError, ObjectId } from "mongodb";
+import { Collection, MongoServerError, ObjectId } from "mongodb";
 import { generate } from "otplib";
 import { buildApp } from "../app.js";
 import { loadConfig, type AppConfig } from "../config/env.js";
@@ -991,6 +991,110 @@ test("two-factor authentication gates sign-in, spends a recovery code once, and 
 
   const storedCredential = await collections.twoFactorCredentials.findOne({ ownerUserId: account.userId });
   assert.equal(storedCredential, null, "disabling deletes the credential row");
+});
+
+/**
+ * Fault injection for the "a committed operation is never reported as an error" contract: every write
+ * to `security_events` fails for the duration of `run`. It reports how many writes it actually
+ * intercepted, so a test can prove the failure was injected rather than assume it was — an injection
+ * that silently missed would turn these tests into an untested 200.
+ */
+async function withFailingSecurityEvents<T>(run: () => Promise<T>): Promise<{ result: T; injected: number }> {
+  const prototype = Collection.prototype as unknown as { insertOne: (doc: unknown, options?: unknown) => Promise<unknown> };
+  const original = prototype.insertOne;
+  let injected = 0;
+  prototype.insertOne = function (this: { collectionName: string }, doc: unknown, options?: unknown) {
+    if (this.collectionName === "security_events") {
+      injected += 1;
+      return Promise.reject(new Error("injected audit write failure"));
+    }
+    return original.call(this, doc, options);
+  };
+  try {
+    return { result: await run(), injected };
+  } finally {
+    prototype.insertOne = original;
+  }
+}
+
+/** The same shape for the post-commit user re-read: only `users` lookups by `publicId` fail. */
+async function withFailingUserRead<T>(run: () => Promise<T>): Promise<{ result: T; injected: number }> {
+  const prototype = Collection.prototype as unknown as { findOne: (filter?: unknown, options?: unknown) => Promise<unknown> };
+  const original = prototype.findOne;
+  let injected = 0;
+  prototype.findOne = function (this: { collectionName: string }, filter?: unknown, options?: unknown) {
+    const byPublicId = typeof filter === "object" && filter !== null && Object.keys(filter).length === 1 && "publicId" in filter;
+    if (this.collectionName === "users" && byPublicId) {
+      injected += 1;
+      return Promise.reject(new Error("injected read failure"));
+    }
+    return original.call(this, filter, options);
+  };
+  try {
+    return { result: await run(), injected };
+  } finally {
+    prototype.findOne = original;
+  }
+}
+
+test("a committed account change survives a failing audit write, so it is never reported as an error", async () => {
+  const NEW_PASSWORD = "SmokeTest5678";
+  const account = await register("audit-post-commit");
+
+  // Reachable protections: every one of these commits its change first and writes the audit event after.
+  const started = await call("POST", "/api/v1/security/2fa/enable", { token: account.accessToken, body: { password: PASSWORD } });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const secret = started.body["secret"] as string;
+  const confirmed = await call("POST", "/api/v1/security/2fa/confirm", { token: account.accessToken, body: { code: await totpCode(secret) } });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  const firstCodes = confirmed.body["recoveryCodes"] as string[];
+  assert.equal(firstCodes.length, 8);
+
+  const { injected } = await withFailingSecurityEvents(async () => {
+    // New recovery codes: the old ones are already replaced by the time the audit write runs, so a
+    // failure here would answer 500 and never deliver the new codes — a lockout made by the audit log.
+    const regenerated = await call("POST", "/api/v1/security/2fa/recovery-codes", { token: account.accessToken, body: { password: PASSWORD, code: await totpCode(secret) } });
+    assert.equal(regenerated.status, 200, JSON.stringify(regenerated.body));
+    const codes = regenerated.body["recoveryCodes"] as string[];
+    assert.equal(codes.length, 8, "the caller receives the replacement codes");
+    assert.notDeepEqual(codes, firstCodes, "and they really are replacements");
+    const credential = await collections.twoFactorCredentials.findOne({ ownerUserId: account.userId });
+    assert.equal(credential?.recoveryCodeHashes.length, 8, "the stored hashes were replaced too");
+
+    // The account password: the old one no longer exists after this, so a 500 would be unretryable.
+    const changed = await call("POST", "/api/v1/auth/password", { token: account.accessToken, body: { currentPassword: PASSWORD, newPassword: NEW_PASSWORD } });
+    assert.equal(changed.status, 200, JSON.stringify(changed.body));
+
+    const frozen = await call("POST", "/api/v1/security/freeze", { token: account.accessToken });
+    assert.equal(frozen.status, 200, JSON.stringify(frozen.body));
+    assert.equal((frozen.body as { status: string }).status, "frozen", "the freeze really landed");
+
+    const disabled = await call("POST", "/api/v1/security/2fa/disable", { token: account.accessToken, body: { password: NEW_PASSWORD, code: await totpCode(secret) } });
+    assert.equal(disabled.status, 200, JSON.stringify(disabled.body));
+    assert.equal(disabled.body["enabled"], false);
+  });
+
+  assert.equal(injected, 4, "the injected audit failure fired on every one of those writes");
+  // The effects stand, which is exactly why the response had to be a success.
+  assert.equal(await collections.wallets.findOne({ ownerUserId: account.userId }).then((wallet) => wallet?.status), "frozen");
+  assert.equal(await collections.twoFactorCredentials.findOne({ ownerUserId: account.userId }), null);
+  // Unfreezing is itself gated on the account password, so it is how this test proves the password
+  // change really landed (a frozen wallet refuses sign-in, which is why login is asserted after it).
+  const unfrozen = await call("POST", "/api/v1/security/unfreeze", { token: account.accessToken, body: { password: NEW_PASSWORD } });
+  assert.equal(unfrozen.status, 200, JSON.stringify(unfrozen.body));
+  assert.equal((await call("POST", "/api/v1/auth/login", { body: { email: account.email, password: NEW_PASSWORD } })).status, 200, "the new password is the account password");
+});
+
+test("a registration whose post-commit re-read fails still returns the account it created", async () => {
+  // The account, its wallet and its ledger account are committed inside one transaction; the read that
+  // follows it is only how the answer is formatted. When that read fails, the retry would be answered
+  // `account_exists`, so reporting an error would leave a customer with an account and no way in.
+  const { result: account, injected } = await withFailingUserRead(() => register("audit-post-commit-register"));
+  assert.ok(injected >= 1, `the injected read failure fired: ${injected}`);
+  assert.ok(account.accessToken, "the caller keeps the session the registration issued");
+  assert.ok(await collections.users.findOne({ _id: { $exists: true }, publicId: account.userId }), "and the account is really there");
+  assert.equal((await call("GET", "/api/v1/me", { token: account.accessToken })).status, 200, "the session it returned works");
+  assert.equal((await call("POST", "/api/v1/auth/register", { body: { email: account.email, password: PASSWORD, displayName: "Smoke again" } })).status, 409, "registering again is the account_exists conflict, not a success");
 });
 
 test("a custom address replaces the receiving address, stays unique, and is locked for 30 days", async () => {

@@ -12,8 +12,11 @@
 /** Rejection code for POST /api/v1/mining/start when another account holds the device lease. */
 export const DEVICE_IN_USE_CODE = "mining_device_already_in_use";
 
+// Honest about both causes: a lease can conflict because this device is mining, or because the
+// guard identified the machine by hardware traits (the machine key) and another account holds a
+// cycle on that identity. Claiming the caller's device is mining would be false for the second.
 export const DEVICE_IN_USE_MESSAGE =
-  "This device already has an active mining cycle. Try again after the current cycle ends.";
+  "A mining cycle is already active on this device, or on a machine the guard identifies as the same hardware. One device runs one mining cycle at a time. Try again after the current cycle ends, or use a different device.";
 
 export const DEVICE_STATUS_MESSAGE =
   "Mining is already active on this device. One device can run one mining cycle at a time. Try again after the current mining cycle ends or use a different device.";
@@ -27,8 +30,10 @@ export const DEVICE_EVIDENCE_MISSING_CODE = "mining_device_evidence_required";
  */
 export const DEVICE_ENROLLMENT_LIMITED_CODE = "mining_device_enrollment_limited";
 
+// Names the limit as temporary and the account as unaffected: a first-time user refused here has
+// nothing wrong with their account, and the previous wording read as though they did.
 export const DEVICE_ENROLLMENT_LIMITED_MESSAGE =
-  "Too many new devices have been registered from this account or network recently. Try again later, or start mining on a device you have already used.";
+  "Too many new devices have been registered from this account or this network recently. Wait before trying again, or continue on a device you have already mined with. This limit is temporary and your account is not blocked.";
 
 /**
  * Rejection code when a machine identity that has not earned server-owned trust appears on a network
@@ -41,7 +46,7 @@ export const DEVICE_NETWORK_IN_USE_MESSAGE =
   "Mining is already active from this network. Try again after the current cycle ends, or continue on a device that has already mined here.";
 
 export const DEVICE_EVIDENCE_MISSING_MESSAGE =
-  "This device could not be identified, so mining cannot start. Reload the page — and if the problem persists, turn off content blockers for this site — then try again.";
+  "Mining cannot start because this browser hides or does not provide enough device information. Use a browser that exposes device information or allow it for this site, then try again. Your account is not blocked.";
 
 /** Challenge handshake rate limits (per account). */
 export const CHALLENGE_MAX_PER_HOUR = 20;
@@ -108,6 +113,16 @@ export const MAX_CONSISTENCY_FINDINGS = 6;
 export const MAX_ACCOUNTS_PER_DEVICE_CLUSTER = 5;
 export const MAX_DEVICES_PER_ACCOUNT = 10;
 export const MAX_REJECTS_BEFORE_QUARANTINE = 8;
+
+/**
+ * Reserved `deviceClusterId` namespace of the per-network admission token (see
+ * `networkLockKeyFor` in lease.ts): one active token per network, taken by every non-resident
+ * start, so two fresh identities racing on one network serialize on the unique active-lease index.
+ * Device identities are server-derived digests and can never carry this prefix, so the readers that
+ * mean "a lease on a device" exclude it.
+ */
+export const NETWORK_LOCK_KEY_PREFIX = "net:";
+export const NETWORK_LOCK_KEY_PATTERN = /^net:/;
 
 export const LMDG_EVENT_TYPES = {
   registered: "mining_device_registered",

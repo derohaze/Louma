@@ -223,6 +223,31 @@ const CORE_MACHINE_FEATURES: readonly string[] = [
   "screenDepth",
 ];
 
+/** The same core slots as a lookup set, for verdicts that must count identity slots only. */
+export const CORE_MACHINE_FEATURE_SET: ReadonlySet<string> = new Set(CORE_MACHINE_FEATURES);
+
+/**
+ * The near-clone band: a candidate that agrees with a known record on at least four engine-stable
+ * identity slots while at least two of the same six report different hardware.
+ *
+ * Both edges matter. Fewer than four agreements is not enough shared identity to say anything —
+ * two ordinary machines can share a CPU class, a touch class and a panel depth. Two moved slots
+ * is where a client that keeps a machine's identity while editing its hardware story lands —
+ * measured: two accounts mined one computer by reporting the same CPU, touch class, panel depth
+ * and HDR support with a different audio device and display gamut, on two networks, while the
+ * weighted score stayed below the ambiguity threshold because the engine-owned corroborators
+ * (fonts, capture devices, memory class) had also moved. The verdict is the conservative middle:
+ * the one-machine rule refuses it while the known machine holds a live lease, and a genuinely
+ * different machine is free to enroll once that machine stops. It is deliberately *not* "same":
+ * the two observations are never merged into one record on this evidence.
+ *
+ * The band cannot be decided by the weighted score, because the corroborators it would weigh are
+ * exactly the traits two browsers of one computer disagree about by construction; it is counted
+ * on the identity slots alone.
+ */
+export const MIN_CORE_IDENTITY_AGREEMENTS = 4;
+export const MIN_CORE_IDENTITY_MOVES = 2;
+
 /** How many core slots must be reported before a machine key is allowed to exist. */
 export const MIN_MACHINE_FEATURES = 4;
 
@@ -657,6 +682,28 @@ export function matchDeviceFeatures(
 export type ClusterVerdict = "same" | "ambiguous" | "different";
 
 /**
+ * The near-clone band: the machine class was compared and not contradicted, and the two sides agree
+ * on at least `MIN_CORE_IDENTITY_AGREEMENTS` core identity slots while at least
+ * `MIN_CORE_IDENTITY_MOVES` of them moved.
+ *
+ * Exported because it is not only a verdict. A caller that binds an *economic* limit to the machine
+ * (the shared 10h device quota) has to recognise the same band: a near clone is enrolled as its own
+ * record with its own immutable anchor, so a quota keyed on that anchor alone would open a fresh
+ * allowance beside the matched machine's stopped segment — one machine collecting an allowance per
+ * edited slot. The verdict stays `ambiguous` (the record is still not merged, and a live lease on the
+ * known machine still refuses the start); only the machine the allowance belongs to becomes shared.
+ */
+export function isNearCloneMatch(match: ClusterMatch): boolean {
+  const matchedCoreSlots = match.matchedMachine.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+  const movedCoreSlots = match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+  return (
+    match.classCompared.length >= MIN_MACHINE_CLASS_FEATURES &&
+    matchedCoreSlots >= MIN_CORE_IDENTITY_AGREEMENTS &&
+    movedCoreSlots >= MIN_CORE_IDENTITY_MOVES
+  );
+}
+
+/**
  * A positive "same device" verdict is a statement about the *computer*, so it is decided on the
  * machine traits and never on the rendering stack.
  *
@@ -685,6 +732,13 @@ export type ClusterVerdict = "same" | "ambiguous" | "different";
 export function decideClusterMatch(match: ClusterMatch, highThreshold: number, ambiguousThreshold: number): ClusterVerdict {
   if (match.classDrifted.length > 0) {
     return match.score >= ambiguousThreshold ? "ambiguous" : "different";
+  }
+  // A known machine whose hardware story moved by identity slots, however well its browser traits
+  // agree: a client reporting someone else's machine with edited hardware looks like this, and so
+  // does a genuine machine of a very similar model. The conservative middle — refused while the
+  // known machine is mining, then enrolable — is the honest answer for both.
+  if (isNearCloneMatch(match)) {
+    return "ambiguous";
   }
   if (
     match.classCompared.length >= MIN_MACHINE_CLASS_FEATURES &&

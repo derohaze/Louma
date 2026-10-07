@@ -11,6 +11,8 @@ import { getCollections, type Collections } from "../infrastructure/mongodb/coll
 import { disabledRedis } from "../infrastructure/redis/client.js";
 import { isMiningTransaction, MONEY_SCALE } from "../shared/types.js";
 import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
+import { buildFeatureMap, decideClusterMatch, digestFeatureMap, learnFeatureProfile, matchDeviceFeatures } from "../modules/mining-device/identity.js";
+import { normalizeSignals, sanitizeEvidence } from "../modules/mining-device/signals.js";
 
 /**
  * Mining against the configured MongoDB cluster.
@@ -112,11 +114,20 @@ const MACHINE_SYSTEMS = [
 ];
 
 function deviceEvidence(machine: number): Record<string, unknown> {
-  // Each account mines from its own machine, and the dimensions are coprime enough that the first
-  // sixty accounts differ in the OS, screen, CPU class, memory, timezone or capture devices. That
-  // matters now that the matcher weighs those traits: two fixtures sharing them all and differing
-  // only in the GPU correlate as "ambiguous", which is the right answer for near-identical real
-  // laptops and the wrong one here — a test that merely reads its neighbour's live lease would fail.
+  // Each account mines from its own machine. The six engine-stable identity slots are a
+  // certificate code, the same construction as the mining-device suite's fixtures: four data slots
+  // carry a mixed-radix machine index — CPU class (5), touch class (3), display gamut (3), HDR (2)
+  // — the panel colour depth is their weighted-sum certificate (nonzero for every change of any
+  // one of them), and the audio device stays unique. Any two machines therefore differ in at least
+  // three identity slots (capacity: 90 machines). The coarse pattern this replaces left pairs that
+  // agreed on four slots and moved two — the guard's near-clone band — so a test could read its
+  // neighbour's live lease and fail for the wrong reason (measured: `mining_device_already_in_use`
+  // on the accrual and device-quota starts, which must succeed).
+  const hardwareDigit = machine % 5;
+  const touchDigit = Math.floor(machine / 5) % 3;
+  const gamutDigit = Math.floor(machine / 15) % 3;
+  const hdrDigit = Math.floor(machine / 45) % 2;
+  const depthDigit = (hardwareDigit + 3 * touchDigit + 5 * gamutDigit + 7 * hdrDigit) % 8;
   const [width, height, pixelRatio] = MACHINE_RESOLUTIONS[machine % MACHINE_RESOLUTIONS.length]!;
   const [timezone, timezoneOffsetMinutes] = MACHINE_ZONES[machine % MACHINE_ZONES.length]!;
   const system = MACHINE_SYSTEMS[machine % MACHINE_SYSTEMS.length]!;
@@ -132,9 +143,9 @@ function deviceEvidence(machine: number): Record<string, unknown> {
     timezone,
     timezoneOffsetMinutes,
     language: "en-US",
-    hardwareConcurrency: [2, 3, 4, 6, 8, 10, 12, 16, 20, 24][machine % 10]!,
+    hardwareConcurrency: [2, 4, 8, 16, 32][hardwareDigit]!,
     deviceMemory: [1, 2, 4, 8, 16, 32][machine % 6]!,
-    maxTouchPoints: machine % 5 === 0 ? 10 : 0,
+    maxTouchPoints: [0, 5, 10][touchDigit]!,
     // The GPU identity, its limits, its extensions and the audio device are part of the machine
     // identity the server derives, and they are what makes each simulated machine distinct for any
     // number of accounts: the screen/CPU/memory pattern repeats every 60 indices, and a collision
@@ -149,19 +160,19 @@ function deviceEvidence(machine: number): Record<string, unknown> {
     // a non-default panel depth make every simulated machine distinct by construction. Neither value
     // is what a plain desktop reports, which also keeps a fixture from colliding with a real machine.
     audioSampleRate: 22050 + machine * 750,
-    screenColorDepth: [30, 32][machine % 2]!,
+    screenColorDepth: [24, 30, 32, 36, 40, 48, 56, 64][depthDigit]!,
     webglVendor: `vendor-machine-${RUN}-${machine}`,
     webglRenderer: `renderer-machine-${RUN}-${machine}`,
     webglLimitsHash: `limits-machine-${RUN}-${machine}`,
     webglExtensionsHash: `extensions-machine-${RUN}-${machine}`,
     webgpuHash: `webgpu-machine-${RUN}-${machine}`,
     audioChannels: 2,
-    hdr: machine % 7 === 0,
+    hdr: hdrDigit === 1,
     webglHash: `webgl-machine-${RUN}-${machine}`,
     canvasHash: `canvas-machine-${RUN}-${machine}`,
     audioHash: `audio-machine-${RUN}-${machine}`,
     fontsHash: `fonts-machine-${RUN}-${machine}`,
-    colorGamut: ["srgb", "p3", "rec2020"][machine % 3]!,
+    colorGamut: ["srgb", "p3", "rec2020"][gamutDigit]!,
     mediaAudioInputs: machine % 5,
     mediaVideoInputs: machine % 4,
     platformVersion: `${machine}.${machine % 7}.${machine % 5}`,
@@ -228,12 +239,8 @@ async function register(label: string): Promise<Account> {
   const account = await collections.ledgerAccounts.findOne({ walletId: wallet.id, accountType: "wallet" });
   assert.ok(account, "the wallet has a ledger account");
   createdWalletAccountIds.push(account.publicId);
-  // Mining requires pool membership: every fixture account joins the Low pool on creation.
-  const joined = await call("POST", "/api/v1/mining/pools/join", {
-    token: response.body["accessToken"] as string,
-    body: { poolId: "low" },
-  });
-  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  // No room on registration: a hold lasts only while a start or a cycle justifies it, so fixtures
+  // take one where the test needs one (`startMiningOn` joins Low first).
   return {
     userId: user.id,
     email,
@@ -269,15 +276,33 @@ interface MiningSession {
 async function miningState(account: Account) {
   const response = await call("GET", "/api/v1/mining/state", { token: account.accessToken });
   assert.equal(response.status, 200, JSON.stringify(response.body));
-  return response.body as { status: string; enabled: boolean; canStart: boolean; serverNow: string; session: MiningSession | null };
+  return response.body as {
+    status: string;
+    enabled: boolean;
+    canStart: boolean;
+    serverNow: string;
+    session: MiningSession | null;
+    poolId: string | null;
+    poolRequired: boolean;
+  };
 }
 
 async function startMining(account: Account) {
   return startMiningOn(account, account.machine);
 }
 
-/** Starts mining as `account` from an explicit simulated machine (a device). */
+/** Takes the Low room, which a start requires. Re-joining a held room is an idempotent no-op. */
+async function joinLow(account: Account): Promise<void> {
+  const response = await call("POST", "/api/v1/mining/pools/join", { token: account.accessToken, body: { poolId: "low" } });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+}
+
+/**
+ * Starts mining as `account` from an explicit simulated machine (a device), after taking a room:
+ * a cycle only opens from inside one, and both a stop and a finished window release it.
+ */
 async function startMiningOn(account: Account, machine: number) {
+  await joinLow(account);
   const response = await call("POST", "/api/v1/mining/start", {
     token: account.accessToken,
     body: { device: deviceEvidence(machine) },
@@ -292,6 +317,37 @@ async function startMiningOn(account: Account, machine: number) {
 function freshMachine(): number {
   return nextMachine++;
 }
+
+/**
+ * FIXTURE ISOLATION: the certificate code's guarantee, recomputed with the real matcher.
+ *
+ * Two distinct simulated machines must differ in at least three engine-stable identity slots, so no
+ * pair may resolve to "same" or "ambiguous". Without this, a test whose machine landed in the
+ * guard's one-moved or two-moved bands reads its neighbour's live lease and fails on the fixture
+ * rather than on the rule under test (measured: the accrual and device-quota starts, refused with
+ * `mining_device_already_in_use` before the certificate code replaced the coarse pattern).
+ */
+test("FIXTURE ISOLATION: distinct simulated machines never correlate into one", () => {
+  const secret = config.encryptionKey;
+  const fixtures = Array.from({ length: 90 }, (_, machine) => {
+    const raw = buildFeatureMap(normalizeSignals(sanitizeEvidence(deviceEvidence(machine))));
+    return { machine, digests: digestFeatureMap(secret, raw), raw };
+  });
+  const problems: string[] = [];
+  for (let i = 0; i < fixtures.length; i += 1) {
+    const profile = learnFeatureProfile(null, fixtures[i]!.digests);
+    for (let j = i + 1; j < fixtures.length; j += 1) {
+      const match = matchDeviceFeatures(
+        { featureProfile: profile, featureSnapshot: fixtures[i]!.digests, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+        { digests: fixtures[j]!.digests, raw: fixtures[j]!.raw, machine: {} },
+        secret,
+      );
+      const verdict = decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+      if (verdict !== "different") problems.push(`machine ${i} vs ${j}: ${verdict} (score ${match.score}, machine ${match.machineScore})`);
+    }
+  }
+  assert.deepEqual(problems, [], `simulated machines must not correlate: ${problems.slice(0, 5).join("; ")}`);
+});
 
 async function settleMining(account: Account, body?: unknown) {
   const response = await call("POST", "/api/v1/mining/settle", { token: account.accessToken, ...(body === undefined ? {} : { body }) });
@@ -475,6 +531,95 @@ test("mining is impossible without a pool: start is refused until the account jo
   assert.equal(bogus.status, 400);
 });
 
+test("stopping releases the room, and a running cycle owns it: no moving while mining", async () => {
+  const account = await register("stop-releases");
+  const started = await startMining(account);
+  const held = await call("GET", "/api/v1/mining/pools", { token: account.accessToken });
+  assert.equal((held.body as { poolId: string | null }).poolId, "low", "the room is held while the cycle runs");
+
+  // A running cycle drew its rate from this room: it can neither be left nor swapped while it runs.
+  const leaveWhileRunning = await call("POST", "/api/v1/mining/pools/leave", { token: account.accessToken });
+  assert.equal(leaveWhileRunning.status, 409, JSON.stringify(leaveWhileRunning.body));
+  assert.equal((leaveWhileRunning.body["error"] as { code: string }).code, "mining_cycle_active");
+  const switchWhileRunning = await call("POST", "/api/v1/mining/pools/join", { token: account.accessToken, body: { poolId: "medium" } });
+  assert.equal(switchWhileRunning.status, 409, JSON.stringify(switchWhileRunning.body));
+  assert.equal((switchWhileRunning.body["error"] as { code: string }).code, "mining_cycle_active");
+
+  await rewindCycle(started.session.id, HOUR_MS);
+  const stopped = await call("POST", "/api/v1/mining/stop", { token: account.accessToken });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+
+  const after = await call("GET", "/api/v1/mining/pools", { token: account.accessToken });
+  assert.equal((after.body as { poolId: string | null }).poolId, null, "the stop released the room with the cycle");
+  assert.equal(
+    ((after.body as { pools: { id: string; joined: boolean }[] }).pools ?? []).find((pool) => pool.id === "low")?.joined,
+    false,
+    "the room no longer counts the account as a miner",
+  );
+  const afterState = await miningState(account);
+  assert.equal(afterState.poolRequired, true, "the state gate agrees: a room is required again");
+  const refused = await call("POST", "/api/v1/mining/start", {
+    token: account.accessToken,
+    body: { device: deviceEvidence(account.machine) },
+  });
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.equal((refused.body["error"] as { code: string }).code, "mining_pool_required");
+
+  // Taking the same room again is never throttled, so stop -> rejoin -> start stays the normal loop.
+  await joinLow(account);
+  const resumed = await startMining(account);
+  assert.notEqual(resumed.session.id, started.session.id);
+});
+
+test("a finished cycle releases its room by itself: the deadline is the cycle's end", async () => {
+  const account = await register("cycle-releases");
+  const started = await startMining(account);
+  // The window ends: the hold's deadline was the cycle's end, so the room is gone the moment the
+  // cycle is. A plain read reports it — no job runs, and no write is needed to make it true. The
+  // rewind is a test-only time machine, so it moves both: production never moves a cycle's window
+  // without its hold, because the start wrote `expiresAt = endsAt`.
+  await rewindCycle(started.session.id, DAY_MS + 60_000);
+  const rewound = await collections.miningSessions.findOne({ publicId: started.session.id });
+  assert.ok(rewound, "the cycle exists");
+  await collections.miningPoolMembers.updateOne(
+    { ownerUserId: account.userId },
+    { $set: { expiresAt: rewound.endsAt } },
+  );
+  const state = await miningState(account);
+  assert.equal(state.status, "completed");
+  assert.equal(state.poolRequired, true, "a completed cycle is not a room");
+  const pools = await call("GET", "/api/v1/mining/pools", { token: account.accessToken });
+  assert.equal((pools.body as { poolId: string | null }).poolId, null);
+  assert.equal((pools.body as { cycleActive: boolean }).cycleActive, false);
+});
+
+test("an expired hold cannot open a cycle, and a cycle's hold is exactly its window", async () => {
+  const account = await register("expired-hold");
+  await joinLow(account);
+  // The join grace passes before anybody presses Start: the room is no longer the account's, so the
+  // stale row can never open a cycle.
+  await collections.miningPoolMembers.updateOne(
+    { ownerUserId: account.userId },
+    { $set: { expiresAt: new Date(Date.now() - 1000) } },
+  );
+  const refused = await call("POST", "/api/v1/mining/start", {
+    token: account.accessToken,
+    body: { device: deviceEvidence(account.machine) },
+  });
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.equal((refused.body["error"] as { code: string }).code, "mining_pool_required");
+
+  const started = await startMining(account);
+  assert.equal(started.session.status, "active");
+  const row = await collections.miningPoolMembers.findOne({ ownerUserId: account.userId });
+  assert.equal(row?.status, "held");
+  assert.equal(
+    row?.expiresAt?.getTime(),
+    new Date(started.session.endsAt).getTime(),
+    "starting extended the join grace to the cycle's end",
+  );
+});
+
 test("a pool cap stored in mining_settings is enforced without a restart", async () => {
   // Idempotent start: a leaked row from an interrupted run must not fail this one.
   await collections.miningSettings.deleteOne({ key: "mining.pools.medium" });
@@ -644,7 +789,9 @@ test("exactly 10 hours: past the segment end pays nothing more", async () => {
   assert.equal(await collections.ledgerEntries.countDocuments({ ledgerAccountId: account.ledgerAccountId }), before, "no further lines were written");
 
   // A closed 10h segment exhausts the window: the next start in the SAME window
-  // is refused, and only the next 24h window opens fresh quota.
+  // is refused, and only the next 24h window opens fresh quota. The room is taken first: it was
+  // released with the cycle, and the pool gate would otherwise answer before the quota does.
+  await joinLow(account);
   const refused = await call("POST", "/api/v1/mining/start", {
     token: account.accessToken,
     body: { device: deviceEvidence(account.machine) },
@@ -823,6 +970,9 @@ test("exhausting the 10h quota refuses the next start until the window resets", 
   await rewindCycle(started.session.id, QUOTA_MS);
   const stopped = await call("POST", "/api/v1/mining/stop", { token: account.accessToken });
   assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  // The stop released the room, so it is taken again before the start — the quota must be what
+  // refuses this account, not the pool gate.
+  await joinLow(account);
   const refused = await call("POST", "/api/v1/mining/start", {
     token: account.accessToken,
     body: { device: deviceEvidence(account.machine) },
@@ -844,25 +994,33 @@ test("cross-account device quota: A 1h + B 2h on X, then A is capped everywhere"
   const aStopped = await call("POST", "/api/v1/mining/stop", { token: accountA.accessToken });
   assert.equal(aStopped.status, 200, JSON.stringify(aStopped.body));
   const aQuota = (aStopped.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
-  assert.equal(aQuota.consumedSeconds, 3600);
-  assert.equal(aQuota.remainingSeconds, QUOTA_SECONDS - 3600);
+  // The stop truncates the segment at the server clock, so the consumed second carries the round
+  // trip between the start and the stop: an hour, never a second less. It is asserted as the exact
+  // relationship the quota holds (consumed + remaining = one window), not as a literal that the
+  // link's latency would decide.
+  assert.ok(aQuota.consumedSeconds >= 3600 && aQuota.consumedSeconds < 3600 + 30, `one hour of mining is consumed: ${aQuota.consumedSeconds}`);
+  assert.equal(aQuota.remainingSeconds, QUOTA_SECONDS - aQuota.consumedSeconds);
 
-  // B starts on the SAME device X: the shared device quota leaves B at most 9h,
-  // even though B's own account quota is a fresh 10h.
+  // B starts on the SAME device X: the shared device quota leaves B exactly what A's hour left on
+  // it, even though B's own account quota is a fresh 10h.
   const bFirst = await startMiningOn(accountB, deviceX);
-  assert.equal(bFirst.session.durationSeconds, QUOTA_SECONDS - 3600, "device X has 9h left, shared across accounts");
+  assert.equal(bFirst.session.durationSeconds, QUOTA_SECONDS - aQuota.consumedSeconds, "device X has what A left, shared across accounts");
   await rewindCycle(bFirst.session.id, 2 * HOUR_MS);
   const bStopped = await call("POST", "/api/v1/mining/stop", { token: accountB.accessToken });
   assert.equal(bStopped.status, 200, JSON.stringify(bStopped.body));
-  assert.equal((bStopped.body as { quota: { consumedSeconds: number } }).quota.consumedSeconds, 2 * 3600);
+  const bQuota = (bStopped.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
+  assert.ok(bQuota.consumedSeconds >= 2 * 3600 && bQuota.consumedSeconds < 2 * 3600 + 30, `two hours of mining are consumed: ${bQuota.consumedSeconds}`);
+  assert.equal(bQuota.remainingSeconds, QUOTA_SECONDS - bQuota.consumedSeconds);
 
-  // A moves to a FRESH device Y: the account quota (9h left) still binds, so the
-  // segment is capped to 9h even though Y itself is untouched.
+  // A moves to a FRESH device Y: A's own account quota (what its first hour left) still binds, so
+  // the segment is capped to it even though Y itself is untouched.
   const aOnY = await startMiningOn(accountA, deviceY);
-  assert.equal(aOnY.session.durationSeconds, QUOTA_SECONDS - 3600, "account quota follows across devices");
+  assert.equal(aOnY.session.durationSeconds, QUOTA_SECONDS - aQuota.consumedSeconds, "account quota follows across devices");
 
   // While A mines on Y, B cannot mine on Y at the same moment, and the rejected
-  // attempt consumes no quota for B.
+  // attempt consumes no quota for B. B's room was released by its own stop, so it takes it again:
+  // the device conflict is what this attempt must be measured against, not the pool gate.
+  await joinLow(accountB);
   const bRace = await call("POST", "/api/v1/mining/start", {
     token: accountB.accessToken,
     body: { device: deviceEvidence(deviceY) },
@@ -870,7 +1028,7 @@ test("cross-account device quota: A 1h + B 2h on X, then A is capped everywhere"
   assert.equal(bRace.status, 409);
   assert.equal((bRace.body["error"] as { code: string }).code, "mining_device_already_in_use");
   const bState = await miningState(accountB);
-  assert.equal((bState as unknown as { quota: { consumedSeconds: number } }).quota.consumedSeconds, 2 * 3600, "the rejected start consumed nothing");
+  assert.equal((bState as unknown as { quota: { consumedSeconds: number } }).quota.consumedSeconds, bQuota.consumedSeconds, "the rejected start consumed nothing");
   assert.equal((await miningState(accountA)).status, "active", "A remains the active miner on Y");
 
   // A mines 8h more on Y and stops: A consumed 9h total, 1h remains.
@@ -878,14 +1036,26 @@ test("cross-account device quota: A 1h + B 2h on X, then A is capped everywhere"
   const aStopped2 = await call("POST", "/api/v1/mining/stop", { token: accountA.accessToken });
   assert.equal(aStopped2.status, 200, JSON.stringify(aStopped2.body));
   const aQuota2 = (aStopped2.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
-  assert.equal(aQuota2.consumedSeconds, 9 * 3600);
-  assert.equal(aQuota2.remainingSeconds, 3600);
+  assert.ok(
+    aQuota2.consumedSeconds >= aQuota.consumedSeconds + 8 * 3600 && aQuota2.consumedSeconds < aQuota.consumedSeconds + 8 * 3600 + 30,
+    `eight more hours are consumed on top of the first: ${aQuota2.consumedSeconds}`,
+  );
+  assert.equal(aQuota2.remainingSeconds, QUOTA_SECONDS - aQuota2.consumedSeconds);
 
-  // The next segment for A is capped to the final 1h on any device.
+  // The next segment for A is capped to exactly what the account has left, on any device — the
+  // same remaining the stop just reported.
   const aLast = await startMiningOn(accountA, deviceY);
-  assert.equal(aLast.session.durationSeconds, 3600);
+  assert.equal(aLast.session.durationSeconds, aQuota2.remainingSeconds);
 });
 
+// NOTE (environmental, 2026-10-07): on the shared dev database this test also sees four
+// pre-existing `demo-funding-*` orphan lines from 24 Jul 2026 (two Gmail demo accounts).
+// They are load-bearing history — the funded money moved onward, so deleting the 980M
+// credit would drive its wallet projection to -800M. They must NOT be deleted, forged a
+// journal header for, or added to TEST_FUNDING_CORRELATION_PREFIXES (the cleanup script
+// would then eat real balances). A failure naming only those four entries is data, not
+// mining code: the pool→start→settle→release→start loop is covered by the other tests
+// in this file plus the pool-race suite.
 test("the ledger remains reconciled after mining settles", async () => {
   const result = await reconcileLedger({ collections, mongoClient: client, options: { excludeCorrelationIdPrefixes: TEST_FUNDING_CORRELATION_PREFIXES } });
   assert.ok(result.ok, `ledger reconciliation must pass: ${JSON.stringify(result.issues)}`);

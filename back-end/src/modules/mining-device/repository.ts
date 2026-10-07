@@ -1,7 +1,7 @@
 import type { ClientSession } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { MiningDeviceLeaseRecord, MiningDeviceRecord } from "../../shared/types.js";
-import { CLUSTER_CANDIDATE_LIMIT } from "./policy.js";
+import { CLUSTER_CANDIDATE_LIMIT, NETWORK_LOCK_KEY_PATTERN } from "./policy.js";
 
 /**
  * LMDG persistence helpers. Thin wrappers over the typed collections so query shapes live in one
@@ -63,13 +63,14 @@ export async function findDeviceByAnchor(
  * result is bounded by the number of cycles that are running, not by the size of the population.
  */
 export async function findLiveLeasesOnNetwork(
-  collections: Pick<Collections, "miningDeviceLeases">,
+  collections: Pick<Collections, "miningDeviceLeases" | "miningSessions">,
   ipHashValue: string,
   nowMs: number,
 ): Promise<MiningDeviceLeaseRecord[]> {
-  return collections.miningDeviceLeases
+  const leases = await collections.miningDeviceLeases
     .find({ ipHash: ipHashValue, status: "active", leaseEndsAt: { $gt: new Date(nowMs) } })
     .toArray();
+  return leasesWithRunningSessions(collections, leases, nowMs);
 }
 
 /**
@@ -86,6 +87,32 @@ export async function lookupMachineKey(
   machineKeyHash: string,
 ): Promise<MiningDeviceRecord | null> {
   return collections.miningDevices.findOne({ machineKeyHash }, OLDEST_FIRST);
+}
+
+/**
+ * The live leases one account holds, most recent first.
+ *
+ * The device-status view is a claim about a *running* binding, not about a row still marked active:
+ * a cycle that expired or was settled by an older path leaves its lease rows behind until the next
+ * start on the same identities releases them, and answering from those rows would claim a device
+ * the account does not hold. Liveness is therefore the referenced session being active, owned by
+ * the account, and not ended — the same rule admission and the network lock apply. The reserved
+ * network token is excluded: it serializes the network rule, and it is not a lease on a device.
+ */
+export async function findLiveLeasesForOwner(
+  collections: Pick<Collections, "miningDeviceLeases" | "miningSessions">,
+  ownerUserId: string,
+  nowMs: number,
+): Promise<MiningDeviceLeaseRecord[]> {
+  const leases = await collections.miningDeviceLeases
+    .find({
+      ownerUserId,
+      status: "active",
+      deviceClusterId: { $not: { $regex: NETWORK_LOCK_KEY_PATTERN } },
+    })
+    .sort({ leaseEndsAt: -1 })
+    .toArray();
+  return leasesWithRunningSessions(collections, leases, nowMs);
 }
 
 export async function listClusterCandidates(
@@ -112,7 +139,7 @@ export function isLeaseLive(lease: MiningDeviceLeaseRecord, nowMs: number): bool
  * exactly how one machine could run two cycles.
  */
 export async function findLiveLeases(
-  collections: Pick<Collections, "miningDeviceLeases">,
+  collections: Pick<Collections, "miningDeviceLeases" | "miningSessions">,
   leaseKeys: string[],
   nowMs: number,
   mongoSession?: ClientSession,
@@ -122,7 +149,45 @@ export async function findLiveLeases(
   const leases = await collections.miningDeviceLeases
     .find({ deviceClusterId: { $in: unique }, status: "active" }, ...(mongoSession ? [{ session: mongoSession } as const] : []))
     .toArray();
-  return leases.filter((lease) => lease.leaseEndsAt.getTime() > nowMs);
+  return leasesWithRunningSessions(collections, leases.filter((lease) => isLeaseLive(lease, nowMs)), nowMs, mongoSession);
+}
+
+/** A leftover lease is not proof that mining is running. MongoDB sessions are authoritative. */
+async function leasesWithRunningSessions(
+  collections: Pick<Collections, "miningSessions">,
+  leases: MiningDeviceLeaseRecord[],
+  nowMs: number,
+  mongoSession?: ClientSession,
+): Promise<MiningDeviceLeaseRecord[]> {
+  if (leases.length === 0) return [];
+  const sessions = await collections.miningSessions.find(
+    { publicId: { $in: [...new Set(leases.map((lease) => lease.miningSessionId))] }, status: "active", endsAt: { $gt: new Date(nowMs) } },
+    { projection: { publicId: 1, ownerUserId: 1 }, ...(mongoSession ? { session: mongoSession } : {}) },
+  ).toArray();
+  const owners = new Map(sessions.map((session) => [session.publicId, session.ownerUserId]));
+  return leases.filter((lease) => owners.get(lease.miningSessionId) === lease.ownerUserId);
+}
+
+/** Release only rows whose referenced cycle is not running, inside the start transaction. */
+export async function releaseInactiveLeases(
+  collections: Pick<Collections, "miningDeviceLeases" | "miningSessions">,
+  leaseKeys: string[],
+  nowMs: number,
+  mongoSession: ClientSession,
+): Promise<void> {
+  const leases = await collections.miningDeviceLeases.find(
+    { deviceClusterId: { $in: leaseKeys }, status: "active" },
+    { session: mongoSession },
+  ).toArray();
+  const live = new Set((await leasesWithRunningSessions(collections, leases.filter((lease) => isLeaseLive(lease, nowMs)), nowMs, mongoSession)).map((lease) => lease.publicId));
+  const inactiveIds = leases.filter((lease) => !live.has(lease.publicId)).map((lease) => lease._id);
+  if (inactiveIds.length > 0) {
+    await collections.miningDeviceLeases.updateMany(
+      { _id: { $in: inactiveIds }, status: "active" },
+      { $set: { status: "released", updatedAt: new Date(nowMs) } },
+      { session: mongoSession },
+    );
+  }
 }
 
 export { isDuplicateKeyError } from "../../shared/mongo-retry.js";

@@ -20,6 +20,8 @@
     "migrate:mining-settlements:dev": "node --env-file-if-exists=.env.development --import \"data:text/javascript,import dns from 'node:dns';dns.setServers(['1.1.1.1','9.9.9.9']);\" --import tsx src/scripts/migrate-mining-settlements.ts",
     "financial:controls": "node --env-file-if-exists=.env.production dist/scripts/financial-controls.js",
     "mining:settings": "node --env-file-if-exists=.env.production dist/scripts/mining-settings.js",
+    "ops:mining-refusals": "node --env-file-if-exists=.env.production dist/scripts/mining-refusal-report.js",
+    "ops:mining-refusals:dev": "node --env-file-if-exists=.env.development --import \"data:text/javascript,import dns from 'node:dns';dns.setServers(['1.1.1.1','9.9.9.9']);\" --import tsx src/scripts/mining-refusal-report.ts",
     "mining:settings:dev": "node --env-file-if-exists=.env.development --import \"data:text/javascript,import dns from 'node:dns';dns.setServers(['1.1.1.1','9.9.9.9']);\" --import tsx src/scripts/mining-settings.ts",
     "financial:controls:dev": "node --env-file-if-exists=.env.development --import \"data:text/javascript,import dns from 'node:dns';dns.setServers(['1.1.1.1','9.9.9.9']);\" --import tsx src/scripts/financial-controls.ts",
     "bench:transfers": "node --env-file-if-exists=.env.development --import \"data:text/javascript,import dns from 'node:dns';dns.setServers(['1.1.1.1','9.9.9.9']);\" --import tsx src/tests/transfer-benchmark.ts",

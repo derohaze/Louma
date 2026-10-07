@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { PrinterIcon } from "@hugeicons/core-free-icons";
+import { NoteEditIcon, PrinterIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
 import { useWallet, type Transaction } from "@/shared/hooks";
 import { api, messageForError } from "@/shared/api";
+import { displayNote, loadLocalNote, saveLocalNote } from "@/shared/lib/wallet";
 import { currency, dateText, transferNet, transferTax } from "@/shared/lib/wallet";
 import { CopyButton, EmptyState, Icon, PageHeader } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
@@ -18,11 +20,14 @@ import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
 export function TransactionDetailContent({ transferId }: { transferId: string }) {
   const t = useT("transactions.detail");
   const common = useT("common");
-  const { transactions } = useWallet();
+  const { transactions, userId } = useWallet();
   const known = transactions.find((item) => item.transferId === transferId);
   const [fetched, setFetched] = useState<Transaction | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(!known);
+  const [personalNote, setPersonalNote] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [editingNote, setEditingNote] = useState(false);
 
   useEffect(() => {
     if (known) {
@@ -45,6 +50,15 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
       active = false;
     };
   }, [known, transferId]);
+
+  // The personal note is device-local, so it is read here rather than from the transfer record:
+  // a note written before this view existed is still on this device and must come back.
+  useEffect(() => {
+    const saved = loadLocalNote(userId, transferId);
+    setPersonalNote(saved);
+    setNoteDraft(saved);
+    setEditingNote(false);
+  }, [userId, transferId]);
 
   const transaction = known ?? fetched;
   if (loading) {
@@ -106,6 +120,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
               items={[
                 ...breakdown,
                 [t("breakdown.status"), common("state.completed")],
+                [t("breakdown.note"), transaction.note || common("state.none")],
                 [
                   t("breakdown.transferId"),
                   <code key="id" className="break-all">
@@ -138,9 +153,65 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
               </div>
             )}
           </Panel>
+          <Panel delayMs={150} title={t("notes.title")} description={t("notes.description")}>
+            <FactList
+              items={[
+                [t("notes.onRecord"), transaction.note || common("state.none")],
+                [t("notes.personal"), displayNote("", personalNote) || common("state.none")],
+              ]}
+            />
+            {editingNote ? (
+              <form
+                className="mt-4 flex flex-col gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  saveLocalNote(userId, transferId, noteDraft);
+                  setPersonalNote(noteDraft.trim().slice(0, 240));
+                  setEditingNote(false);
+                }}
+              >
+                <Input
+                  autoFocus
+                  aria-label={t("notes.personalAria")}
+                  placeholder={t("notes.personalPlaceholder")}
+                  autoComplete="off"
+                  maxLength={240}
+                  value={noteDraft}
+                  onChange={(event) => setNoteDraft(event.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" size="sm" className="rounded-full">
+                    {t("notes.save")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-full"
+                    onClick={() => {
+                      setNoteDraft(personalNote);
+                      setEditingNote(false);
+                    }}
+                  >
+                    {common("actions.cancel")}
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-4 rounded-full"
+                onClick={() => setEditingNote(true)}
+              >
+                <Icon icon={NoteEditIcon} size={16} />
+                {personalNote ? t("notes.edit") : t("notes.add")}
+              </Button>
+            )}
+          </Panel>
         </div>
         <div className="space-y-4 no-print">
-          <Panel delayMs={150} title={t("next.title")} description={t("next.description")}>
+          <Panel delayMs={225} title={t("next.title")} description={t("next.description")}>
             <div className="flex flex-wrap gap-2">
               <Link to="/transactions">
                 <Button variant="outline">{t("allTransactions")}</Button>

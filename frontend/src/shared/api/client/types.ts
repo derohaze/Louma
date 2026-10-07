@@ -81,7 +81,14 @@ export interface ApiMiningPool {
 
 export interface ApiMiningPoolsState {
   pools: ApiMiningPool[];
+  /** The room this account holds right now; null when it holds none. */
   poolId: string | null;
+  /** When the held room ends: the running cycle's end, or the join grace. Null when none is held. */
+  holdExpiresAt: string | null;
+  /** When a change to a different room becomes available; null when nothing throttles it. */
+  switchAvailableAt: string | null;
+  /** True while a cycle runs: it holds its room, so the room cannot be left or changed. */
+  cycleActive: boolean;
 }
 
 export interface ApiTransaction {

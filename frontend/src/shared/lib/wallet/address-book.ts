@@ -1,10 +1,14 @@
 import { isTransferTarget } from "@/shared/lib/platform";
 
 /**
- * Device-local address book.
+ * Device-local address book and personal transaction notes.
  *
- * There is no backend for it yet, so it lives in localStorage, keyed by
+ * There is no backend for either, so both live in localStorage, keyed by
  * account: one account's saved addresses must never leak into another's.
+ *
+ * A transfer's on-record note is written by the API at send time; the local
+ * note covers transfers whose record carries none, and both are shown with
+ * their source labelled (see `displayNote`).
  */
 
 export interface SavedAddress {
@@ -14,6 +18,7 @@ export interface SavedAddress {
 }
 
 const addressBookKey = (userId: string | null) => `louma:addressbook:${userId ?? "anon"}`;
+const notesKey = (userId: string | null) => `louma:txnotes:${userId ?? "anon"}`;
 const TRANSFER_PREFILL_KEY = "louma:transfer:prefill";
 
 /**
@@ -127,4 +132,29 @@ export function clearTransferPrefill(): void {
   } catch {
     // Best effort; the next consume clears it anyway.
   }
+}
+
+/**
+ * Personal note for a transfer, stored on this device only.
+ *
+ * Notes written before the note readers were removed are still in localStorage under this key:
+ * reading them is what keeps a customer's own history findable, so the reader never migrates,
+ * renames, or clears the bucket — it returns what is there.
+ */
+export function loadLocalNote(userId: string | null, transferId: string): string {
+  if (typeof window === "undefined" || !requireUserKey(userId)) return "";
+  return readJson<Record<string, string>>(notesKey(userId), {})[transferId] ?? "";
+}
+
+export function saveLocalNote(userId: string | null, transferId: string, note: string): void {
+  if (!requireUserKey(userId)) return;
+  const notes = readJson<Record<string, string>>(notesKey(userId), {});
+  if (note.trim()) notes[transferId] = note.trim().slice(0, 240);
+  else delete notes[transferId];
+  writeJson(notesKey(userId), notes);
+}
+
+/** What the UI shows: the on-record note first, the device note as fallback. */
+export function displayNote(serverNote: string, localNote: string): string {
+  return serverNote || localNote;
 }

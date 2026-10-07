@@ -1,5 +1,6 @@
 import type { ApiTransaction } from "@/shared/api";
 import { dateText } from "./wallet-format";
+import { displayNote, loadLocalNote } from "./address-book";
 
 /**
  * Statement exports: CSV files generated in the browser from API data.
@@ -35,7 +36,16 @@ export function downloadCsv(filename: string, csv: string): void {
 
 export function transactionsToCsv(transactions: ApiTransaction[], userId: string | null): string {
   return toCsv(
-    ["Date", "Direction", "Counterparty", "Amount (LMA)", "Fee (LMA)", "Net (LMA)", "Transfer ID"],
+    [
+      "Date",
+      "Direction",
+      "Counterparty",
+      "Amount (LMA)",
+      "Fee (LMA)",
+      "Net (LMA)",
+      "Transfer ID",
+      "Note",
+    ],
     transactions.map((tx) => [
       dateText(tx.createdAt),
       tx.direction,
@@ -44,6 +54,10 @@ export function transactionsToCsv(transactions: ApiTransaction[], userId: string
       tx.fee,
       tx.netAmount,
       tx.transferId,
+      // The same note the row shows: the one on record, else this account's device-local one.
+      // Both are already on the customer's machine, and dropping them here would make an export
+      // silently disagree with the list it was taken from.
+      displayNote(tx.note, loadLocalNote(userId, tx.transferId)),
     ]),
   );
 }

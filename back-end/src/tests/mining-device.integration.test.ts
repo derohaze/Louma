@@ -9,8 +9,22 @@ import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { getCollections, type Collections } from "../infrastructure/mongodb/collections.js";
 import { disabledRedis } from "../infrastructure/redis/client.js";
-import { ipHash } from "../modules/mining-device/identity.js";
-import { ENROLLMENT_DAY_MS } from "../modules/mining-device/policy.js";
+import {
+  buildFeatureMap,
+  CORE_MACHINE_FEATURE_SET,
+  decideClusterMatch,
+  digestFeatureMap,
+  ipHash,
+  isNearCloneMatch,
+  learnFeatureProfile,
+  matchDeviceFeatures,
+  MIN_CORE_IDENTITY_AGREEMENTS,
+  MIN_CORE_IDENTITY_MOVES,
+} from "../modules/mining-device/identity.js";
+import { consumeEnrollmentBudget } from "../modules/mining-device/enrollment.js";
+import { normalizeSignals, sanitizeEvidence } from "../modules/mining-device/signals.js";
+import { MINING_DAILY_QUOTA_SECONDS } from "../modules/mining/quota.js";
+import { ENROLLMENT_DAY_MS, NETWORK_LOCK_KEY_PATTERN } from "../modules/mining-device/policy.js";
 
 /**
  * Louma Mining Device Guard — concurrency and anti-abuse suite.
@@ -57,9 +71,16 @@ let requestIp = 0;
 // A fresh address per request. The third octet advances so the suite never reuses one: the guard
 // now scopes *new-identity* admission to a network, so a recycled address would carry an earlier
 // test's live lease into a later test and make it fail on the fixture rather than on the rule.
+// Every address this suite observes, so the `after` cleanup can release the per-network enrollment
+// slots it spent: those rows are keyed by network hash, not by account, and reused probe addresses
+// accumulate against the per-network budget across runs until a fresh device is refused for the wrong
+// reason.
+const usedIps = new Set<string>();
 const nextIp = () => {
   const index = requestIp++;
-  return `10.9.${Math.floor(index / 254) % 254}.${(index % 254) + 1}`;
+  const address = `10.9.${Math.floor(index / 254) % 254}.${(index % 254) + 1}`;
+  usedIps.add(address);
+  return address;
 };
 
 interface Account {
@@ -81,11 +102,13 @@ async function call(
   if (method !== "GET") {
     headers["x-csrf-token"] = (options.token ? csrfByAccessToken.get(options.token) : undefined) ?? preauthCsrfTokenValue;
   }
+  const remoteAddress = options.ip ?? nextIp();
+  usedIps.add(remoteAddress);
   const response = await app.inject({
     method,
     url,
     headers,
-    remoteAddress: options.ip ?? nextIp(),
+    remoteAddress,
     ...(options.body === undefined ? {} : { payload: options.body as Record<string, unknown> }),
   });
   const body = response.payload.length ? (response.json() as Record<string, unknown>) : {};
@@ -107,7 +130,8 @@ async function register(label: string): Promise<Account> {
   const account = await collections.ledgerAccounts.findOne({ walletId: wallet.id, accountType: "wallet" });
   assert.ok(account);
   createdWalletAccountIds.push(account.publicId);
-  // Mining requires pool membership: every fixture account joins the Low pool on creation.
+  // Mining requires a held room: the fixture takes Low up front, and `startWith` re-takes it for
+  // every start, because a stop or a finished window releases it.
   const joined = await call("POST", "/api/v1/mining/pools/join", {
     token: response.body["accessToken"] as string,
     body: { poolId: "low" },
@@ -173,9 +197,11 @@ interface MachineShape {
  * two unrelated fixtures. So each namespace gets a machine that differs from the others in the OS,
  * screen, CPU class, memory, timezone and capture devices, not only in the rendering digests.
  *
- * Every fixture differs in the ENGINE-STABLE CORE the machine key hashes (core count, touch class,
- * audio device, gamut, HDR, panel depth) — and none of them collides on all six — while
- * `machineIndexBySalt` assignment keeps two namespaces apart even when one runs alone.
+ * The engine-stable identity slots (core count, touch class, audio device, gamut, HDR, panel depth)
+ * are assigned by the small code in `machineShape`, not by this table: the table supplies the
+ * display, timezone and browser variety that keeps two fixtures apart in the score bands, while the
+ * code keeps them out of the near-clone band (see the comment there). `machineIndexBySalt`
+ * assignment keeps two namespaces apart even when one runs alone.
  */
 const MACHINES: Omit<MachineShape, "platform" | "userAgent" | "firefoxUserAgent" | "platformVersion">[] = [
   { screenWidth: 1366, screenHeight: 768, pixelRatio: 1, timezone: "Africa/Cairo", timezoneOffsetMinutes: -180, hardwareConcurrency: 2, deviceMemory: 4, maxTouchPoints: 0, mediaAudioInputs: 0, mediaVideoInputs: 0, colorGamut: "srgb" },
@@ -214,16 +240,38 @@ function machineShape(salt: string): MachineShape {
     index = machineIndexBySalt.size;
     machineIndexBySalt.set(salt, index);
   }
+  return machineShapeAtIndex(index);
+}
+
+/** The shape of fixture index `index`, independent of the salt assignment. */
+function machineShapeAtIndex(index: number): MachineShape {
   const system = SYSTEMS[index % SYSTEMS.length]!;
   const shape = MACHINES[index % MACHINES.length]!;
-  // The machine key hashes the ENGINE-STABLE core (core count, touch class, audio device, gamut,
-  // HDR, panel depth), so each fixture must differ from every other fixture in at least one core
-  // slot — not only in the rendering digests. The audio device is varied deterministically per index
-  // — and the capture-device pair and memory class with it, which the machine-trait comparison
-  // scores — so no two fixtures land in the guard's ambiguous band however many tests run before
-  // them, in any order.
-  const audioInputs = (shape.mediaAudioInputs + index) % 5;
-  const videoInputs = (shape.mediaVideoInputs + index) % 3;
+  /**
+   * The fixture core is a small error-detecting code, not the shape table: any two distinct indices
+   * must differ in at least three of the six engine-stable identity slots (see
+   * `CORE_MACHINE_FEATURE_SET`). One moved slot sits exactly on the "same machine" path — measured
+   * at `machineScore` 78, the high threshold, for a `laptop-x-firefox-engine` fixture, which by
+   * design reports neither `deviceMemory` nor the capture devices and so agreed with a neighbour on
+   * every machine trait it could report — and two moved slots are the guard's near-clone band (see
+   * `MIN_CORE_IDENTITY_MOVES`). Either way a later test inherits an earlier test's live lease
+   * instead of exercising its own rule: the measured failure was the ATTACK network race, refused
+   * with `already_in_use` because STALE's `laptop-y` was still mining.
+   *
+   * Four data slots carry a mixed-radix index — CPU class (5), touch class (3), display gamut (3),
+   * HDR (2) — and the panel colour depth is their certificate: its digit is a weighted sum of the
+   * four, nonzero for every possible change of any one of them, so no two indices differ in exactly
+   * one slot. Minimum distance two, plus the per-index audio device (the sixth slot, and the key's
+   * guarantee of uniqueness against real machines on a shared database), gives three moved slots
+   * for every cross-index pair, whatever corroborators an engine reports. Capacity is the product
+   * of the four alphabets, 90 machines; the FIXTURE ISOLATION test asserts the suite stays inside
+   * it rather than silently wrapping and reusing an index.
+   */
+  const hardwareDigit = index % 5;
+  const touchDigit = Math.floor(index / 5) % 3;
+  const gamutDigit = Math.floor(index / 15) % 3;
+  const hdrDigit = Math.floor(index / 45) % 2;
+  const depthDigit = (hardwareDigit + 3 * touchDigit + 5 * gamutDigit + 7 * hdrDigit) % 8;
   // The identity the guard compares is deliberately coarse — bucketed CPU class, panel colour
   // depth, HDR capability, negotiated audio device, display gamut, touch class — so a fixture built
   // from the *most common* desktop profile (24-bit sRGB panel, no HDR, a 48 kHz stereo output, no
@@ -232,14 +280,12 @@ function machineShape(salt: string): MachineShape {
   // would inherit one (verified: it did). Every fixture therefore reports a panel and an audio
   // device no plain desktop reports — an HDR panel at a non-24-bit depth, and never 48 kHz — and the
   // index varies both, so no two fixtures collide with each other either.
-  // Unique per index, deliberately: the audio device is one of the six engine-stable core slots
-  // the machine key hashes, and the rest of the shape repeats every 12 entries (MACHINES length)
-  // while the panel depth repeats every 2 — so a three-value rate cycled by index was not enough to
-  // keep two namespaces apart. Indices 0 and 12 produced an identical machine core, and the later
-  // test then resolved to the earlier test's cluster (and its live lease) instead of enrolling its
-  // own machine. A unique rate makes every namespace a distinct machine by construction. The values
-  // stay realistic: a plain audio device other than 48 kHz, which is what keeps a fixture from
-  // colliding with a real customer's machine in a shared database.
+  // The audio device is unique per index, deliberately: it is the sixth core slot the machine key
+  // hashes, and a rate cycled from a short list was not enough to keep two namespaces apart — an
+  // early version reused one and a later test resolved to the earlier test's cluster (and its live
+  // lease) instead of enrolling its own machine. The values stay realistic: a plain audio device
+  // other than 48 kHz, which is what keeps a fixture from colliding with a real customer's machine
+  // in a shared database.
   const sampleRate = 22050 + index * 750;
   return {
     ...shape,
@@ -249,19 +295,27 @@ function machineShape(salt: string): MachineShape {
     platformVersion: system.version(index),
     // One GPU identity per simulated machine, and one per run: the machine key is built from these,
     // so they must be as distinct as the screens and CPU classes are, and must not survive a run.
+    // Identity slots, from the certificate code above; the machine key hashes exactly these six.
+    hardwareConcurrency: [2, 4, 8, 16, 32][hardwareDigit]!,
+    maxTouchPoints: [0, 5, 10][touchDigit]!,
+    colorGamut: ["srgb", "p3", "rec2020"][gamutDigit]!,
+    hdr: hdrDigit === 1,
+    screenColorDepth: [24, 30, 32, 36, 40, 48, 56, 64][depthDigit]!,
     audioSampleRate: sampleRate,
-    mediaAudioInputs: audioInputs,
-    mediaVideoInputs: videoInputs,
+    // Corroborators: free to vary with the index for realism, at finer granularity than the code.
+    // The isolation guarantee does not depend on them — that is the point, since an engine may
+    // report none of them.
+    deviceMemory: [2, 4, 8, 16][index % 4]!,
+    mediaAudioInputs: [0, 1, 2, 3][Math.floor(index / 4) % 4]!,
+    mediaVideoInputs: 1,
     screenAvailWidth: shape.screenWidth,
     screenAvailHeight: shape.screenHeight - 40,
-    screenColorDepth: [30, 32][index % 2]!,
     webglVendor: `vendor-${index}-${RUN}`,
     webglRenderer: `renderer-${index}-${RUN}`,
     webglLimitsHash: `limits-${index}-${RUN}`,
     webglExtensionsHash: `extensions-${index}-${RUN}`,
     webgpuHash: `webgpu-${index}-${RUN}`,
     audioChannels: 2,
-    hdr: true,
   };
 }
 
@@ -286,26 +340,40 @@ function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "la
     integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
   };
   const tag = (name: string) => (salt ? `${name}-${salt}-${RUN}` : `${name}-${RUN}`);
-  const withSalt = (evidence: Record<string, unknown>): Record<string, unknown> => ({
-    ...evidence,
-    visitorId: evidence["visitorId"] === null ? null : tag(String(evidence["visitorId"])),
-    browserKeyPublicKey: evidence["browserKeyPublicKey"] === null ? null : tag(String(evidence["browserKeyPublicKey"])),
-    webglHash: tag(String(evidence["webglHash"])),
-    canvasHash: tag(String(evidence["canvasHash"])),
-    audioHash: tag(String(evidence["audioHash"])),
-    fontsHash: tag(String(evidence["fontsHash"])),
-    codecsHash: tag(String(evidence["codecsHash"])),
-    mimeTypesHash: tag(String(evidence["mimeTypesHash"])),
-  });
+  // Every rendering digest and browser-scoped key is namespaced by the salt as well as by the run:
+  // these are the browser's own values, not the machine's, so two fixtures of one kind from two
+  // salts must not agree on them. Pinned `brave`-browser digests once kept unrelated variants above
+  // the ambiguity score on corroborators alone (measured by the FIXTURE ISOLATION sweep). The
+  // machine slots are deliberately not tagged — they come from the shared index code.
+  const withSalt = (evidence: Record<string, unknown>): Record<string, unknown> => {
+    const tagged: Record<string, unknown> = { ...evidence };
+    for (const [key, value] of Object.entries(tagged)) {
+      if (key === "visitorId" || key === "browserKeyPublicKey" || key.endsWith("Hash")) {
+        tagged[key] = value === null ? null : tag(String(value));
+      }
+    }
+    return tagged;
+  };
   switch (kind) {
     case "laptop-x":
       return withSalt({ ...base, visitorId: "visitor-laptop-x-chrome", browserKeyPublicKey: "browser-key-laptop-x-chrome" });
     case "laptop-y":
+      // A second, Mac-flavoured machine — and, like every other fixture, it must stay a *distinct*
+      // machine from every other salt. An earlier version pinned the compared slots here (CPU class,
+      // gamut, memory class, capture devices, display, timezone), and that defeated the fixture
+      // code: two `laptop-y` fixtures then agreed on four of the six core slots and differed only in
+      // the touch class, the audio device and whichever code bit the pin erased — exactly the
+      // near-clone band. The second one was refused `mining_device_already_in_use` while the first
+      // held a live lease (measured: the ATTACK network race once the near-clone guard existed,
+      // because STALE leaves its `laptop-y` cycle running). Only the machine's *description* is
+      // pinned (user agent, platform, version); every compared slot and corroborator stays
+      // index-driven like the pristine shapes.
       return withSalt({
         ...base, visitorId: "visitor-laptop-y", userAgent: `${MAC_UA} Chrome/126.0`,
-        platform: "MacIntel", screenWidth: 4096, screenHeight: 2304, hardwareConcurrency: 24,
-        pixelRatio: 3, platformVersion: "14.5", deviceMemory: 32, mediaAudioInputs: 4,
-        timezone: "Asia/Tokyo", timezoneOffsetMinutes: -540, colorGamut: "rec2020",
+        platform: "MacIntel", platformVersion: "14.5",
+        screenWidth: base.screenWidth + 1024, screenHeight: base.screenHeight + 512,
+        screenAvailWidth: base.screenWidth + 1024, screenAvailHeight: base.screenHeight + 472,
+        pixelRatio: base.pixelRatio + 1,
         webglHash: "webgl-laptop-y", canvasHash: "canvas-laptop-y", audioHash: "audio-laptop-y",
         fontsHash: "fonts-laptop-y", browserKeyPublicKey: "browser-key-laptop-y",
       });
@@ -323,10 +391,12 @@ function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "la
         visitorId: "visitor-laptop-x-second-browser",
         browserKeyPublicKey: "browser-key-laptop-x-second-browser",
         userAgent: `${base.userAgent} Brave/126.0`,
-        screenWidth: 1680,
-        screenHeight: 1050,
-        screenAvailWidth: 1680,
-        screenAvailHeight: 1050,
+        // The second window sits on a second monitor: its geometry differs from the same salt's
+        // `laptop-x`, while still moving with the index like every other corroborator.
+        screenWidth: base.screenWidth - 240,
+        screenHeight: base.screenHeight - 180,
+        screenAvailWidth: base.screenWidth - 240,
+        screenAvailHeight: base.screenHeight - 180,
         webglVendor: "brave",
         webglRenderer: "brave",
         webglLimitsHash: `limits-brave-${RUN}`,
@@ -336,9 +406,6 @@ function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "la
         canvasHash: "canvas-laptop-x-brave",
         audioHash: "audio-laptop-x-brave",
         speechVoicesHash: `voices-brave-${RUN}`,
-        locale: "en-GB",
-        languages: "en-GB,en",
-        storageQuotaBytes: 2 ** 31,
         pluginsHash: `plugins-brave-${RUN}`,
         keyboardLayoutHash: `keyboard-brave-${RUN}`,
       });
@@ -385,10 +452,15 @@ function deviceEvidence(kind: "laptop-x" | "laptop-y" | "laptop-x-firefox" | "la
   }
 }
 
-async function startWith(account: Account, kind: Parameters<typeof deviceEvidence>[0], ip?: string, salt?: string) {
+async function startWith(account: Account, kind: Parameters<typeof deviceEvidence>[0], ip?: string, salt?: string, platform?: string) {
+  // A cycle only opens from inside a room, and both a stop and a finished window release it, so
+  // every start takes its room first. Re-joining a held room is an idempotent no-op, and the room
+  // is the same one in every scenario here, so the churn throttle never applies to it.
+  const joined = await call("POST", "/api/v1/mining/pools/join", { token: account.accessToken, body: { poolId: "low" } });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
   const response = await call("POST", "/api/v1/mining/start", {
     token: account.accessToken,
-    body: { device: deviceEvidence(kind, salt) },
+    body: { device: { ...deviceEvidence(kind, salt), ...(platform === undefined ? {} : { platform }) } },
     ...(ip === undefined ? {} : { ip }),
   });
   if (response.status === 200) {
@@ -478,6 +550,24 @@ after(async () => {
     await collections.wallets.deleteMany({ ownerUserId: userId });
     await collections.users.deleteMany({ publicId: userId });
   }
+  // Devices and enrollment slots this run's accounts created. A thin identity record (minted by a
+  // direct `resolveOrCreateDevice` probe, with no lease and no observation) is linked to the run only
+  // by `enrollmentUserId`; leaving it behind lets a later run's fresh observations absorb into it as
+  // "the same machine", which silently skips the enrollment budget (measured: ENROLL-D failed on the
+  // second run of the same database until this cleanup existed).
+  await collections.miningDevices.deleteMany({ enrollmentUserId: { $in: createdUserIds } });
+  await collections.miningDeviceQuotas.deleteMany({ subject: { $in: createdUserIds } });
+  // Network-scope enrollment slots are keyed by network hash, not by account, so the delete above
+  // cannot reach them. Every address this run observed is released by its own hash: the suite's fixed
+  // probe addresses are reused across runs, and the un-owned rows accumulate against the per-network
+  // budget until a later run's fresh device is refused for the wrong reason (measured: the ATTACK
+  // network race turned into `enrollment_limited` on a heavily reused database).
+  const usedNetworkHashes = [...usedIps]
+    .map((address) => ipHash(config.encryptionKey, address))
+    .filter((hash): hash is string => hash !== null);
+  if (usedNetworkHashes.length > 0) {
+    await collections.miningDeviceQuotas.deleteMany({ scope: "network", subject: { $in: usedNetworkHashes } });
+  }
   await collections.ledgerEntries.deleteMany({ transactionId: { $in: createdTransactionIds } });
   await collections.transactions.deleteMany({ publicId: { $in: createdTransactionIds } });
   await collections.ledgerEntries.deleteMany({ ledgerAccountId: { $in: createdWalletAccountIds } });
@@ -528,6 +618,70 @@ after(async () => {
   await client?.close();
 });
 
+test("PRIVACY: masked or key-only evidence cannot start mining even with no competing cycle", async () => {
+  const account = await register("privacy");
+  const salt = "privacy";
+  const baseline = deviceEvidence("laptop-x", salt);
+  const initialDevices = await collections.miningDevices.countDocuments({});
+  for (const device of [
+    { browserKeyPublicKey: `key-only-${RUN}`, fingerprintConfidence: 1 },
+    { ...baseline, webglVendor: "Mozilla", webglRenderer: "Mozilla", hardwareConcurrency: 2, audioSampleRate: 44100, deviceMemory: null, timezone: "UTC", timezoneOffsetMinutes: 0 },
+    { ...baseline, webglVendor: null, webglRenderer: null, browserKeyPublicKey: null },
+    { ...baseline, hardwareConcurrency: null, maxTouchPoints: null, audioSampleRate: null, colorGamut: null, hdr: null, screenColorDepth: null },
+  ]) {
+    const result = await call("POST", "/api/v1/mining/start", { token: account.accessToken, body: { device } });
+    assert.equal(result.status, 400, JSON.stringify(result.body));
+    const error = result.body["error"] as { code: string; message: string };
+    assert.equal(error.code, "mining_device_evidence_required");
+    assert.ok(!error.message.includes("active mining cycle"), "no false occupied-device claim");
+  }
+  assert.equal(await collections.miningDevices.countDocuments({}), initialDevices, "no junk device registered");
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: account.userId }), 0);
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: account.userId }), 0);
+  assert.equal(await collections.miningDeviceQuotas.countDocuments({ subject: account.userId }), 0);
+  assert.equal((await call("GET", "/api/v1/mining/state", { token: account.accessToken })).status, 200, "account remains accessible");
+  assert.equal((await startWith(account, "laptop-x", undefined, salt)).status, 200, "identifiable evidence still works after refusals");
+});
+
+test("STALE: future-dated leftover leases cannot block mining without a running session", async () => {
+  const former = await register("stale-former");
+  const next = await register("stale-next");
+  const salt = "stale";
+  const formerIp = "10.22.22.22";
+  const result = await startWith(former, "laptop-x", formerIp, salt);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const sessionId = (result.body["session"] as { id: string }).id;
+  // While the cycle runs, the account's device status reflects the binding it holds.
+  const bound = await call("GET", "/api/v1/mining/device/status", { token: former.accessToken });
+  assert.equal(bound.status, 200);
+  assert.equal(bound.body["bound"], true, "a running cycle keeps the device bound");
+  assert.equal(typeof bound.body["deviceId"], "string");
+  // Simulate a legacy stop which closed the cycle but forgot to release its future-dated leases.
+  await collections.miningSessions.updateOne({ publicId: sessionId }, { $set: { status: "settled", endsAt: new Date(Date.now() - 1000) } });
+  // The *running session* is what the status reports: the still-active lease row of a closed cycle
+  // must not keep claiming a device the account no longer holds.
+  const unbound = await call("GET", "/api/v1/mining/device/status", { token: former.accessToken });
+  assert.equal(unbound.body["bound"], false, "a settled session does not keep the device bound");
+  assert.equal(unbound.body["deviceId"], null);
+  assert.equal(unbound.body["leaseEndsAt"], null);
+  const started = await startWith(next, "laptop-x-firefox", undefined, salt);
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  // The machine's stale device leases are cleared by the next start on the same identities; the
+  // per-network admission token is a different identity (a lease with no device behind it) and is not
+  // this machine's row.
+  assert.equal(
+    await collections.miningDeviceLeases.countDocuments({ ownerUserId: former.userId, status: "active", deviceClusterId: { $not: { $regex: NETWORK_LOCK_KEY_PATTERN } } }),
+    0,
+  );
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: next.userId, status: "active" }), 1);
+  // A token left active by a cycle that is no longer running is not live: a later start on that same
+  // network is admitted, and releases the leftover row as part of its own transaction.
+  const successor = await register("stale-successor");
+  const reopened = await startWith(successor, "laptop-y", formerIp, "stale-2");
+  assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: former.userId, status: "active" }), 0, "the stale network token is released");
+});
+
 test("A: two accounts racing on the same device — exactly one mines", async () => {
   const accountA = await register("race-a");
   const accountB = await register("race-b");
@@ -540,6 +694,58 @@ test("A: two accounts racing on the same device — exactly one mines", async ()
   // No identity leakage in the rejection.
   assert.ok(!JSON.stringify(rejected.body).includes(accountA.userId));
   assert.ok(!JSON.stringify(rejected.body).includes(accountA.email));
+});
+
+test("ATTACK: distinct new identities racing on one network cannot both mine", async () => {
+  const a = await register("net-race-a");
+  const b = await register("net-race-b");
+  const ip = "10.21.21.21";
+  const results = await Promise.all([
+    startWith(a, "laptop-x", ip, "net-race-a"),
+    startWith(b, "laptop-y", ip, "net-race-b"),
+  ]);
+  assert.equal(results.filter((result) => result.status === 200).length, 1, JSON.stringify(results));
+  assert.equal(results.filter((result) => result.status === 409).length, 1, JSON.stringify(results));
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: { $in: [a.userId, b.userId] }, status: "active" }), 1);
+  const rejected = results.find((result) => result.status === 409);
+  assert.ok(rejected, "the race must produce exactly one refusal");
+  assert.equal((rejected.body["error"] as { code: string }).code, "mining_device_network_in_use", JSON.stringify(rejected.body));
+  // The refusal really is a refusal: the loser's transaction aborted, so it holds no lease of its own.
+  const loser = results[0] === rejected ? a : b;
+  assert.equal(
+    await collections.miningDeviceLeases.countDocuments({ ownerUserId: loser.userId, status: "active" }),
+    0,
+    "the refused racer keeps no active lease",
+  );
+});
+
+test("ATTACK: an anchored challenge cannot be proven with a different signing key", async () => {
+  const account = await register("proof-key-swap");
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const other = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  const otherJwk = await crypto.subtle.exportKey("jwk", other.publicKey);
+  const device = { ...deviceEvidence("laptop-x", "proof-key-swap"), browserKeyPublicKey: JSON.stringify(jwk) };
+  const challenge = await call("POST", "/api/v1/mining/device/challenge", { token: account.accessToken, body: { device } });
+  assert.equal(challenge.status, 200, JSON.stringify(challenge.body));
+  const signature = Buffer.from(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, other.privateKey, Buffer.from(challenge.body["payload"] as string))).toString("base64url");
+  const proof = await call("POST", "/api/v1/mining/device/prove", { token: account.accessToken, body: { nonce: challenge.body["nonce"], signature, publicKeyJwk: otherJwk, device } });
+  assert.equal(proof.status, 401, JSON.stringify(proof.body));
+  const nonce = await collections.miningDeviceNonces.findOne({ nonce: challenge.body["nonce"] as string });
+  assert.equal(nonce?.consumedAt, null, "a key mismatch cannot consume the challenge");
+
+  // The challenge is still usable by the key it was issued to: a mismatched attempt must not poison
+  // it, and the legitimate signer must not be refused.
+  const boundSignature = Buffer.from(
+    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.from(challenge.body["payload"] as string)),
+  ).toString("base64url");
+  const verified = await call("POST", "/api/v1/mining/device/prove", {
+    token: account.accessToken,
+    body: { nonce: challenge.body["nonce"], signature: boundSignature, publicKeyJwk: jwk, device },
+  });
+  assert.equal(verified.status, 200, JSON.stringify(verified.body));
+  const consumed = await collections.miningDeviceNonces.findOne({ nonce: challenge.body["nonce"] as string });
+  assert.ok(consumed?.consumedAt, "the bound key consumes the challenge");
 });
 
 test("B: same account, two concurrent starts — one cycle only", async () => {
@@ -572,26 +778,21 @@ test("N: a second browser on one computer cannot mine (the reported bypass)", as
   const first = await startWith(accountA, "laptop-x", undefined, salt);
   assert.equal(first.status, 200, JSON.stringify(first.body));
   const second = await startWith(accountB, "laptop-x-second-browser", undefined, salt);
-  assert.equal(second.status, 409, `a second browser on one computer must be rejected: ${JSON.stringify(second.body)}`);
-  assert.equal((second.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  assert.equal(second.status, 400, `masked device evidence must be refused: ${JSON.stringify(second.body)}`);
+  assert.equal((second.body["error"] as { code: string }).code, "mining_device_evidence_required");
 
-  // Both browsers resolved to one device record, and the denial is recorded on it: this is the
-  // cross-account evidence the guard accumulates, and it stayed empty while one computer was two
-  // device records.
+  // Masked evidence is refused before resolution: no invented identity or trusted observation.
   const observations = await collections.miningDeviceObservations
     .find({ ownerUserId: { $in: [accountA.userId, accountB.userId] } })
     .toArray();
-  assert.equal(observations.length, 2, "both accounts are on the record");
-  assert.equal(new Set(observations.map((observation) => observation.deviceId)).size, 1, "one device, two accounts");
+  assert.equal(observations.length, 1, "only the admitted evidence reaches device observation");
+  assert.equal(new Set(observations.map((observation) => observation.deviceId)).size, 1);
   assert.deepEqual(
     [...new Set(observations.map((observation) => observation.ownerUserId))].sort(),
-    [accountA.userId, accountB.userId].sort(),
+    [accountA.userId],
   );
-  // The rejected attempt is on the record as well: the accumulated history is what makes a repeat
-  // attempt riskier than the first, and it stayed empty while one computer was two records.
-  const denied = observations.find((observation) => observation.ownerUserId === accountB.userId);
-  assert.equal(denied?.decision, "deny");
-  assert.equal(denied?.riskScore, 70);
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: accountB.userId }), 0);
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: accountB.userId }), 0);
 });
 
 test("D+L: a second new machine behind an occupied network is refused, not silently allowed", async () => {
@@ -746,19 +947,401 @@ test("REAL-WORLD REPORT: four engines on one computer yield exactly one mining c
   const first = await startWith(chrome, "laptop-x", undefined, salt);
   assert.equal(first.status, 200, JSON.stringify(first.body));
   const edgeStart = await startWith(edge, "laptop-x-second-browser", undefined, salt);
-  assert.equal(edgeStart.status, 409, `Edge must resolve to the same machine: ${JSON.stringify(edgeStart.body)}`);
+  assert.equal(edgeStart.status, 400, `masked graphics must be refused before correlation: ${JSON.stringify(edgeStart.body)}`);
   const firefoxStart = await startWith(firefox, "laptop-x-firefox-engine", undefined, salt);
   assert.equal(firefoxStart.status, 409, `Firefox must resolve to the same machine: ${JSON.stringify(firefoxStart.body)}`);
   const braveStart = await startWith(brave, "laptop-x-second-browser", undefined, salt);
-  assert.equal(braveStart.status, 409, `Brave must resolve to the same machine: ${JSON.stringify(braveStart.body)}`);
-  // Every denial names the device rule — no account, IP, or fingerprint detail leaks.
-  for (const denied of [edgeStart, firefoxStart, braveStart]) {
-    assert.equal((denied.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  assert.equal(braveStart.status, 400, `masked graphics must be refused before correlation: ${JSON.stringify(braveStart.body)}`);
+  // Insufficient evidence is not reported as a live cycle; identifiable Firefox hits the lease.
+  for (const denied of [edgeStart, braveStart]) {
+    assert.equal((denied.body["error"] as { code: string }).code, "mining_device_evidence_required");
   }
+  assert.equal((firefoxStart.body["error"] as { code: string }).code, "mining_device_already_in_use");
   const activeLeases = await collections.miningDeviceLeases.countDocuments({ ownerUserId: { $in: [chrome.userId, edge.userId, firefox.userId, brave.userId] }, status: "active" });
   assert.ok(activeLeases <= 4, "each lease row belongs to the one winner, never a second cycle");
   const activeSessions = await collections.miningSessions.countDocuments({ ownerUserId: { $in: [chrome.userId, edge.userId, firefox.userId, brave.userId] }, status: "active" });
   assert.equal(activeSessions, 1, "one computer, four browsers, exactly one mining cycle");
+});
+
+test("NEAR-CLONE: editing two identity slots does not open a second cycle on one machine", async () => {
+  // The attack the near-clone band answers: account B presents the same computer as account A but
+  // edits two of the six engine-stable identity slots — the display gamut and the audio device —
+  // while CPU class, touch class, panel depth and HDR still agree, and the engine-owned corroborators
+  // (fonts, capture devices, memory class) have moved because B is a different browser. Measured
+  // before the band existed: this scored below the ambiguity threshold and B mined beside A on a
+  // second network. It is now the conservative middle: refused while A's cycle is live, and never
+  // merged into A's record.
+  const accountA = await register("nearclone-a");
+  const accountB = await register("nearclone-b");
+  const salt = "nearclone";
+  const first = await startWith(accountA, "laptop-x", undefined, salt);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const base = deviceEvidence("laptop-x-firefox-engine", salt);
+  const cloned = await call("POST", "/api/v1/mining/start", {
+    token: accountB.accessToken,
+    body: {
+      device: {
+        ...base,
+        colorGamut: base["colorGamut"] === "p3" ? "srgb" : "p3",
+        audioSampleRate: 48000,
+        visitorId: `visitor-nearclone-b-${RUN}`,
+        browserKeyPublicKey: `key-nearclone-b-${RUN}`,
+      },
+    },
+  });
+  assert.equal(cloned.status, 409, `a near-clone must not mine beside the machine it copies: ${JSON.stringify(cloned.body)}`);
+  assert.equal((cloned.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  assert.equal(
+    await collections.miningSessions.countDocuments({ ownerUserId: { $in: [accountA.userId, accountB.userId] }, status: "active" }),
+    1,
+  );
+});
+
+test("NEAR-CLONE RACE: two accounts editing identity slots cannot both mine one machine", async () => {
+  const accountA = await register("nearclone-race-a");
+  const accountB = await register("nearclone-race-b");
+  const salt = "nearclone-race";
+  const evidenceA = { ...deviceEvidence("laptop-x", salt), visitorId: `visitor-nearclone-race-a-${RUN}`, browserKeyPublicKey: `key-nearclone-race-a-${RUN}` };
+  const base = deviceEvidence("laptop-x-firefox-engine", salt);
+  const evidenceB = {
+    ...base,
+    colorGamut: base["colorGamut"] === "p3" ? "srgb" : "p3",
+    audioSampleRate: 48000,
+    visitorId: `visitor-nearclone-race-b-${RUN}`,
+    browserKeyPublicKey: `key-nearclone-race-b-${RUN}`,
+  };
+  const [first, second] = await Promise.all([
+    call("POST", "/api/v1/mining/start", { token: accountA.accessToken, body: { device: evidenceA } }),
+    call("POST", "/api/v1/mining/start", { token: accountB.accessToken, body: { device: evidenceB } }),
+  ]);
+  const active = await collections.miningSessions.countDocuments({ ownerUserId: { $in: [accountA.userId, accountB.userId] }, status: "active" });
+  assert.ok(active <= 1, `no two cycles on one machine: ${JSON.stringify({ first: first.status, second: second.status })}`);
+  if (active === 1) {
+    assert.equal([first, second].filter((result) => result.status === 200).length, 1, "the one cycle belongs to exactly one accepted start");
+  }
+});
+
+/**
+ * The two tests below start a *deliberately edited* fixture, and an edited shape is not covered by the
+ * fixture code's three-slot minimum distance: it can land within a slot or two of an unrelated test's
+ * machine. That is not theoretical — while these tests were written, an earlier test's still-running
+ * cycle answered the edited start with `mining_device_already_in_use` before the quota was ever
+ * consulted (measured twice, and only in a full-suite run). Two things keep the correlation sweep
+ * inside these tests' own machines: a platform label no other test uses, and a private address per
+ * call, which resolves to no network identity at all — so no unrelated record can enter the sweep by
+ * country or ASN. One address per call (not one shared) because the per-address rate limit applies to
+ * whatever address a call arrives on.
+ */
+const SLOT_EDIT_PLATFORM = "Win32; LoumaSlots";
+let slotEditIpSequence = 10;
+const nextSlotEditIp = (): string => `172.31.32.${(slotEditIpSequence++ % 200) + 10}`;
+const slotEditEvidence = (kind: Parameters<typeof deviceEvidence>[0], salt: string): Record<string, unknown> => ({
+  ...deviceEvidence(kind, salt),
+  platform: SLOT_EDIT_PLATFORM,
+});
+
+test("NEAR-CLONE QUOTA: an edited identity slot cannot buy a second allowance on one machine", async () => {
+  // The band keeps a slot-edited fingerprint out of the machine while the matched cycle is live.
+  // Once that cycle stops there is no live lease left to refuse on, so the *other* half of the
+  // answer has to hold: the allowance itself. This is the sequential account-switching path — A mines
+  // and stops, then B presents the same computer with two identity slots edited — and it must land on
+  // the machine's spent 10h window, never on a fresh one keyed by the edited hardware. Measured
+  // before the fix: 200, with a fresh device window beside A's spent one.
+  const owner = await register("clone-quota-owner");
+  const borrower = await register("clone-quota-borrower");
+  const stranger = await register("clone-quota-stranger");
+  const salt = "clone-quota";
+  const first = await startWith(owner, "laptop-x", nextSlotEditIp(), salt, SLOT_EDIT_PLATFORM);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const sessionId = (first.body["session"] as { id: string }).id;
+  // The window A opened stays open (its anchors are exactly where the start wrote them) and its
+  // allowance is spent inside it: the segment is backdated to fill all ten hours and then stopped
+  // through the API, so the cycle is closed and its leases are released.
+  await collections.miningSessions.updateOne(
+    { publicId: sessionId },
+    { $set: { startedAt: new Date(Date.now() - 11 * 60 * 60 * 1000), endsAt: new Date(Date.now() - 60 * 60 * 1000) } },
+  );
+  const stopped = await call("POST", "/api/v1/mining/stop", { token: owner.accessToken });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  const base = slotEditEvidence("laptop-x-firefox-engine", salt);
+  const edited = await call("POST", "/api/v1/mining/start", {
+    token: borrower.accessToken,
+    ip: nextSlotEditIp(),
+    body: {
+      device: {
+        ...base,
+        colorGamut: base["colorGamut"] === "p3" ? "srgb" : "p3",
+        audioSampleRate: 48000,
+        visitorId: `visitor-clone-quota-b-${RUN}`,
+        browserKeyPublicKey: `key-clone-quota-b-${RUN}`,
+      },
+    },
+  });
+  assert.equal(edited.status, 409, `the machine's spent window must bind the edited slot: ${JSON.stringify(edited.body)}`);
+  assert.equal((edited.body["error"] as { code: string }).code, "mining_quota_exhausted");
+  assert.match((edited.body["error"] as { message: string }).message, /device/);
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: borrower.userId, status: "active" }), 0);
+  // A genuinely different machine keeps its own allowance: the limit follows the machine the
+  // observation matched, never the caller's account or network.
+  const other = await startWith(stranger, "laptop-y", nextSlotEditIp(), "clone-quota-other", SLOT_EDIT_PLATFORM);
+  assert.equal(other.status, 200, JSON.stringify(other.body));
+  // Stopped again: a scenario that mined leaves a live lease on this test's own machine namespace, and
+  // the next scenario of it would be refused by that lease instead of being measured.
+  assert.equal((await call("POST", "/api/v1/mining/stop", { token: stranger.accessToken })).status, 200);
+});
+
+/**
+ * SLOT-EDIT BOUNDARY — where an edited fingerprint stops being the machine it copies, measured and
+ * pinned so the boundary is a decision rather than a drift.
+ *
+ * `NEAR-CLONE QUOTA` above pins the plumbing end to end: an observation that moved two identity slots
+ * is refused the machine's spent window with `mining_quota_exhausted`. This test pins the decision
+ * underneath it, with the real matching functions and no HTTP — how far an edited observation has to
+ * move, and what closing the rest of the gap would cost. Measured, `k` = engine-stable identity slots
+ * edited out of six, on a `laptop-x-firefox-engine` observation against the `laptop-x` fixture it was
+ * copied from (the score columns are that run's `score`/`machineScore`):
+ *
+ *   k=0  same       score 49  machine 100  6 agree / 0 moved  -> the machine: merged, one allowance
+ *   k=1  same       score 47  machine  89  5 agree / 1 moved  -> the machine: merged, one allowance
+ *   k=2  ambiguous  score 44  machine  67  4 agree / 2 moved  -> the near clone: allowance shared
+ *   k=3  different  score 42  machine  56  3 agree / 3 moved  -> its own full 10h window
+ *   k=4  different  score 32  machine  44  2 agree / 4 moved  -> its own full 10h window
+ *   k=5  different  score 27  machine  11  1 agree / 5 moved  -> its own full 10h window
+ *   k=6  different  score 25  machine   0  0 agree / 6 moved  -> its own full 10h window
+ *
+ * Three slots is not a missed threshold. It is the fixture code's own minimum distance between two
+ * machines, so an unrelated machine of the same class differs from this fixture in exactly the same
+ * three slots and scores the same; `FIXTURE ISOLATION` below counts how many pairs of *distinct*
+ * simulated machines a rule that caught a three-slot edit would bind to one allowance. A machine that
+ * edits three or more slots is therefore not closable by any similarity rule at all — what is bounded
+ * instead is how many fresh allowances one network can mint, which `ENROLL BOUND` measures end to end.
+ */
+test("SLOT-EDIT BOUNDARY: the allowance follows the machine while its identity slots still agree", () => {
+  const secret = config.encryptionKey;
+  const salt = `slot-boundary-${RUN}`;
+  const ownerRaw = buildFeatureMap(normalizeSignals(sanitizeEvidence({ ...deviceEvidence("laptop-x", salt), platform: SLOT_EDIT_PLATFORM })));
+  const profile = learnFeatureProfile(null, digestFeatureMap(secret, ownerRaw));
+  const ownerSnapshot = digestFeatureMap(secret, ownerRaw);
+  // Every edit moves one of the six engine-stable identity slots: display gamut, capture-device count,
+  // HDR support, panel depth, CPU class, touch class.
+  const edits: ((base: Record<string, unknown>) => Record<string, unknown>)[] = [
+    (base) => ({ colorGamut: base["colorGamut"] === "p3" ? "srgb" : "p3" }),
+    (base) => ({ audioSampleRate: base["audioSampleRate"] === 48000 ? 96000 : 48000 }),
+    (base) => ({ hdr: !base["hdr"] }),
+    (base) => ({ screenColorDepth: base["screenColorDepth"] === 24 ? 40 : 24 }),
+    (base) => ({ hardwareConcurrency: base["hardwareConcurrency"] === 2 ? 32 : 2 }),
+    (base) => ({ maxTouchPoints: base["maxTouchPoints"] === 0 ? 10 : 0 }),
+  ];
+  // The pinned measurement. The shared device allowance follows a machine in exactly two ways: a
+  // positive verdict merges the observation into the record, so it lands on that record's window, and
+  // the near-clone band leaves the record enrolled beside the machine while it keeps the machine's
+  // allowance. Below four agreeing identity slots the guard has nothing left that says "one computer",
+  // and the observation opens its own window — the residual `ENROLL BOUND` bounds.
+  const expected = [
+    { edited: 0, verdict: "same", shared: true },
+    { edited: 1, verdict: "same", shared: true },
+    { edited: 2, verdict: "ambiguous", shared: true },
+    { edited: 3, verdict: "different", shared: false },
+    { edited: 4, verdict: "different", shared: false },
+    { edited: 5, verdict: "different", shared: false },
+    { edited: 6, verdict: "different", shared: false },
+  ] as const;
+  const measured: string[] = [];
+  for (const row of expected) {
+    const base = slotEditEvidence("laptop-x-firefox-engine", salt);
+    const evidence = { ...base, ...Object.assign({}, ...edits.slice(0, row.edited).map((edit) => edit(base))) };
+    const raw = buildFeatureMap(normalizeSignals(sanitizeEvidence(evidence)));
+    const match = matchDeviceFeatures(
+      { featureProfile: profile, featureSnapshot: ownerSnapshot, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+      { digests: digestFeatureMap(secret, raw), raw, machine: {} },
+      secret,
+    );
+    const verdict = decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+    const agreements = match.matchedMachine.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+    const moves = match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+    const shared = verdict === "same" || isNearCloneMatch(match);
+    measured.push(`${row.edited}:${verdict}/${match.score}/${match.machineScore}/${agreements}agree/${moves}moved/${shared ? "shared" : "fresh"}`);
+    // The edit is what it claims to be: every edit moved one identity slot and left the rest agreeing.
+    assert.equal(moves, row.edited, `the fixture edit moved the intended identity slots (${measured.join(" ")})`);
+    assert.equal(agreements, 6 - row.edited, `the remaining identity slots still agree (${measured.join(" ")})`);
+    assert.equal(verdict, row.verdict, `measured verdict at ${row.edited} edited slots (${measured.join(" ")})`);
+    assert.equal(shared, row.shared, `measured allowance at ${row.edited} edited slots (${measured.join(" ")})`);
+  }
+  // The band, stated as the model states it: the near clone needs a majority of the identity slots
+  // (four of six) and at least two of them moved. Both edges are load-bearing — the floor is why three
+  // edited slots are outside it, and the move count is why an unedited machine is not inside it.
+  assert.equal(MIN_CORE_IDENTITY_AGREEMENTS, 4);
+  assert.equal(MIN_CORE_IDENTITY_MOVES, 2);
+});
+
+/**
+ * ENROLL BOUND — the close for the residual `SLOT-EDIT BOUNDARY` measures.
+ *
+ * A fresh device allowance always costs a new machine identity: an existing machine returning after
+ * its window closed opens the next window on its own anchor and spends nothing. A new machine identity
+ * is budgeted per account *and* per network, so the per-network budget is the fixed step between one
+ * address and the next fresh allowance — and it is the one control a client cannot edit away, because
+ * it counts identities instead of comparing fingerprints.
+ *
+ * Measured end to end on one private address whose identity budget is spent first with the *configured*
+ * limits: a machine that never enrolled there is refused `mining_device_enrollment_limited` (403),
+ * while a machine that already enrolled there is admitted with a full fresh 10h window. So the bound
+ * bites the multiplication and nothing else.
+ */
+test("ENROLL BOUND: an address that spent its identity budget refuses a new machine and still admits a returning one", async () => {
+  const owner = await register("enroll-bound-owner");
+  const newcomer = await register("enroll-bound-newcomer");
+  // A private address: no network identity (no country, no ASN) and unique to this run, so the budget
+  // spent here can never be another test's and the suite's own fixtures stay outside this sweep.
+  const ip = `10.${(slotEditIpSequence++ % 200) + 10}.77.${(Date.now() % 200) + 20}`;
+  const salt = `enroll-bound-${RUN}`;
+  const first = await startWith(owner, "laptop-x", ip, salt);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const sessionId = (first.body["session"] as { id: string }).id;
+  // A day later: the quota anchors move only forward, so the window this start opened has closed and
+  // the next start on the same machine opens its next window on an identity that already exists.
+  const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  await collections.miningSessions.updateOne(
+    { publicId: sessionId },
+    {
+      $set: {
+        startedAt: dayAgo,
+        endsAt: new Date(dayAgo.getTime() + 60 * 60 * 1000),
+        accountWindowStart: dayAgo,
+        deviceWindowStart: dayAgo,
+      },
+    },
+  );
+  assert.equal((await call("POST", "/api/v1/mining/stop", { token: owner.accessToken })).status, 200);
+
+  // Spend the address's identity budget with the real budget function and the configured limits. Each
+  // charge uses its own account id so the per-account budget (three) cannot be what refuses: the
+  // network is the scope under test.
+  const limits = {
+    maxNewClustersPerAccountPerDay: config.lmdg.maxNewClustersPerAccountPerDay,
+    maxNewClustersPerNetworkPerHour: config.lmdg.maxNewClustersPerNetworkPerHour,
+    maxNewClustersPerNetworkPerDay: config.lmdg.maxNewClustersPerNetworkPerDay,
+  };
+  const spentIpHash = ipHash(config.encryptionKey, ip);
+  let allowed = 0;
+  let limitHit: { scope: string; limit: number; count: number } | null = null;
+  for (let attempt = 0; attempt <= limits.maxNewClustersPerNetworkPerHour + 1; attempt += 1) {
+    const charge = await consumeEnrollmentBudget({
+      collections,
+      limits,
+      ownerUserId: `enroll-bound-spend-${randomUUID()}`,
+      ipHash: spentIpHash,
+      identityKey: `enroll-bound-${RUN}-${attempt}`,
+      nowMs: Date.now(),
+    });
+    if (charge.allowed) {
+      allowed += 1;
+      continue;
+    }
+    limitHit = charge.hit === null ? null : { scope: charge.hit.scope, limit: charge.hit.limit, count: charge.hit.count };
+    break;
+  }
+  // One of the address's slots was spent by the machine that enrolled above, and the rollover start
+  // spends nothing: the budget allows exactly its configured hour's worth and refuses the next.
+  assert.equal(allowed, limits.maxNewClustersPerNetworkPerHour - 1, "the configured per-address hour budget is the binding bound");
+  assert.equal(limitHit?.scope, "network");
+  assert.equal(limitHit?.limit, limits.maxNewClustersPerNetworkPerHour);
+  assert.equal(limitHit?.count, limits.maxNewClustersPerNetworkPerHour + 1);
+
+  // A machine that never enrolled on this address cannot be given an identity at all.
+  const refused = await startWith(newcomer, "laptop-y", ip, `${salt}-new`);
+  assert.equal(refused.status, 403, JSON.stringify(refused.body));
+  assert.equal((refused.body["error"] as { code?: string } | null)?.code, "mining_device_enrollment_limited");
+
+  // The returning machine is untouched: its identity exists, the budget is never consulted, and it
+  // gets its next window — which is the whole reason the bound sits on the identity rather than on the
+  // machine, which no similarity rule can name any more.
+  const returning = await startWith(owner, "laptop-x", ip, salt);
+  assert.equal(returning.status, 200, JSON.stringify(returning.body));
+  assert.equal((returning.body["session"] as { durationSeconds?: number } | null)?.durationSeconds, MINING_DAILY_QUOTA_SECONDS);
+  assert.equal((await call("POST", "/api/v1/mining/stop", { token: owner.accessToken })).status, 200);
+});
+
+test("FIXTURE ISOLATION: no two simulated machines correlate into one", () => {
+  // The suite's synthetic machines must stay outside each other's same/ambiguous/near-clone
+  // verdicts, or a later test inherits an earlier test's live lease and fails on its own fixtures.
+  // This recomputes the real comparison for 64 fixture indices with the real matching functions.
+  const secret = config.encryptionKey;
+  const fixtures = Array.from({ length: 64 }, (_, index) => {
+    const raw = buildFeatureMap(normalizeSignals(sanitizeEvidence(machineShapeAtIndex(index))));
+    return { index, digests: digestFeatureMap(secret, raw), raw };
+  });
+  const problems: string[] = [];
+  // The separation must hold for the *allowance* as well as for the verdict: the near-clone band lets
+  // a record that was enrolled beside a machine keep that machine's 10h window, so a fixture pair
+  // inside the band would spend a neighbour's window in whichever test mined first. Measured: zero.
+  // And the cost of the only rule that would close a three-slot edit instead — bind the allowance
+  // whenever the machine class is intact and at least three identity slots still agree — is counted
+  // here too, because that count is why the boundary sits at four (see SLOT-EDIT BOUNDARY above).
+  let quotaBandPairs = 0;
+  let widenedPairs = 0;
+  let pairs = 0;
+  const bandCount = (match: ReturnType<typeof matchDeviceFeatures>): void => {
+    const agreements = match.matchedMachine.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+    const moves = match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length;
+    if (isNearCloneMatch(match)) quotaBandPairs += 1;
+    if (match.classDrifted.length === 0 && agreements >= 3 && moves >= 3) widenedPairs += 1;
+  };
+  for (let i = 0; i < fixtures.length; i += 1) {
+    const profile = learnFeatureProfile(null, fixtures[i]!.digests);
+    for (let j = i + 1; j < fixtures.length; j += 1) {
+      const match = matchDeviceFeatures(
+        { featureProfile: profile, featureSnapshot: fixtures[i]!.digests, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+        { digests: fixtures[j]!.digests, raw: fixtures[j]!.raw, machine: {} },
+        secret,
+      );
+      pairs += 1;
+      bandCount(match);
+      const verdict = decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+      if (verdict !== "different") problems.push(`fixture ${i} vs ${j}: ${verdict} (score ${match.score}, machine ${match.machineScore})`);
+    }
+  }
+  // The same isolation must hold for the *variants* every test actually sends. A kind may pin its
+  // machine's description (a Mac user agent, a second monitor), but the compared slots must stay
+  // index-driven: two salts are two machines, whatever kinds they are built from. This is the check
+  // the pinned `laptop-y` slot failed — the near-clone verdict appeared only between two variant
+  // fixtures, which the pristine-only sweep above could not see.
+  // The certificate code holds 90 distinct machines. A suite that quietly grew past that would wrap
+  // the index and hand two tests the same machine — the exact collision this test exists to catch,
+  // but one the pairs below cannot see if the wrapped indices are not both in the sweep. Fail here,
+  // with the reason, before that can happen: add another data slot or raise the depth alphabet.
+  assert.ok(machineIndexBySalt.size + 40 <= 90, `the fixture identity code holds 90 machines; ${machineIndexBySalt.size} are already assigned, and this sweep needs 40 more`);
+  const kinds = ["laptop-x", "laptop-y", "laptop-x-firefox", "laptop-x-cleared", "laptop-x-vpn", "laptop-x-second-browser", "laptop-x-firefox-engine"] as const;
+  const variants = kinds.flatMap((kind) =>
+    Array.from({ length: 40 }, (_, slot) => {
+      const salt = `isolation-${slot}`;
+      const raw = buildFeatureMap(normalizeSignals(sanitizeEvidence(deviceEvidence(kind, salt))));
+      return { kind, salt, digests: digestFeatureMap(secret, raw), raw };
+    }),
+  );
+  for (let i = 0; i < variants.length; i += 1) {
+    const profile = learnFeatureProfile(null, variants[i]!.digests);
+    for (let j = i + 1; j < variants.length; j += 1) {
+      // One salt is one machine, by design: the same-machine browser variants share it.
+      if (variants[i]!.salt === variants[j]!.salt) continue;
+      const match = matchDeviceFeatures(
+        { featureProfile: profile, featureSnapshot: variants[i]!.digests, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+        { digests: variants[j]!.digests, raw: variants[j]!.raw, machine: {} },
+        secret,
+      );
+      pairs += 1;
+      bandCount(match);
+      const verdict = decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+      if (verdict !== "different") problems.push(`variant ${variants[i]!.kind}/${variants[i]!.salt} vs ${variants[j]!.kind}/${variants[j]!.salt}: ${verdict} (score ${match.score}, machine ${match.machineScore})`);
+    }
+  }
+  assert.deepEqual(problems, [], `fixtures must not correlate: ${problems.slice(0, 5).join("; ")}`);
+  // The allowance separation, and the measured price of widening it to catch a three-slot edit.
+  assert.equal(quotaBandPairs, 0, `${quotaBandPairs} of ${pairs} fixture pairs would share one device allowance`);
+  assert.ok(
+    widenedPairs > 500,
+    `a three-agreement band would bind ${widenedPairs} of ${pairs} distinct fixture pairs to one allowance — that is the measured reason the near-clone band needs a majority of the identity slots (see SLOT-EDIT BOUNDARY)`,
+  );
 });
 
 /**
@@ -801,8 +1384,9 @@ test("ENROLL-A: a fresh machine is a provisional enrollment and the account budg
     fingerprintVersion: "v5",
     integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
   });
-  const resolve = (label: string, ip: string) =>
-    guard.resolveOrCreateDevice({
+  const resolve = (label: string, ip: string) => {
+    usedIps.add(ip);
+    return guard.resolveOrCreateDevice({
       collections,
       config,
       evidenceRaw: thinEvidence(label),
@@ -811,6 +1395,7 @@ test("ENROLL-A: a fresh machine is a provisional enrollment and the account budg
       ownerUserId: account.userId,
       correlationId: `enroll-a-${label}`,
     });
+  };
   const second = await resolve("enroll-a2", "10.6.6.2");
   assert.equal(second.trustState, "provisional", "a resolved identity is provisional too");
   await resolve("enroll-a3", "10.6.6.3");
@@ -1054,8 +1639,14 @@ test("TRANSITION: legacy leases and quota counters are converted by the startup 
   await collections.miningDevices.insertOne({
     publicId: devicePublicId, deviceKeyHash: `transition-key-${RUN}`,
     firstSeenAt: now, lastSeenAt: now, status: "active",
-    lastIpHash: networkHash,
+    // The latest device network is not necessarily the winning start's network.
+    lastIpHash: ipHash(config.encryptionKey, "10.20.20.21"),
     createdAt: now, updatedAt: now,
+  } as never);
+  await collections.miningDeviceObservations.insertOne({
+    publicId: `transition-observation-${RUN}`, deviceId: devicePublicId,
+    ownerUserId: account.userId, observedAt: now, ipHash: networkHash,
+    asn: null, country: null, riskScore: 0, decision: "allow",
   } as never);
   // The lease is the previous release's shape: it has no `ipHash` field at all.
   await collections.miningDeviceLeases.insertOne({
@@ -1103,8 +1694,10 @@ test("ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget,
   const intel = { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null };
   const labels = ["enroll-d1", "enroll-d2", "enroll-d3", "enroll-d4", "enroll-d5"];
   const results = await Promise.all(
-    labels.map((label, index) =>
-      guard
+    labels.map((label, index) => {
+      const probeIp = `10.8.8.${10 + index}`;
+      usedIps.add(probeIp);
+      return guard
         .resolveOrCreateDevice({
           collections,
           config,
@@ -1115,14 +1708,14 @@ test("ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget,
             visitorId: `visitor-${label}-${RUN}`,
             integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
           },
-          ip: `10.8.8.${10 + index}`,
+          ip: probeIp,
           intel,
           ownerUserId: account.userId,
           correlationId: `enroll-d-${label}`,
         })
         .then(() => "created" as const)
-        .catch((error: unknown) => (error as { code?: string }).code ?? "error"),
-    ),
+        .catch((error: unknown) => (error as { code?: string }).code ?? "error");
+    }),
   );
   const admitted = results.filter((r) => r === "created").length;
   const refused = results.filter((r) => r === "mining_device_enrollment_limited").length;
@@ -1134,6 +1727,8 @@ test("ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget,
   // assertion issue 4 broke: a refused request must not cost the account one of its three.
   let refunded = 0;
   for (let index = 0; index < 3 - admitted; index += 1) {
+    const refundIp = `10.8.9.${index + 1}`;
+    usedIps.add(refundIp);
     const spent = await guard
       .resolveOrCreateDevice({
         collections,
@@ -1143,7 +1738,7 @@ test("ENROLL-D: a concurrent enrollment burst cannot outrun the identity budget,
           visitorId: `visitor-refund-${index}-${RUN}`,
           integrity: { webdriver: false, headlessHint: false, impossibleUaPlatform: false, missingCapabilities: false },
         },
-        ip: `10.8.9.${index + 1}`,
+        ip: refundIp,
         intel,
         ownerUserId: account.userId,
         correlationId: `enroll-d-refund-${index}`,
@@ -1198,4 +1793,52 @@ test("account B keeps full non-mining access while its mining start is rejected"
   assert.equal((await call("GET", "/api/v1/wallet", { token: accountB.accessToken })).status, 200);
   assert.equal((await call("GET", "/api/v1/mining/state", { token: accountB.accessToken })).status, 200);
   assert.equal((await call("GET", "/api/v1/mining/device/status", { token: accountB.accessToken })).status, 200);
+});
+
+/**
+ * ONBOARD: a user who has never mined starts on a brand-new machine, and that machine is then closed
+ * to every other account.
+ *
+ * The reported onboarding failure was "a user who never mined got blocked". The measured cause is
+ * never the absence of history: a first-ever start enrolls the machine (owned by the caller,
+ * `provisional`) and is admitted with a whole window ahead of it. What refuses a *different* account
+ * afterwards is the machine lease — the property this test also pins, on that same machine, both
+ * sequentially and racing, so the onboarding path can never become a way around the one-device rule.
+ */
+test("ONBOARD: a first-ever start is admitted, and the machine then belongs to one account", async () => {
+  const accountA = await register("onboard-a");
+  const accountB = await register("onboard-b");
+  const accountC = await register("onboard-c");
+  // Nothing about this account has ever been seen: no device row, no cycle, no lease.
+  assert.equal(await collections.miningDevices.countDocuments({ enrollmentUserId: accountA.userId }), 0);
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: accountA.userId }), 0);
+
+  const first = await startWith(accountA, "laptop-x", undefined, "onboard");
+  assert.equal(first.status, 200, `a brand-new account on a brand-new machine must mine: ${JSON.stringify(first.body)}`);
+  const session = first.body["session"] as { status: string } | null;
+  assert.ok(session, "the admitted start returns its cycle");
+  assert.equal(session.status, "active");
+  assert.equal(first.body["poolRequired"], false, "the account's pool membership is not in question");
+  assert.equal((first.body["quota"] as { remainingSeconds: number }).remainingSeconds > 0, true, "a first-ever start has its whole window left");
+  const enrolled = await collections.miningDevices.findOne({ enrollmentUserId: accountA.userId });
+  assert.ok(enrolled, "the first start enrolled exactly the caller's machine");
+  assert.equal(enrolled.trustState, "provisional", "a first-sight identity is never born trusted");
+  assert.equal(enrolled.admissionCount, 1);
+
+  // Two more accounts, one after the other and then together, on that same machine: refused, and no
+  // second cycle exists.
+  const sequential = await startWith(accountB, "laptop-x", undefined, "onboard");
+  const [raceOne, raceTwo] = await Promise.all([
+    startWith(accountB, "laptop-x", undefined, "onboard"),
+    startWith(accountC, "laptop-x", undefined, "onboard"),
+  ]);
+  for (const refused of [sequential, raceOne, raceTwo]) {
+    assert.equal(refused.status, 409, `another account cannot take the machine: ${JSON.stringify(refused.body)}`);
+    assert.equal((refused.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  }
+  const active = await collections.miningSessions.countDocuments({
+    ownerUserId: { $in: [accountA.userId, accountB.userId, accountC.userId] },
+    status: "active",
+  });
+  assert.equal(active, 1, "one machine holds one cycle, whichever account asked for it");
 });

@@ -176,6 +176,12 @@ export type MiningDeviceLeaseStatus = "active" | "released";
 export interface MiningDeviceLeaseRecord {
   _id: ObjectId;
   publicId: string;
+  /**
+   * The device identity this lease is taken on (a keyed digest), or — in the reserved `net:`
+   * namespace (see `networkLockKeyFor`) — one network's admission token: a start that is not a
+   * resident of its network leases the token so two fresh identities racing on one network collide
+   * on the unique active-lease index instead of both passing the pre-transaction check.
+   */
   deviceClusterId: string;
   /** The device record (its `publicId`) this lease was taken for — survives a later key change. */
   deviceId: string | null;
@@ -206,6 +212,14 @@ export interface MiningDeviceNonceRecord {
    */
   boundAnchorHash?: string | null;
   boundClusterId?: string | null;
+  /**
+   * `x|y` fingerprint of the browser key the evidence named when this challenge was issued
+   * (`p256KeyFingerprint`); null when it named no well-formed key. A proof that consumes this
+   * nonce must be signed by this key's private half — otherwise a challenge issued for one key
+   * would be satisfiable by any other key, and the verified handshake would credit a possession
+   * that was never proven.
+   */
+  boundBrowserKeyFingerprint?: string | null;
   nonce: string;
   issuedAt: Date;
   expiresAt: Date;

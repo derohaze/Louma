@@ -2,7 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import {
   ApiError,
   api,
-  type ApiMiningPool,
+  type ApiMiningPoolsState,
   type ApiMiningSession,
   type ApiMiningState,
   type ApiNotification,
@@ -105,8 +105,7 @@ export const accountFetchers = {
   profile: () => api.get<AccountProfile>("/api/v1/me"),
   security: () => api.get<ApiSecurityOverview>("/api/v1/security"),
   mining: () => api.get<ApiMiningState>("/api/v1/mining/state"),
-  miningPools: () =>
-    api.get<{ pools: ApiMiningPool[]; poolId: string | null }>("/api/v1/mining/pools"),
+  miningPools: () => api.get<ApiMiningPoolsState>("/api/v1/mining/pools"),
   miningHistory: (cursor: string | null) =>
     api.get<MiningHistoryPage>(
       `/api/v1/mining/history?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
