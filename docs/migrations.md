@@ -30,39 +30,6 @@ Drop checklist for `mining_settlements` (all required):
 Status: code migrated (settle.ts writes journal-only since this change);
 legacy indexes retained until the drop; collection NOT yet dropped.
 
-## Legacy wallet addresses -> canonical wallet addresses
-
-The wallet document is updated in place from `addressVersion: 0` to
-`addressVersion: 1`. Each row receives a fresh 128-bit random canonical address;
-`address` and `addressNormalized` are both replaced and `updatedAt` advances.
-The old address is not copied to an alias field and cannot be used to route a
-new transfer after cutover. Address generation is random and the global unique
-index on `addressNormalized` is the final collision check; only a collision on
-that index retries, with a three-attempt bound.
-
-Runner: `npm run migrate:wallet-addresses:dev` for the configured development
-database, or the built `migrate:wallet-addresses` runner for the production
-configuration. It is dry-run by default. Execute requires both
-`--confirm-database=<MONGODB_DATABASE>` and `--backup-confirmed` after verifying
-the backup/export. The updated API first backfills fields and creates the new
-indexes, then refuses to serve while any wallet is not version 1. Pause API
-traffic during the one-time replacement and restart after verification.
-
-Preflight checks the target database name, required global-address and
-primary-wallet unique indexes, wallet/address versions, valid old and canonical
-formats, exactly one primary wallet per existing user, and one wallet ledger
-account per wallet. The migration is bounded to batches of 200 and resumable:
-each wallet update is atomic, and already migrated rows are skipped on rerun.
-Postflight verifies the wallet count and wallet-ledger-account count are
-unchanged, every wallet is version 1 with a valid canonical address, and no
-legacy wallet row remains. Balances, ledger entries, journal headers and their
-historical address snapshots are never rewritten. There is intentionally no
-old-address alias or application rollback path; a repeat run is a no-op.
-
-This is an identity-field migration, not a financial migration. The immutable
-wallet `publicId` and every ledger foreign key stay the same. Verify the report
-and run the ledger reconciler on the isolated target before opening traffic.
-
 ## Incident note (2026-10-02, dev database)
 
 Two killed test runs left debris: entry-less mining headers (recreated by the

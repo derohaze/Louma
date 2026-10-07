@@ -29,45 +29,7 @@ export const schemas: Record<string, Document> = {
   },
   wallets: {
     $and: [
-      {
-        $jsonSchema: {
-          bsonType: "object",
-          required: ["publicId", "address", "addressNormalized", "addressVersion", "ownerUserId", "isPrimary", "status", "financialVersion", "createdAt", "updatedAt", "customAddressChangedAt", "customAddress", "customAddressNormalized"],
-          properties: {
-            publicId: { bsonType: "string" },
-            address: { bsonType: "string" },
-            addressNormalized: { bsonType: "string" },
-            addressVersion: { bsonType: "int", enum: [0, 1] },
-            ownerUserId: { bsonType: "string" },
-            isPrimary: { bsonType: "bool" },
-            status: { enum: ["active", "frozen"] },
-            financialVersion: { bsonType: "int", minimum: 0 },
-            createdAt: { bsonType: "date" },
-            updatedAt: { bsonType: "date" },
-            customAddressChangedAt: { bsonType: ["date", "null"] },
-            customAddress: { bsonType: ["string", "null"] },
-            customAddressNormalized: { bsonType: ["string", "null"] },
-          },
-          oneOf: [
-            {
-              required: ["addressVersion"],
-              properties: {
-                addressVersion: { enum: [0] },
-                address: { pattern: "^[Ll][Mm][Aa](?:-[0-9A-Fa-f]{4}){3}$" },
-                addressNormalized: { pattern: "^[Ll][Mm][Aa](?:-[0-9A-Fa-f]{4}){3}$" },
-              },
-            },
-            {
-              required: ["addressVersion"],
-              properties: {
-                addressVersion: { enum: [1] },
-                address: { pattern: "^LMA[0-7][0-9A-HJKMNP-TV-Z]{27}$" },
-                addressNormalized: { pattern: "^LMA[0-7][0-9A-HJKMNP-TV-Z]{27}$" },
-              },
-            },
-          ],
-        },
-      },
+      { $jsonSchema: { bsonType: "object", required: ["publicId", "address", "addressNormalized", "ownerUserId", "status", "financialVersion", "createdAt", "updatedAt", "customAddressChangedAt", "customAddress", "customAddressNormalized"], properties: { publicId: { bsonType: "string" }, address: { bsonType: "string" }, addressNormalized: { bsonType: "string" }, ownerUserId: { bsonType: "string" }, status: { enum: ["active", "frozen"] }, financialVersion: { bsonType: "int", minimum: 0 }, createdAt: { bsonType: "date" }, updatedAt: { bsonType: "date" }, customAddressChangedAt: { bsonType: ["date", "null"] }, customAddress: { bsonType: ["string", "null"] }, customAddressNormalized: { bsonType: ["string", "null"] } } } },
       { balance: { $exists: false } },
     ],
   },

@@ -282,7 +282,7 @@ export async function disableTwoFactor(input: { collections: Collections; config
       await session.withTransaction(async () => {
         const result = await input.collections.twoFactorCredentials.deleteOne(deleteFilter as never, { session });
         if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
-        await input.collections.wallets.updateMany({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } }, { session });
+        await input.collections.wallets.updateOne({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } }, { session });
       });
     } finally {
       await session.endSession();
@@ -290,7 +290,7 @@ export async function disableTwoFactor(input: { collections: Collections; config
   } else {
     const result = await input.collections.twoFactorCredentials.deleteOne(deleteFilter as never);
     if (result.deletedCount !== 1) throw conflict("two_factor_changed", "Two-factor authentication changed. Refresh and try again.");
-    await input.collections.wallets.updateMany({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } });
+    await input.collections.wallets.updateOne({ ownerUserId: input.ownerUserId }, { $inc: { financialVersion: 1 } });
   }
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: "two_factor_disabled", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: verification.recoveryCodeUsed } }).catch((error: unknown) => logAuditFailure("two_factor_disabled", error));
   return { enabled: false };
@@ -365,7 +365,7 @@ export async function setTransferPassword(input: { collections: Collections; mon
           );
       const applied = existing ? result.modifiedCount === 1 : Boolean(result.upsertedId);
       if (!applied) throw conflict("transfer_password_changed", "The transfer password changed. Try again.");
-      await input.collections.wallets.updateMany(
+      await input.collections.wallets.updateOne(
         { ownerUserId: input.ownerUserId },
         { $inc: { financialVersion: 1 } },
         { session },

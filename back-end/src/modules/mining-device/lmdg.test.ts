@@ -590,13 +590,13 @@ test("too little hardware evidence yields no machine key rather than a fake iden
   assert.equal(machineKeyHash(SECRET, thin.features.raw), null, "a thin report must not become an identity");
 });
 
-test("a CPU class contradiction keeps a near match outside the shared quota band", () => {
+test("editing CPU class and another core slot cannot escape the shared quota band", () => {
   const base = evidence({ audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 });
   const known = profileOf(base);
   const edited = observedOf({ ...base, hardwareConcurrency: 32, colorGamut: "p3" });
   const match = matchDeviceFeatures({ featureProfile: known.profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null }, edited.features, SECRET);
   assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
-  assert.equal(isNearCloneMatch(match), false);
+  assert.equal(isNearCloneMatch(match), true);
   assert.notEqual(decideClusterMatch(match, 78, 55), "same", "quota sharing does not merge device records");
 });
 

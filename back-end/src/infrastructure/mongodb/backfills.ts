@@ -22,8 +22,6 @@ export async function backfillWalletFields(db: Db): Promise<void> {
         { customAddressChangedAt: { $exists: false } },
         { customAddress: { $exists: false } },
         { customAddressNormalized: { $exists: false } },
-        { addressVersion: { $exists: false } },
-        { isPrimary: { $exists: false } },
       ],
     },
     [
@@ -33,8 +31,6 @@ export async function backfillWalletFields(db: Db): Promise<void> {
           customAddressChangedAt: { $ifNull: ["$customAddressChangedAt", null] },
           customAddress: { $ifNull: ["$customAddress", null] },
           customAddressNormalized: { $ifNull: ["$customAddressNormalized", null] },
-          addressVersion: { $ifNull: ["$addressVersion", 0] },
-          isPrimary: { $ifNull: ["$isPrimary", true] },
         },
       },
     ],

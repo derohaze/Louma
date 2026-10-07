@@ -6,7 +6,6 @@ import { getCollections, type Collections } from "../infrastructure/mongodb/coll
 import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
 import { parseMoneyToMinorUnits } from "../modules/ledger/money.js";
-import { generateWalletAddress } from "../modules/wallets/address.js";
 
 /**
  * The financial load benchmark: throughput and latency of the transfer path under concurrency, and
@@ -79,7 +78,7 @@ async function createAccounts(collections: Collections, count: number, role: str
     const userId = randomUUID();
     const walletId = randomUUID();
     const ledgerAccountId = randomUUID();
-    const address = generateWalletAddress();
+    const address = `LMA-${RUN_TAG.slice(0, 4).toUpperCase()}-${role.slice(0, 2).toUpperCase()}${String(index).padStart(2, "0")}-${randomUUID().slice(0, 4).toUpperCase()}`;
     await collections.users.insertOne({
       _id: new ObjectId(),
       publicId: userId,
@@ -94,11 +93,9 @@ async function createAccounts(collections: Collections, count: number, role: str
     await collections.wallets.insertOne({
       _id: new ObjectId(),
       publicId: walletId,
-      address,
-      addressNormalized: address,
-      addressVersion: 1,
+      address: address.replace(/-/g, "-"),
+      addressNormalized: address.toUpperCase(),
       ownerUserId: userId,
-      isPrimary: true,
       status: "active",
       financialVersion: 0,
       createdAt: now,

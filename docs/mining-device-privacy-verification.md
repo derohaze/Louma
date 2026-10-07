@@ -10,10 +10,9 @@ corroborating evidence, and privacy settings can mask them on an otherwise usabl
 key-only payloads still return `mining_device_evidence_required`. Existing device leases, enrollment
 limits, network admission and account/device quotas still apply.
 
-Near clones share a quota only when their compared CPU and memory classes do not contradict. A clone
-of an enrolled clone inherits its stored `quotaAnchorHash` only if it also matches the original quota
-owner's near-clone band; similarity cannot be chained through successive records. A class
-contradiction or a failed direct comparison gets its own allowance.
+Near clones sharing four core slots retain the original machine's quota even when a submitted CPU
+class differs. A clone of an enrolled clone inherits its stored `quotaAnchorHash`, so a chain cannot
+open a new allowance. Class drift still prevents a positive same-device verdict.
 
 The masked-graphics refusals and acceptance criteria below describe the previous policy and
 historical measurements, superseded by this correction. No new real-browser verification is claimed.

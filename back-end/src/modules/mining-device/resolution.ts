@@ -333,26 +333,14 @@ export async function resolveOrCreateDevice(input: {
       throw new AppError(403, DEVICE_ENROLLMENT_LIMITED_CODE, DEVICE_ENROLLMENT_LIMITED_MESSAGE);
     }
   }
-  // A near clone is enrolled separately but shares the matched machine's allowance. When the best
-  // candidate is itself a clone, verify against the original quota owner too; otherwise similarities
-  // could chain A's quota through B to a distinct C that no longer resembles A.
-  let nearCloneAnchor: string | null = null;
-  if (best && isNearCloneMatch(decided)) {
-    const candidateAnchor = best.candidate.quotaAnchorHash;
-    const quotaRoot = candidateAnchor
-      ? await collections.miningDevices.findOne({
-          $or: [{ anchorHash: candidateAnchor }, { machineKeyHash: candidateAnchor }, { publicId: candidateAnchor }],
-        })
-      : best.candidate;
-    if (quotaRoot && !quotaRoot.quotaAnchorHash) {
-      const rootMatch = quotaRoot.publicId === best.candidate.publicId
-        ? decided
-        : matchDeviceFeatures(toCandidate(quotaRoot), observed, config.encryptionKey);
-      if (isNearCloneMatch(rootMatch)) {
-        nearCloneAnchor = quotaRoot.anchorHash ?? quotaRoot.machineKeyHash ?? quotaRoot.publicId;
-      }
-    }
-  }
+  // A near clone is enrolled as its own record, but it is still the machine it matched for every
+  // economic purpose: the shared 10h device quota is keyed on this anchor so editing a hardware
+  // slot cannot buy a second allowance next to the first account's stopped segment. Every other
+  // verdict leaves it null — a weak match must not lend its allowance to an unrelated computer.
+  const nearCloneAnchor =
+    best && isNearCloneMatch(decided)
+      ? best.candidate.quotaAnchorHash ?? best.candidate.anchorHash ?? best.candidate.machineKeyHash ?? best.candidate.publicId
+      : null;
   const created = await createDevice(
     collections,
     {

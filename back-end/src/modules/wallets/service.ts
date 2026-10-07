@@ -1,19 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { ObjectId, type ClientSession } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
-import { isCanonicalWalletAddressDuplicate } from "../../infrastructure/mongodb/wallet-errors.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import { formatMoney } from "../ledger/money.js";
 import { badRequest, conflict, notFound } from "../../shared/errors.js";
 import type { PublicWallet, WalletRecord } from "../../shared/types.js";
-import { generateWalletAddress, isValidWalletAddress, normalizeWalletAddress } from "./address.js";
-
-const MAX_ADDRESS_COLLISION_ATTEMPTS = 3;
 
 function publicWallet(wallet: WalletRecord, balanceMinor: number): PublicWallet {
   return {
     id: wallet.publicId,
-    address: wallet.address,
+    address: wallet.customAddress ?? wallet.address,
     status: wallet.status,
     balance: formatMoney(balanceMinor),
     currency: "LMA",
@@ -23,60 +18,8 @@ function publicWallet(wallet: WalletRecord, balanceMinor: number): PublicWallet 
   };
 }
 
-/**
- * A duplicate canonical address aborts its MongoDB transaction. The caller therefore retries its
- * whole short transaction, so the user and ledger account are rolled back before another address
- * candidate is generated.
- */
-export async function withWalletAddressCollisionRetry<T>(operation: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; attempt <= MAX_ADDRESS_COLLISION_ATTEMPTS; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (!isCanonicalWalletAddressDuplicate(error) || attempt === MAX_ADDRESS_COLLISION_ATTEMPTS) throw error;
-    }
-  }
-  throw new Error("Wallet address retry loop did not return");
-}
-
-/** Creates a primary wallet and its ledger account in the caller's registration transaction. */
-export async function provisionPrimaryWallet(input: {
-  collections: Collections;
-  ownerUserId: string;
-  session: ClientSession;
-  now: Date;
-}): Promise<WalletRecord> {
-  const address = generateWalletAddress();
-  const wallet = {
-    _id: new ObjectId(),
-    publicId: randomUUID(),
-    address,
-    addressNormalized: address,
-    addressVersion: 1,
-    ownerUserId: input.ownerUserId,
-    isPrimary: true,
-    status: "active",
-    financialVersion: 0,
-    createdAt: input.now,
-    updatedAt: input.now,
-    customAddressChangedAt: null,
-    customAddress: null,
-    customAddressNormalized: null,
-  } satisfies WalletRecord;
-  await input.collections.wallets.insertOne(wallet, { session: input.session });
-  await input.collections.ledgerAccounts.insertOne(
-    { publicId: randomUUID(), walletId: wallet.publicId, accountType: "wallet", currency: "LMA", balanceMinor: 0, createdAt: input.now } as never,
-    { session: input.session },
-  );
-  return wallet;
-}
-
-export function findPrimaryWallet(collections: Collections, ownerUserId: string): Promise<WalletRecord | null> {
-  return collections.wallets.findOne({ ownerUserId, isPrimary: true });
-}
-
 export async function getWallet(input: { collections: Collections; ownerUserId: string }): Promise<PublicWallet> {
-  const wallet = await findPrimaryWallet(input.collections, input.ownerUserId);
+  const wallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
   if (!wallet) throw notFound();
   // A wallet without its ledger account is a data-integrity fault, not a zero balance: answering
   // 0.0000 here would publish a fictitious balance and hide the drift from every detector.
@@ -91,15 +34,13 @@ export async function setWalletFrozen(input: { collections: Collections; ownerUs
   // Bumping `financialVersion` here is the other half of the transfer/freeze conflict boundary: a
   // transfer in flight holds its own increment inside its transaction, so whichever lands second
   // serialises after the first and the wallet state the transfer saw is the one that decides.
-  const wallet = await findPrimaryWallet(input.collections, input.ownerUserId);
-  if (!wallet) throw notFound();
   const result = await input.collections.wallets.updateOne(
-    { _id: wallet._id, ownerUserId: input.ownerUserId, isPrimary: true, status: { $ne: status } },
+    { ownerUserId: input.ownerUserId, status: { $ne: status } },
     { $set: { status, updatedAt: now }, $inc: { financialVersion: 1 } },
   );
   if (result.matchedCount === 0) {
-    const current = await input.collections.wallets.findOne({ _id: wallet._id, ownerUserId: input.ownerUserId, isPrimary: true });
-    if (!current) throw notFound();
+    const wallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
+    if (!wallet) throw notFound();
   }
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.ownerUserId, eventType: input.frozen ? "wallet_frozen" : "wallet_unfrozen", outcome: "success", correlationId: input.requestId }).catch(() => undefined);
   return getWallet({ collections: input.collections, ownerUserId: input.ownerUserId });
@@ -110,7 +51,7 @@ export async function setCustomAddress(input: { collections: Collections; ownerU
   const handle = input.handle.trim().replace(/^@/, "").toLowerCase();
   if (!/^[a-z0-9_]{4,24}$/.test(handle)) throw badRequest("invalid_custom_address", "Use 4 to 24 letters, numbers, or underscores.");
   const now = new Date();
-  const wallet = await findPrimaryWallet(input.collections, input.ownerUserId);
+  const wallet = await input.collections.wallets.findOne({ ownerUserId: input.ownerUserId });
   if (!wallet) throw notFound();
   if (wallet.customAddressChangedAt && now.getTime() - wallet.customAddressChangedAt.getTime() < 30 * 24 * 60 * 60 * 1000) {
     throw conflict("address_change_cooldown", "The receiving address can only be changed once every 30 days.");
@@ -128,16 +69,11 @@ export async function setCustomAddress(input: { collections: Collections; ownerU
   return getWallet({ collections: input.collections, ownerUserId: input.ownerUserId });
 }
 
-export async function resolveRecipient(input: { collections: Collections; address: string; senderWalletId: string }) {
-  const normalized = input.address.trim();
-  let wallet: WalletRecord | null;
-  if (isValidWalletAddress(normalized)) {
-    wallet = await input.collections.wallets.findOne({ addressNormalized: normalizeWalletAddress(normalized) });
-  } else {
-    wallet = await input.collections.wallets.findOne({ customAddressNormalized: normalized.replace(/^@/, "").toLowerCase() });
-  }
+export async function resolveRecipient(input: { collections: Collections; address: string; senderUserId: string }) {
+  const normalized = input.address.trim().toLowerCase();
+  const wallet = await input.collections.wallets.findOne({ $or: [{ addressNormalized: normalized.toUpperCase() }, { customAddressNormalized: normalized.replace(/^@/, "") }] });
   if (!wallet) throw notFound();
-  if (wallet.publicId === input.senderWalletId) throw conflict("self_transfer", "You cannot transfer to your own wallet.");
+  if (wallet.ownerUserId === input.senderUserId) throw conflict("self_transfer", "You cannot transfer to your own wallet.");
   return wallet;
 }
 

@@ -96,7 +96,7 @@ cannot be duplicated or lost, authorization cannot be bypassed, and the failure 
 
 | # | Scenario | Outcome | Invariant | Test |
 |---|---|---|---|---|
-| A | Duplicate submission | Safe — one effect | `transactions_sender_wallet_idempotency_unique` `(senderWalletId, idempotencyKey)`; in-transaction duplicate read; fingerprint = approval `intentHash` | "one idempotency key under simultaneous requests…"; pre-existing "same idempotency key racing…" |
+| A | Duplicate submission | Safe — one effect | `transactions_idempotency_unique` `(senderUserId, idempotencyKey)`; in-transaction duplicate read; fingerprint = approval `intentHash` | "one idempotency key under simultaneous requests…"; pre-existing "same idempotency key racing…" |
 | B | Double click | Safe | Same key reused by the wizard for identical parameters → replay | Same as A |
 | C | Double tab | Two approvals, two keys, two transfers *if* the user authorises both (each needs a fresh code) | One accepted TOTP step per operation | "a replayed authenticator code cannot authorise a second transfer" |
 | D | Multiple browsers | Same as C | Same | Same |
@@ -156,7 +156,7 @@ cannot be duplicated or lost, authorization cannot be bypassed, and the failure 
 - The ledger is append-only through the API: no endpoint updates or deletes a transaction, an entry, or an account.
 - `assertBalanced` refuses any ledger set that does not balance before a single write is attempted.
 - Every financial transaction runs with `readConcern: snapshot` and `writeConcern: majority`.
-- Unique indexes, not check-then-insert: one primary wallet per owner, canonical address/custom address, one ledger account per wallet, one fee and one treasury account, ledger entry id, transaction line identity, transfer id, wallet-scoped transfer idempotency key, mining settlement identity, mining cycle identity, credential ownership.
+- Unique indexes, not check-then-insert: wallet ownership/address/custom address, one ledger account per wallet, one fee and one treasury account, ledger entry id, transaction line identity, transfer id, transfer idempotency key, mining settlement identity, mining cycle identity, credential ownership.
 - The freeze/transfer and password-change/transfer races are closed by the same `financialVersion` conflict boundary — a single write-conflict object both sides must touch.
 - Mining settlement is a compare-and-set on `settledMinor` against the window-clamped accrual, so it can neither double-credit nor exceed the cycle's total.
 - Reconciliation recomputes every projection from the immutable entries and flags negative balances; the sign convention is credit-normal for wallets and fee revenue, debit-normal for the treasury (now covered by a dedicated test, and verified across the whole dev database: `ok: true, issues: 0`).
@@ -269,20 +269,18 @@ New collections (strict validators, `validationAction: "error"`), created idempo
   operation*; TTL on `retainUntil` (7 days).
 - `financial_controls` — single document `_id: "global"`; policy only, no money.
 
-Current index guarantees: `transactions_sender_wallet_idempotency_unique (senderWalletId, idempotencyKey)` partial on
+Unchanged and relied upon: `transactions_idempotency_unique (senderUserId, idempotencyKey)` partial on
 `type: "transfer"`; `transactions_transfer_id_unique`; `transactions_public_id_unique`;
 `ledger_entries_public_id_unique`; `ledger_entries_transaction_line_unique (transactionId, lineNumber)`;
 `ledger_accounts_wallet_unique`; `ledger_accounts_revenue_unique`, `ledger_accounts_treasury_unique`;
-`wallets_owner_primary_unique`, `wallets_address_unique`, `wallets_custom_address_unique` (partial);
+`wallets_owner_unique`, `wallets_address_unique`, `wallets_custom_address_unique` (partial);
 `two_factor_owner_unique`, `transfer_password_owner_unique`; `mining_settlements_session_sequence_unique`,
 `mining_settlements_idempotency_unique`; `mining_sessions_one_active_per_user` (partial);
 `mining_device_leases_one_active_per_device` (partial); `mining_devices_anchor_unique` (partial);
 `mining_device_nonces_unique`.
 
-Wallet identity migration: `docs/migrations.md` describes the in-place address replacement, backup,
-database confirmation, bounded resumability, and startup gate. No wallet alias is retained; old
-transaction address snapshots remain immutable. The transfer approval protocol and its
-`authorizationId` field are unchanged for the frontend.
+Migration: none required for existing data — the new collections start empty and the validators/indexes
+are created at boot. Deploy the backend before (or with) the frontend that sends `authorizationId`.
 
 Reconciliation sign convention, verified independently: wallets and `fee_revenue` are credit-normal
 (a credit grows the balance), `system_treasury` is debit-normal (a debit grows it, which is how issuance
