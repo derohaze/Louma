@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import { displayNameKey, readThrough, type CacheContext } from "../../infrastructure/redis/cache.js";
+import { isValidCustomAddress } from "../wallets/custom-address.js";
 import { resolveRecipient } from "../wallets/service.js";
 import { findPrimaryWallet } from "../wallets/service.js";
 import { calculateTransferAmounts, formatMoney, parseMoneyToMinorUnits } from "../ledger/money.js";
@@ -98,6 +99,7 @@ export async function previewTransfer(input: {
     recipientWalletId: recipientWallet.publicId,
     recipientUserId: recipientWallet.ownerUserId,
     recipientAddress: recipient.address,
+    ...(isValidCustomAddress(recipientAddress) ? { recipientCustomAddress: recipientAddress.toLowerCase() } : {}),
     amountMinor: amounts.amountMinor,
     feeMinor: amounts.feeMinor,
     netAmountMinor: amounts.netAmountMinor,

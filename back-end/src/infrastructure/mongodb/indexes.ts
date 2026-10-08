@@ -8,6 +8,7 @@ import {
   migrateMiningSettlementsToTransactions,
 } from "./backfills.js";
 import { createIndexMigratingOptions, dropIndexIfExists, ensureCoreIndexes } from "./definitions.js";
+import { ensureSubscriptionStorage } from "./subscription-storage.js";
 import { schemas } from "./schemas.js";
 
 /**
@@ -62,6 +63,7 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
   await dropIndexIfExists(db, "mining_device_leases", "mining_device_leases_session_unique");
 
   await ensureCoreIndexes(db);
+  await ensureSubscriptionStorage(db);
 
   // Settlement → journal migration (see ADR-003). Runs after the validators and the new journal
   // uniqueness indexes exist: inserted headers must satisfy the tightened validator, and the

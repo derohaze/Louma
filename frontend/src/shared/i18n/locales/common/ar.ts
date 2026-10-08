@@ -26,6 +26,8 @@ const ar: Strings<typeof en> = {
     requestFailedRetry: "تعذّر إتمام الطلب. حاول مرة أخرى.",
   },
   state: {
+    pro: "Pro",
+    free: "مجاني",
     on: "مفعّل",
     off: "متوقف",
     active: "نشِط",

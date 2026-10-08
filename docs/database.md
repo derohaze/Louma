@@ -1,8 +1,9 @@
 # Database (MongoDB — the source of truth)
 
-## Collections (22 total, ~20 live + 1 legacy-frozen + 1 deprecated-pending-drop)
+## Collections (24 total, including subscription and address archives)
 
 Core: users, wallets, ledger_accounts, ledger_entries, transactions.
+Pro: subscriptions, wallet_address_history (permanent history; ADR-010).
 Auth/security: sessions, security_events, two_factor_credentials,
 transfer_password_credentials, transfer_authorizations, two_factor_uses,
 financial_controls, notifications.
@@ -44,6 +45,13 @@ symbols from 128 CSPRNG bits + a 2-symbol SHA-256 checksum. `address` is canonic
 and immutable after provisioning; custom handles remain separate aliases.
 
 ## Validators
+
+Pro authorization uses `subscriptions_owner_active_unique`; activation retries
+use `subscriptions_activation_unique`. The expiry sweep uses
+`subscriptions_expiry`, and latest-20 owner history uses
+`wallet_address_history_owner`. `wallets_custom_address_unique` keeps active
+aliases globally unique and also serves the bounded alias sweep. History has
+no TTL and no parent arrays. See `pro-subscriptions.md` and ADR-010 for lifecycle.
 
 Strict + error on all collections. Money bounded by LEDGER_AMOUNT_MAX_MINOR
 (single movement) and LEDGER_BALANCE_MAX_MINOR (cumulative projection), both

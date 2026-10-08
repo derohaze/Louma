@@ -28,8 +28,13 @@ export async function connectMongo(config: MongoConnectionConfig, overrides: Mon
     ...overrides,
   });
 
-  await client.connect();
-  const db = client.db(config.mongoDatabase);
-  await db.command({ ping: 1 });
-  return { client, db };
+  try {
+    await client.connect();
+    const db = client.db(config.mongoDatabase);
+    await db.command({ ping: 1 });
+    return { client, db };
+  } catch (error) {
+    await client.close();
+    throw error;
+  }
 }

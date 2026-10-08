@@ -23,6 +23,9 @@ import {
 import { badRequest, conflict, forbidden, notFound, unauthorized } from "../../shared/errors.js";
 import { findPrimaryWallet, provisionPrimaryWallet, withWalletAddressCollisionRetry } from "../wallets/service.js";
 
+import { getSubscription } from "../subscriptions/service.js";
+import { isValidCustomAddress } from "../wallets/custom-address.js";
+
 const EMAIL_MAX_LENGTH = 254;
 const DISPLAY_NAME_MAX_LENGTH = 32;
 const PASSWORD_MAX_LENGTH = 128;
@@ -55,8 +58,9 @@ function validatePassword(input: unknown): asserts input is string {
   }
 }
 
-function toPublicUser(user: UserRecord): PublicUser {
+async function toPublicUser(user: UserRecord, collections: Collections): Promise<PublicUser> {
   return {
+    subscription: await getSubscription(collections, user.publicId),
     id: user.publicId,
     email: user.email,
     displayName: user.profile.displayName,
@@ -101,7 +105,7 @@ async function issueSession(input: {
     ? await createAccessToken({ userId: input.user.publicId, sessionId }, input.config.accessTokenSecret)
     : null;
   await recordSecurityEvent({ collections: input.collections, ownerUserId: input.user.publicId, sessionId, eventType: session.status === "active" ? "login" : "login_pending_two_factor", outcome: "success", correlationId: input.requestId }).catch((error: unknown) => logAuditFailure(session.status === "active" ? "login" : "login_pending_two_factor", error));
-  return { user: toPublicUser(input.user), accessToken, refreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId };
+  return { user: await toPublicUser(input.user, input.collections), accessToken, refreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId };
 }
 
 export async function register(input: {
@@ -254,7 +258,7 @@ async function rotateSession(input: {
     { $set: { previousRefreshTokenHash: input.session.refreshTokenHash, refreshTokenHash: hashToken(nextRefreshToken), lastActiveAt: input.now, expiresAt: new Date(input.now.getTime() + REFRESH_TOKEN_TTL_MS) } },
   );
   if (result.modifiedCount !== 1) throw unauthorized();
-  return { user: toPublicUser(user), accessToken: await createAccessToken({ userId: user.publicId, sessionId: input.session.publicId }, input.config.accessTokenSecret), refreshToken: nextRefreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId: input.session.publicId };
+  return { user: await toPublicUser(user, input.collections), accessToken: await createAccessToken({ userId: user.publicId, sessionId: input.session.publicId }, input.config.accessTokenSecret), refreshToken: nextRefreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId: input.session.publicId };
 }
 
 export async function refreshSession(input: {
@@ -331,7 +335,7 @@ export async function completeTwoFactor(input: {
       await recordSecurityEvent({ collections: input.collections, ownerUserId: user.publicId, sessionId: session.publicId, eventType: "two_factor_login_succeeded", outcome: "success", correlationId: input.requestId, metadata: { recoveryCodeUsed: remainingRecoveryCodes.length !== credential.recoveryCodeHashes.length }, mongoSession });
     });
   } finally { await mongoSession.endSession(); }
-  return { user: toPublicUser(user), accessToken: await createAccessToken({ userId: user.publicId, sessionId: session.publicId }, input.config.accessTokenSecret), refreshToken: nextRefreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId: session.publicId };
+  return { user: await toPublicUser(user, input.collections), accessToken: await createAccessToken({ userId: user.publicId, sessionId: session.publicId }, input.config.accessTokenSecret), refreshToken: nextRefreshToken, accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS, sessionId: session.publicId };
 }
 
 export async function revokeSession(input: { collections: Collections; ownerUserId: string; sessionId: string; requestId: string; currentSessionId: string }): Promise<void> {
@@ -358,7 +362,8 @@ export async function getCurrentUser(input: { collections: Collections; ownerUse
   const wallet = await findPrimaryWallet(input.collections, user.publicId);
   const ledgerAccount = wallet ? await input.collections.ledgerAccounts.findOne({ walletId: wallet.publicId, accountType: "wallet" }, { projection: { balanceMinor: 1 } }) : null;
   if (wallet && !ledgerAccount) throw new Error(`Wallet ${wallet.publicId} has no LMA ledger account`);
-  return { user: toPublicUser(user), wallet: wallet ? { id: wallet.publicId, address: wallet.address, status: wallet.status, balance: formatMoney(ledgerAccount?.balanceMinor ?? 0), currency: "LMA", createdAt: wallet.createdAt.toISOString(), customAddressChangedAt: wallet.customAddressChangedAt?.toISOString() ?? null, customAddress: wallet.customAddress } : null };
+  const publicUser = await toPublicUser(user, input.collections);
+  return { user: publicUser, wallet: wallet ? { id: wallet.publicId, address: wallet.address, status: wallet.status, balance: formatMoney(ledgerAccount?.balanceMinor ?? 0), currency: "LMA", createdAt: wallet.createdAt.toISOString(), customAddressChangedAt: wallet.customAddressChangedAt?.toISOString() ?? null, customAddress: publicUser.subscription.tier === "pro" && isValidCustomAddress(wallet.customAddress) ? wallet.customAddress : null } : null };
 }
 
 export async function updateProfile(input: { collections: Collections; ownerUserId: string; displayName?: unknown; country?: unknown; requestId: string; redis?: RedisHandle }) {

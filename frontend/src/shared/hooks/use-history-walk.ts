@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useRouteLoadingStatus } from "./route-loading";
 
 /**
  * Walks a cursor-paged list to the end of its history, one page at a time, appending to the
@@ -36,7 +37,17 @@ export function useHistoryWalk<Page>(options: {
 }): void {
   const { queryKey, cap, enabled } = options;
   const queryClient = useQueryClient();
-  const walking = useRef(false);
+  const activeWalk = useRef<symbol | null>(null);
+  const [walkFinished, setWalkFinished] = useState(false);
+  const cached = queryClient.getQueryData<InfiniteData<Page, string | null>>(queryKey);
+  const hasFirstPage = (cached?.pages.length ?? 0) > 0;
+  const lastCachedPage = cached?.pages.at(-1);
+  const hasMore =
+    enabled &&
+    (cached?.pages.length ?? 0) > 0 &&
+    (cached?.pages.length ?? 0) < cap &&
+    Boolean(lastCachedPage && options.nextCursor(lastCachedPage));
+  useRouteLoadingStatus(`history-walk:${JSON.stringify(queryKey)}`, hasMore && !walkFinished);
   const latest = useRef({
     fetchPage: options.fetchPage,
     nextCursor: options.nextCursor,
@@ -51,12 +62,17 @@ export function useHistoryWalk<Page>(options: {
   };
 
   useEffect(() => {
-    if (!enabled || walking.current) return;
-    walking.current = true;
+    if (!enabled || !hasFirstPage || activeWalk.current) return;
+    const walkId = Symbol("history-walk");
+    activeWalk.current = walkId;
+    setWalkFinished(false);
     let cancelled = false;
     void (async () => {
+      // Let React's development effect replay clean up before any network work begins.
+      await Promise.resolve();
+      if (cancelled || activeWalk.current !== walkId) return;
       try {
-        while (!cancelled) {
+        while (!cancelled && activeWalk.current === walkId) {
           const live = latest.current;
           const cached = queryClient.getQueryData<InfiniteData<Page, string | null>>(queryKey);
           const pages = cached?.pages.length ?? 0;
@@ -82,11 +98,13 @@ export function useHistoryWalk<Page>(options: {
       } catch {
         // The pages already in the cache still describe this wallet.
       } finally {
-        walking.current = false;
+        if (activeWalk.current === walkId) activeWalk.current = null;
+        if (!cancelled) setWalkFinished(true);
       }
     })();
     return () => {
       cancelled = true;
+      if (activeWalk.current === walkId) activeWalk.current = null;
     };
-  }, [enabled, queryClient, queryKey]);
+  }, [enabled, hasFirstPage, queryClient, queryKey]);
 }

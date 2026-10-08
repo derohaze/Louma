@@ -26,6 +26,7 @@ export { TransactionDetailSkeleton } from "./transactions/skeleton-transaction-d
 export { CustomAddressSkeleton } from "./wallet/skeleton-custom-address";
 export { NotificationsSkeleton } from "./notifications/skeleton-notifications";
 export { ProfileSkeleton } from "./account/skeleton-profile";
+export { BillingSkeleton } from "./account/skeleton-billing";
 export { SettingsSkeleton } from "./account/skeleton-settings";
 export { SecurityCenterSkeleton, SecurityDetailSkeleton } from "./account/skeleton-security";
 
@@ -42,6 +43,7 @@ import { TransactionDetailSkeleton } from "./transactions/skeleton-transaction-d
 import { CustomAddressSkeleton } from "./wallet/skeleton-custom-address";
 import { NotificationsSkeleton } from "./notifications/skeleton-notifications";
 import { ProfileSkeleton } from "./account/skeleton-profile";
+import { BillingSkeleton } from "./account/skeleton-billing";
 import { SettingsSkeleton } from "./account/skeleton-settings";
 import { SecurityCenterSkeleton, SecurityDetailSkeleton } from "./account/skeleton-security";
 
@@ -75,6 +77,7 @@ const skeletonsByPath: Record<string, (props: { title: string }) => React.ReactN
   "/mining/history": MiningHistorySkeleton,
   "/transactions": HistorySkeleton,
   "/notifications": NotificationsSkeleton,
+  "/billing": BillingSkeleton,
   "/profile": ProfileSkeleton,
   "/security": SecurityCenterSkeleton,
   "/security/two-factor": SecurityDetailSkeleton,
@@ -106,6 +109,7 @@ const skeletonsByTitle: Record<string, (props: { title: string }) => React.React
   recipients: RecipientsSkeleton,
   wallet: WalletSkeleton,
   notifications: NotificationsSkeleton,
+  billing: BillingSkeleton,
   transactions: HistorySkeleton,
   transaction: TransactionDetailSkeleton,
   "custom address": CustomAddressSkeleton,

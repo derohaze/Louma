@@ -18,6 +18,7 @@ import { formatMoney, parseMoneyToMinorUnits } from "../modules/ledger/money.js"
 import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
 import { isTransferTransaction, PENDING_2FA_TTL_MS } from "../shared/types.js";
 import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
+import { grantSubscription } from "../modules/subscriptions/service.js";
 import { generateWalletAddress, isValidWalletAddress } from "../modules/wallets/address.js";
 import { migrateWalletAddresses } from "../infrastructure/mongodb/wallet-address-migration.js";
 
@@ -299,6 +300,8 @@ after(async () => {
     const runTransferIds = runTransactions.filter(isTransferTransaction).map((transaction) => transaction.transferId);
     const runTransactionIds = [...new Set([...createdTransactionIds, ...runTransactions.map((transaction) => transaction.publicId), ...runTransferIds])];
     for (const userId of createdUserIds) {
+      await collections.subscriptions.deleteMany({ ownerUserId: userId });
+      await collections.walletAddressHistory.deleteMany({ ownerUserId: userId });
       await collections.sessions.deleteMany({ ownerUserId: userId });
       await collections.securityEvents.deleteMany({ ownerUserId: userId });
       await collections.twoFactorCredentials.deleteMany({ ownerUserId: userId });
@@ -719,9 +722,10 @@ test("the staged transfer form resolves the recipient, then quotes the tax and t
 
   // A handle resolves to the same canonical address the transfer will credit.
   const handle = `pv${randomUUID().replace(/[^0-9a-f]/g, "").slice(0, 6)}`;
+  await grantSubscription({ collections, mongoClient: client, ownerUserId: receiver.userId, plan: "monthly", activationKey: randomUUID(), createdBy: "test" });
   const named = await call("PATCH", "/api/v1/wallet/custom-address", { token: receiver.accessToken, body: { address: handle } });
   assert.equal(named.status, 200, JSON.stringify(named.body));
-  const byHandle = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: `@${handle}` } });
+  const byHandle = await call("POST", "/api/v1/transfers/preview", { token: sender.accessToken, body: { recipientAddress: handle } });
   assert.equal(byHandle.status, 200, JSON.stringify(byHandle.body));
   assert.equal((byHandle.body["preview"] as { recipient: { address: string } }).recipient.address, receiver.address);
 
@@ -1256,26 +1260,27 @@ test("a registration whose post-commit re-read fails still returns the account i
 test("a custom alias stays separate from the canonical receiving address and is locked for 30 days", async () => {
   const owner = await register("address");
   const other = await register("address-other");
+  await grantSubscription({ collections, mongoClient: client, ownerUserId: owner.userId, plan: "monthly", activationKey: randomUUID(), createdBy: "test" });
+  await grantSubscription({ collections, mongoClient: client, ownerUserId: other.userId, plan: "monthly", activationKey: randomUUID(), createdBy: "test" });
   const generatedAddress = owner.address;
   assert.ok(isValidWalletAddress(generatedAddress));
 
-  // Handles are unique platform-wide against every account that has ever claimed one, including real
-  // accounts on this shared cluster. A hardcoded handle would collide the moment a person takes it,
+  // Active handles are unique platform-wide, including real accounts on this shared cluster. A hardcoded handle would collide the moment a person takes it,
   // so this run claims one of its own.
   const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
-  const handle = `louma_pocket_${suffix}`;
+  const handle = `louma${suffix}`;
 
   // The handle rules are enforced before anything is written.
-  for (const invalid of ["ab", "a".repeat(25), "no spaces", "dash-handle"]) {
+  for (const invalid of ["ab", "a".repeat(17), "no spaces", "dash-handle"]) {
     const refused = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: invalid } });
     assert.equal(refused.status, 400, `${JSON.stringify(invalid)} is refused`);
   }
 
-  const changed = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: `@${handle}` } });
+  const changed = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: handle } });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
   const wallet = changed.body["wallet"] as Record<string, unknown>;
   assert.equal(wallet["address"], generatedAddress, "the canonical address never changes");
-  assert.equal(wallet["customAddress"], `@${handle}`);
+  assert.equal(wallet["customAddress"], handle);
   assert.ok(typeof wallet["customAddressChangedAt"] === "string", "the cooldown clock starts when it changes");
 
   // Handles are unique platform-wide, whatever case they were typed in.
@@ -1285,7 +1290,7 @@ test("a custom alias stays separate from the canonical receiving address and is 
 
   // Both the new handle and the original generated address keep resolving as recipients.
   await fund(other, FUNDING_MINOR);
-  assert.equal((await transfer(`@${handle}`, "1.0000", other.accessToken)).status, 201);
+  assert.equal((await transfer(handle, "1.0000", other.accessToken)).status, 201);
   assert.equal((await transfer(generatedAddress, "1.0000", other.accessToken)).status, 201);
   assert.equal(
     await collections.transactions.countDocuments({ senderWalletId: other.walletId, receiverWalletId: owner.walletId, receiverAddress: generatedAddress }),
@@ -1295,12 +1300,12 @@ test("a custom alias stays separate from the canonical receiving address and is 
   assert.equal(await balanceOf(owner), "1.9800", "each transfer credits 1.0000 less the 1% fee");
 
   // The handle is locked for 30 days, and a refused change leaves the wallet untouched.
-  const cooldown = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: "louma_second" } });
+  const cooldown = await call("PATCH", "/api/v1/wallet/custom-address", { token: owner.accessToken, body: { address: "loumasecond" } });
   assert.equal(cooldown.status, 409, JSON.stringify(cooldown.body));
   assert.equal((cooldown.body["error"] as Record<string, unknown>)["code"], "address_change_cooldown");
   const unchanged = (await call("GET", "/api/v1/wallet", { token: owner.accessToken })).body["wallet"] as Record<string, unknown>;
   assert.equal(unchanged["address"], generatedAddress, "the canonical receiving address stays immutable");
-  assert.equal(unchanged["customAddress"], `@${handle}`, "the refused change leaves the alias unchanged");
+  assert.equal(unchanged["customAddress"], handle, "the refused change leaves the alias unchanged");
   assert.equal(unchanged["customAddressChangedAt"], wallet["customAddressChangedAt"]);
 
   await assertLedgerConsistency();

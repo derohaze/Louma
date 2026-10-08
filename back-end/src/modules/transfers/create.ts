@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
 import type { MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import { guardRecipientCustomAddress, lockActiveSubscription } from "../../infrastructure/mongodb/subscription-repository.js";
 import { postBalancedJournal } from "../../infrastructure/mongodb/repositories.js";
 import type { CacheContext } from "../../infrastructure/redis/cache.js";
 import type { AppConfig } from "../../config/env.js";
@@ -313,6 +314,13 @@ export async function createTransfer(input: {
           if (duplicate) {
             if (duplicate.requestFingerprint !== requestFingerprint) throw conflict("idempotency_key_reused", "This idempotency key was already used for a different transfer.");
             return;
+          }
+
+          // Bind alias ownership and Pro authorization inside the monetary transaction, even
+          // when the client echoes the canonical address returned by preview.
+          if (intent.recipientCustomAddress) {
+            const active = await lockActiveSubscription(input.collections, intent.recipientUserId, new Date(), session);
+            if (!active || !await guardRecipientCustomAddress(input.collections, intent.recipientWalletId, intent.recipientCustomAddress, session)) throw notFound();
           }
 
           // Share a write-conflict boundary with freeze so a concurrently frozen wallet cannot send.

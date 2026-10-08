@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ObjectId, type ClientSession } from "mongodb";
+import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import { isCanonicalWalletAddressDuplicate } from "../../infrastructure/mongodb/wallet-errors.js";
 import { recordSecurityEvent } from "../security/audit.js";
@@ -7,6 +7,9 @@ import { formatMoney } from "../ledger/money.js";
 import { badRequest, conflict, notFound } from "../../shared/errors.js";
 import type { PublicWallet, WalletRecord } from "../../shared/types.js";
 import { generateWalletAddress, isValidWalletAddress, normalizeWalletAddress } from "./address.js";
+import { isValidCustomAddress } from "./custom-address.js";
+import { getSubscription, lockPro, releaseInactiveAddress, requirePro } from "../subscriptions/service.js";
+import * as addressRepository from "../../infrastructure/mongodb/subscription-repository.js";
 
 const MAX_ADDRESS_COLLISION_ATTEMPTS = 3;
 
@@ -82,7 +85,8 @@ export async function getWallet(input: { collections: Collections; ownerUserId: 
   // 0.0000 here would publish a fictitious balance and hide the drift from every detector.
   const account = await input.collections.ledgerAccounts.findOne({ walletId: wallet.publicId, accountType: "wallet", currency: "LMA" }, { projection: { balanceMinor: 1 } });
   if (!account) throw new Error(`Wallet ${wallet.publicId} has no LMA ledger account`);
-  return publicWallet(wallet, account.balanceMinor);
+  const subscription = await getSubscription(input.collections, input.ownerUserId);
+  return publicWallet({ ...wallet, customAddress: subscription.tier === "pro" && isValidCustomAddress(wallet.customAddress) ? wallet.customAddress : null }, account.balanceMinor);
 }
 
 export async function setWalletFrozen(input: { collections: Collections; ownerUserId: string; frozen: boolean; requestId: string }): Promise<PublicWallet> {
@@ -105,19 +109,31 @@ export async function setWalletFrozen(input: { collections: Collections; ownerUs
   return getWallet({ collections: input.collections, ownerUserId: input.ownerUserId });
 }
 
-export async function setCustomAddress(input: { collections: Collections; ownerUserId: string; handle: unknown; requestId: string }): Promise<PublicWallet> {
-  if (typeof input.handle !== "string") throw badRequest("invalid_custom_address", "Enter a custom address.");
-  const handle = input.handle.trim().replace(/^@/, "").toLowerCase();
-  if (!/^[a-z0-9_]{4,24}$/.test(handle)) throw badRequest("invalid_custom_address", "Use 4 to 24 letters, numbers, or underscores.");
-  const now = new Date();
-  const wallet = await findPrimaryWallet(input.collections, input.ownerUserId);
-  if (!wallet) throw notFound();
-  if (wallet.customAddressChangedAt && now.getTime() - wallet.customAddressChangedAt.getTime() < 30 * 24 * 60 * 60 * 1000) {
-    throw conflict("address_change_cooldown", "The receiving address can only be changed once every 30 days.");
+export async function setCustomAddress(input: { collections: Collections; mongoClient: MongoClient; ownerUserId: string; handle: unknown; requestId: string }): Promise<PublicWallet> {
+  await requirePro(input.collections, input.ownerUserId);
+  if (!isValidCustomAddress(input.handle)) throw badRequest("invalid_custom_address", "Use 3 to 16 English letters or digits, starting with a letter, without spaces or symbols.");
+  const handle = input.handle.toLowerCase();
+  // Release and archive in its own transaction before reuse: MongoDB unique keys are not
+  // reusable by another document until the transaction releasing the key has committed.
+  const candidate = await input.collections.wallets.findOne({ customAddressNormalized: handle });
+  if (candidate && candidate.ownerUserId !== input.ownerUserId) {
+    await addressRepository.subscriptionTransaction(input.mongoClient, (session) => releaseInactiveAddress(input.collections, candidate.ownerUserId, new Date(), session));
   }
   try {
-    const result = await input.collections.wallets.updateOne({ _id: wallet._id, ownerUserId: input.ownerUserId, customAddressChangedAt: wallet.customAddressChangedAt }, { $set: { customAddress: `@${handle}`, customAddressNormalized: handle, customAddressChangedAt: now, updatedAt: now } });
-    if (result.modifiedCount !== 1) throw conflict("address_change_conflict", "The wallet changed. Refresh and try again.");
+    await addressRepository.subscriptionTransaction(input.mongoClient, async (session) => {
+      const subscription = await lockPro(input.collections, input.ownerUserId, session);
+      const wallet = await addressRepository.findPrimaryAddressWallet(input.collections, input.ownerUserId, session);
+      if (!wallet) throw notFound();
+      if (wallet.customAddressNormalized === handle) return;
+      const now = new Date();
+      if (wallet.customAddressChangedAt && now.getTime() - wallet.customAddressChangedAt.getTime() < 30 * 86400000) {
+        throw conflict("address_change_cooldown", "The receiving address can only be changed once every 30 days.");
+      }
+      if (!await addressRepository.changeWalletAddress({ collections: input.collections, wallet, address: handle,
+        subscriptionId: subscription.publicId, reason: "changed", now, session })) {
+        throw conflict("address_change_conflict", "The wallet changed. Refresh and try again.");
+      }
+    });
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === 11000) throw conflict("address_unavailable", "That custom address is already in use.");
     throw error;
@@ -129,12 +145,14 @@ export async function setCustomAddress(input: { collections: Collections; ownerU
 }
 
 export async function resolveRecipient(input: { collections: Collections; address: string; senderWalletId: string }) {
-  const normalized = input.address.trim();
+  const normalized = input.address;
   let wallet: WalletRecord | null;
   if (isValidWalletAddress(normalized)) {
     wallet = await input.collections.wallets.findOne({ addressNormalized: normalizeWalletAddress(normalized) });
   } else {
-    wallet = await input.collections.wallets.findOne({ customAddressNormalized: normalized.replace(/^@/, "").toLowerCase() });
+    if (!isValidCustomAddress(normalized)) throw notFound();
+    wallet = await input.collections.wallets.findOne({ customAddressNormalized: normalized.toLowerCase() });
+    if (wallet && (await getSubscription(input.collections, wallet.ownerUserId)).tier !== "pro") throw notFound();
   }
   if (!wallet) throw notFound();
   if (wallet.publicId === input.senderWalletId) throw conflict("self_transfer", "You cannot transfer to your own wallet.");

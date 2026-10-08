@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BitcoinCpuIcon, Logout01Icon, UserGroupIcon } from "@hugeicons/core-free-icons";
+import { Logout01Icon, PickaxeIcon, UserGroupIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { useWallet } from "@/shared/hooks";
 import { ApiError, api, messageForError, type ApiMiningPoolsState } from "@/shared/api";
@@ -127,7 +127,7 @@ export function MiningPools() {
           joinedPool ? (
             <Link to="/mining">
               <Button>
-                <Icon icon={BitcoinCpuIcon} size={17} />
+                <Icon icon={PickaxeIcon} size={17} />
                 {t("goToMining")}
               </Button>
             </Link>

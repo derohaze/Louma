@@ -1,4 +1,4 @@
-import { translate } from "@/shared/i18n";
+import { translateIn, type LanguageCode } from "@/shared/i18n";
 import type { IconData } from "@/shared/ui/page";
 import { navSections, type NavHref } from "@/shared/lib/wallet";
 
@@ -23,24 +23,26 @@ export type SearchPage = SearchEntry & { category: string; terms: string };
  * dialog matches on both come from the navigation's own translation keys, so someone typing Arabic
  * finds a page by its Arabic name.
  */
-export function buildSearchPages(): SearchPage[] {
+export function buildSearchPages(language: LanguageCode, isPro: boolean): SearchPage[] {
   return navSections.flatMap((section) => {
-    const sectionTitle = translate(section.titleKey);
-    return section.items.map((item) => {
-      const title = translate(item.titleKey);
-      return {
-        id: `page:${item.href}`,
-        title,
-        subtitle:
-          title === sectionTitle
-            ? translate("nav.chrome.pageInSection", { section: sectionTitle })
-            : sectionTitle,
-        icon: item.icon,
-        href: item.href,
-        category: sectionTitle,
-        terms: translate(item.searchKey),
-      };
-    });
+    const sectionTitle = translateIn(language, section.titleKey);
+    return section.items
+      .filter((item) => isPro || item.href !== "/custom-address")
+      .map((item) => {
+        const title = translateIn(language, item.titleKey);
+        return {
+          id: `page:${item.href}`,
+          title,
+          subtitle:
+            title === sectionTitle
+              ? translateIn(language, "nav.chrome.pageInSection", { section: sectionTitle })
+              : sectionTitle,
+          icon: item.icon,
+          href: item.href,
+          category: sectionTitle,
+          terms: translateIn(language, item.searchKey),
+        };
+      });
   });
 }
 

@@ -6,6 +6,7 @@ const ar: Strings<typeof en> = {
     brand: "لوما",
     logoAlt: "شعار لوما",
     searchAria: "بحث",
+    billingAria: "الفواتير والاشتراك",
     accountMenuAria: "قائمة الحساب",
   },
   search: {

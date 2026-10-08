@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import * as auth from "../../auth/service.js";
 import * as wallets from "../../wallets/service.js";
+import { getSubscription, requirePro } from "../../subscriptions/service.js";
+import { listAddressHistory } from "../../../infrastructure/mongodb/subscription-repository.js";
 import { publicIdSchema } from "../schemas.js";
 import { authenticated, getAuth, parseBody } from "../http-helpers.js";
 
@@ -38,11 +40,22 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
     }),
   }));
 
+  app.get("/api/v1/subscription", authenticated, async (request) => ({ subscription: await getSubscription(app.collections, getAuth(request).userId) }));
+
+  app.get("/api/v1/wallet/custom-address", authenticated, async (request) => {
+    const ownerUserId = getAuth(request).userId;
+    const subscription = await requirePro(app.collections, ownerUserId);
+    const history = await listAddressHistory(app.collections, ownerUserId);
+    return { subscription, history: history.map((row) => ({ id: row.publicId, previousAddress: row.previousAddress, nextAddress: row.nextAddress, reason: row.reason, createdAt: row.createdAt.toISOString() })) };
+  });
+
   app.patch("/api/v1/wallet/custom-address", authenticated, async (request) => {
-    const body = parseBody(z.object({ address: z.string().min(4).max(25) }).strict(), request.body);
+    await requirePro(app.collections, getAuth(request).userId);
+    const body = parseBody(z.object({ address: z.string().min(3).max(16) }).strict(), request.body);
     return {
       wallet: await wallets.setCustomAddress({
         collections: app.collections,
+        mongoClient: app.mongoClient,
         ownerUserId: getAuth(request).userId,
         handle: body.address,
         requestId: request.id,

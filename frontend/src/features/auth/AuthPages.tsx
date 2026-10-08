@@ -120,7 +120,7 @@ function AuthField({
       <input
         {...props}
         aria-label={label}
-        className="h-12 w-full rounded-full border border-black/[0.06] bg-[#F1F1F4] px-5 text-sm text-[#1B1B21] shadow-[0_1px_2px_rgba(16,16,20,0.06)] outline-none placeholder:text-[#8A8A93] focus:border-[#1B1B21]/20 focus:ring-2 focus:ring-[#1B1B21]/10 dark:border-border dark:bg-secondary dark:text-foreground dark:placeholder:text-muted-foreground dark:focus:border-ring/50 dark:focus:ring-ring/20"
+        className="h-12 w-full rounded-full border border-black/[0.06] bg-[#F1F1F4] px-5 text-sm text-[#1B1B21] shadow-[0_1px_2px_rgba(16,16,20,0.06)] outline-none placeholder:text-[#8A8A93] focus:border-[#1B1B21]/50 focus:ring-0 dark:border-border dark:bg-secondary dark:text-foreground dark:placeholder:text-muted-foreground dark:focus:border-foreground/60 dark:focus:ring-0"
       />
     </label>
   );
@@ -142,7 +142,7 @@ function PasswordField({
   return (
     <label className="block">
       <span className="sr-only">{label}</span>
-      <span className="flex h-12 items-center rounded-full border border-black/[0.06] bg-[#F1F1F4] pe-3 shadow-[0_1px_2px_rgba(16,16,20,0.06)] focus-within:border-[#1B1B21]/20 focus-within:ring-2 focus-within:ring-[#1B1B21]/10 dark:border-border dark:bg-secondary dark:focus-within:border-ring/50 dark:focus-within:ring-ring/20">
+      <span className="flex h-12 items-center rounded-full border border-black/[0.06] bg-[#F1F1F4] pe-3 shadow-[0_1px_2px_rgba(16,16,20,0.06)] focus-within:border-[#1B1B21]/50 focus-within:ring-0 dark:border-border dark:bg-secondary dark:focus-within:border-foreground/60 dark:focus-within:ring-0">
         <input
           type={visible ? "text" : "password"}
           aria-label={label}

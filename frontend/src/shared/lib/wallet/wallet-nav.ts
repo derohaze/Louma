@@ -1,11 +1,13 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowUpRight01Icon,
-  BitcoinCpuIcon,
+  Award01Icon,
   ChartIncreaseIcon,
+  CreditCardIcon,
   FavouriteIcon,
   Home04Icon,
   Notification01Icon,
+  PickaxeIcon,
   QrCodeIcon,
   Settings01Icon,
   TransactionHistoryIcon,
@@ -30,6 +32,8 @@ export type NavHref =
   | "/mining/history"
   | "/wallet"
   | "/transactions"
+  | "/billing"
+  | "/billing/benefits"
   | "/custom-address"
   | "/profile"
   | SecurityHref
@@ -42,7 +46,12 @@ export type NavHref =
  * search dialog matches on top of the visible label: the page's full title plus the words an owner
  * would type to find it, in their own language. The panel keeps showing the short label.
  */
-type NavItem = { titleKey: TranslationPath; href: NavHref; icon: IconData; searchKey: TranslationPath };
+type NavItem = {
+  titleKey: TranslationPath;
+  href: NavHref;
+  icon: IconData;
+  searchKey: TranslationPath;
+};
 /** A section always owns at least one page, so the rail can link to its landing page. */
 export type NavSection = {
   titleKey: TranslationPath;
@@ -145,12 +154,12 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
   },
   {
     titleKey: "nav.sections.mining",
-    icon: BitcoinCpuIcon,
+    icon: PickaxeIcon,
     items: [
       {
         titleKey: "nav.pages.mining.label",
         href: "/mining",
-        icon: BitcoinCpuIcon,
+        icon: PickaxeIcon,
         searchKey: "nav.pages.mining.search",
       },
       {
@@ -176,6 +185,24 @@ export const navSections: readonly [NavSection, ...NavSection[]] = [
         href: "/transactions",
         icon: TransactionHistoryIcon,
         searchKey: "nav.pages.transactions.search",
+      },
+    ],
+  },
+  {
+    titleKey: "nav.sections.billing",
+    icon: CreditCardIcon,
+    items: [
+      {
+        titleKey: "nav.pages.billing.label",
+        href: "/billing",
+        icon: CreditCardIcon,
+        searchKey: "nav.pages.billing.search",
+      },
+      {
+        titleKey: "nav.pages.billingBenefits.label",
+        href: "/billing/benefits",
+        icon: Award01Icon,
+        searchKey: "nav.pages.billingBenefits.search",
       },
     ],
   },

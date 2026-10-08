@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowDownLeft01Icon,
@@ -11,8 +11,8 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { EmptyState, Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
-import { useWallet } from "@/shared/hooks";
-import { parseAmount } from "@/shared/lib/platform";
+import { useSlidingIndicator, useWallet } from "@/shared/hooks";
+import { cn, parseAmount } from "@/shared/lib/platform";
 import { displayNote, loadLocalNote } from "@/shared/lib/wallet";
 import { downloadCsv, transactionsToCsv } from "@/shared/lib/wallet";
 import { currency, moneyToMinorUnits, sumMoney, transactionDateText } from "@/shared/lib/wallet";
@@ -23,6 +23,11 @@ export function TransactionsPage() {
   const { transactions, nextCursor, loadMore, userId } = useWallet();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "sent" | "received">("all");
+  const advancedFieldsId = useId();
+  const { containerRef, activeRef, position } = useSlidingIndicator<
+    HTMLDivElement,
+    HTMLButtonElement
+  >(filter);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [minAmount, setMinAmount] = useState("");
@@ -37,6 +42,13 @@ export function TransactionsPage() {
   const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : NaN;
   const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : NaN;
   const hasAdvanced = Boolean(dateFrom || dateTo || minAmount.trim() || maxAmount.trim());
+  const advancedFieldClass = cn(
+    "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none",
+    advancedOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
+  );
+  const advancedFieldStyle = (index: number) => ({
+    transitionDelay: advancedOpen ? `${index * 75}ms` : "0ms",
+  });
   const filtered = transactions.filter((transaction) => {
     if (filter !== "all" && transaction.direction !== filter) return false;
     // The note is part of what a customer remembers about a transfer, so it is searchable on both
@@ -110,16 +122,39 @@ export function TransactionsPage() {
           }}
           className="sm:max-w-xs"
         />
-        <div className="flex w-fit gap-1 rounded-full border bg-secondary/60 p-1">
+        <div
+          ref={containerRef}
+          className="relative isolate flex w-fit gap-1 rounded-full border bg-secondary/60 p-1"
+        >
+          {position && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute left-0 top-0 z-0 rounded-full bg-card shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform motion-reduce:transition-none"
+              style={{
+                width: position.width,
+                height: position.height,
+                transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${position.scaleX}, ${position.scaleY})`,
+                transformOrigin: "top left",
+              }}
+            />
+          )}
           {(["all", "sent", "received"] as const).map((item) => (
             <Button
               key={item}
               variant="ghost"
+              ref={filter === item ? activeRef : undefined}
               onClick={() => {
                 setFilter(item);
                 setPage(1);
               }}
-              className={`h-8 rounded-full px-4 text-xs font-semibold ${filter === item ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}
+              className={cn(
+                "relative z-10 h-8 rounded-full px-4 text-xs font-semibold transition-colors duration-200 hover:bg-transparent",
+                filter === item
+                  ? position
+                    ? "text-foreground"
+                    : "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground",
+              )}
             >
               {t(`filters.${item}`)}
             </Button>
@@ -130,77 +165,106 @@ export function TransactionsPage() {
           onClick={() => setAdvancedOpen((open) => !open)}
           className="h-10 w-fit rounded-full px-4 text-xs font-semibold"
           aria-expanded={advancedOpen}
+          aria-controls={advancedFieldsId}
         >
           <Icon icon={FilterIcon} size={16} />
           {hasAdvanced ? t("advanced.on") : t("advanced.label")}
         </Button>
       </div>
-      {advancedOpen && (
-        <div className="mb-5 grid gap-3 rounded-[22px] border bg-card p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
-          <label className="block text-xs font-semibold">
-            <span className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
-              <Icon icon={Calendar01Icon} size={15} />
-              {t("fields.fromDate")}
-            </span>
-            <Input
-              type="date"
-              value={dateFrom}
-              max={dateTo || undefined}
-              onChange={(event) => {
-                setDateFrom(event.target.value);
-                resetPage();
-              }}
-            />
-          </label>
-          <label className="block text-xs font-semibold">
-            <span className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
-              <Icon icon={Calendar01Icon} size={15} />
-              {t("fields.toDate")}
-            </span>
-            <Input
-              type="date"
-              value={dateTo}
-              min={dateFrom || undefined}
-              onChange={(event) => {
-                setDateTo(event.target.value);
-                resetPage();
-              }}
-            />
-          </label>
-          <label className="block text-xs font-semibold">
-            <span className="mb-1.5 block text-muted-foreground">{t("fields.minAmount")}</span>
-            <Input
-              inputMode="decimal"
-              placeholder="0.0000"
-              autoComplete="off"
-              value={minAmount}
-              onChange={(event) => {
-                setMinAmount(event.target.value);
-                resetPage();
-              }}
-            />
-          </label>
-          <label className="block text-xs font-semibold">
-            <span className="mb-1.5 block text-muted-foreground">{t("fields.maxAmount")}</span>
-            <Input
-              inputMode="decimal"
-              placeholder="0.0000"
-              autoComplete="off"
-              value={maxAmount}
-              onChange={(event) => {
-                setMaxAmount(event.target.value);
-                resetPage();
-              }}
-            />
-          </label>
-          {(minAmount.trim() && minCheck && !minCheck.ok) ||
-          (maxAmount.trim() && maxCheck && !maxCheck.ok) ? (
-            <p className="text-xs text-destructive sm:col-span-2 lg:col-span-4">
-              {t("amountsError")}
-            </p>
-          ) : null}
+      <div
+        id={advancedFieldsId}
+        aria-hidden={!advancedOpen}
+        inert={!advancedOpen}
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none",
+          advancedOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="mb-5 grid gap-3 rounded-[22px] border bg-card p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
+            <label
+              className={cn("block text-xs font-semibold", advancedFieldClass)}
+              style={advancedFieldStyle(0)}
+            >
+              <span className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
+                <Icon icon={Calendar01Icon} size={15} />
+                {t("fields.fromDate")}
+              </span>
+              <Input
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(event) => {
+                  setDateFrom(event.target.value);
+                  resetPage();
+                }}
+              />
+            </label>
+            <label
+              className={cn("block text-xs font-semibold", advancedFieldClass)}
+              style={advancedFieldStyle(1)}
+            >
+              <span className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
+                <Icon icon={Calendar01Icon} size={15} />
+                {t("fields.toDate")}
+              </span>
+              <Input
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(event) => {
+                  setDateTo(event.target.value);
+                  resetPage();
+                }}
+              />
+            </label>
+            <label
+              className={cn("block text-xs font-semibold", advancedFieldClass)}
+              style={advancedFieldStyle(2)}
+            >
+              <span className="mb-1.5 block text-muted-foreground">{t("fields.minAmount")}</span>
+              <Input
+                inputMode="decimal"
+                placeholder="0.0000"
+                autoComplete="off"
+                value={minAmount}
+                onChange={(event) => {
+                  setMinAmount(event.target.value);
+                  resetPage();
+                }}
+              />
+            </label>
+            <label
+              className={cn("block text-xs font-semibold", advancedFieldClass)}
+              style={advancedFieldStyle(3)}
+            >
+              <span className="mb-1.5 block text-muted-foreground">{t("fields.maxAmount")}</span>
+              <Input
+                inputMode="decimal"
+                placeholder="0.0000"
+                autoComplete="off"
+                value={maxAmount}
+                onChange={(event) => {
+                  setMaxAmount(event.target.value);
+                  resetPage();
+                }}
+              />
+            </label>
+            {(minAmount.trim() && minCheck && !minCheck.ok) ||
+            (maxAmount.trim() && maxCheck && !maxCheck.ok) ? (
+              <p
+                className={cn(
+                  "text-xs text-destructive sm:col-span-2 lg:col-span-4",
+                  advancedFieldClass,
+                )}
+                style={advancedFieldStyle(4)}
+              >
+                {t("amountsError")}
+              </p>
+            ) : null}
+          </div>
         </div>
-      )}
+      </div>
       <div className="mb-4 grid gap-4 sm:grid-cols-4">
         {[
           [t("stats.loaded"), String(transactions.length)],
@@ -211,7 +275,7 @@ export function TransactionsPage() {
           <div
             key={label}
             style={revealDelay(index + 1)}
-            className="card-enter rounded-2xl border bg-card p-4 shadow-sm"
+            className="card-enter card-enter-hover rounded-2xl border bg-card p-4 shadow-sm"
           >
             <p className="text-sm text-muted-foreground">{label}</p>
             <strong className="mt-3 block font-display text-2xl">{value}</strong>
@@ -222,7 +286,7 @@ export function TransactionsPage() {
         style={revealDelay(5)}
         className="card-enter overflow-hidden rounded-[22px] border bg-card shadow-sm"
       >
-        <div className="border-b px-5 py-4 font-display font-semibold">
+        <div className="border-b bg-secondary/30 px-5 py-4 font-display font-semibold">
           {t("listHeading", { count: filtered.length })}
         </div>
         {shown.length ? (
@@ -236,12 +300,16 @@ export function TransactionsPage() {
               <div
                 key={transaction.id}
                 style={revealDelay(row, 45, 360)}
-                className="list-enter flex flex-wrap items-center gap-3 border-b px-5 py-4 last:border-0"
+                className="list-enter flex flex-wrap items-center gap-3 border-b px-5 py-4 transition-colors hover:bg-secondary/40 last:border-0 motion-reduce:transition-none"
               >
-                <Icon
-                  icon={isSent ? ArrowUpRight01Icon : ArrowDownLeft01Icon}
-                  className={isSent ? "text-primary-soft" : "text-success"}
-                />
+                <span
+                  className={cn(
+                    "grid size-9 shrink-0 place-items-center rounded-xl",
+                    isSent ? "bg-primary/10 text-primary-soft" : "bg-success/10 text-success",
+                  )}
+                >
+                  <Icon icon={isSent ? ArrowUpRight01Icon : ArrowDownLeft01Icon} />
+                </span>
                 <Link
                   to="/transactions/$transferId"
                   params={{ transferId: transaction.transferId }}
@@ -260,7 +328,12 @@ export function TransactionsPage() {
                  * the network tax, so showing it here would claim the wallet grew by more than it
                  * did.
                  */}
-                <strong className="text-sm">
+                <strong
+                  className={cn(
+                    "shrink-0 text-sm font-semibold tabular-nums",
+                    isSent ? "text-primary-soft" : "text-success",
+                  )}
+                >
                   {isSent ? "-" : "+"}
                   {currency(isSent ? transaction.amount : transaction.netAmount)}
                 </strong>

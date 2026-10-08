@@ -1,15 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { NoteEditIcon, PrinterIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { useWallet, type Transaction } from "@/shared/hooks";
 import { api, messageForError } from "@/shared/api";
+import { serverStateKeys } from "@/shared/lib/platform";
 import { displayNote, loadLocalNote, saveLocalNote } from "@/shared/lib/wallet";
 import { currency, transactionDateText, transferNet, transferTax } from "@/shared/lib/wallet";
 import { CopyButton, EmptyState, Icon, PageHeader } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
-import { TransactionDetailSkeleton } from "@/shared/skeletons";
 import { FactList, FormMessage, Panel } from "@/shared/ui/panels";
 
 /**
@@ -22,34 +23,15 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
   const common = useT("common");
   const { transactions, userId } = useWallet();
   const known = transactions.find((item) => item.transferId === transferId);
-  const [fetched, setFetched] = useState<Transaction | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(!known);
+  const transferQuery = useQuery({
+    queryKey: serverStateKeys.transfer(transferId),
+    queryFn: () =>
+      api.get<{ transfer: Transaction }>(`/api/v1/transfers/${encodeURIComponent(transferId)}`),
+    enabled: Boolean(userId && !known),
+  });
   const [personalNote, setPersonalNote] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [editingNote, setEditingNote] = useState(false);
-
-  useEffect(() => {
-    if (known) {
-      setLoading(false);
-      return;
-    }
-    let active = true;
-    void api
-      .get<{ transfer: Transaction }>(`/api/v1/transfers/${encodeURIComponent(transferId)}`)
-      .then((response) => {
-        if (active) setFetched(response.transfer);
-      })
-      .catch((cause: unknown) => {
-        if (active) setError(messageForError(cause));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [known, transferId]);
 
   // The personal note is device-local, so it is read here rather than from the transfer record:
   // a note written before this view existed is still on this device and must come back.
@@ -60,10 +42,8 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
     setEditingNote(false);
   }, [userId, transferId]);
 
-  const transaction = known ?? fetched;
-  if (loading) {
-    return <TransactionDetailSkeleton title={t("title")} />;
-  }
+  const transaction = known ?? transferQuery.data?.transfer;
+  const error = transferQuery.error ? messageForError(transferQuery.error) : "";
   if (!transaction) {
     return (
       <EmptyState

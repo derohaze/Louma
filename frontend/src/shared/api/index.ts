@@ -3,6 +3,8 @@
  * from the modules below directly — the split underneath can change without touching callers.
  */
 export type {
+  ApiSubscription,
+  ApiCustomAddressState,
   ApiUser,
   ApiWallet,
   ApiMiningSession,

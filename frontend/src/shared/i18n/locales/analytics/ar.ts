@@ -7,9 +7,11 @@ const ar: Strings<typeof en> = {
   range: {
     label: "المدة الزمنية",
     days: "{days} يوم",
+    last1: "آخر 24 ساعة",
     last7: "آخر 7 أيام",
     last30: "آخر 30 يومًا",
     last90: "آخر 90 يومًا",
+    last120: "آخر 120 يومًا",
   },
   flow: {
     title: "التدفق",
@@ -44,7 +46,7 @@ const ar: Strings<typeof en> = {
   },
   mining: {
     title: "التعدين خلال المدة",
-    subtitle: "التعدين المحصّل مقابل التحويلات في نفس {days} يومًا",
+    subtitle: "التعدين المحصّل مقابل التحويلات · {range}",
     moved: "حركة التحويلات",
     collected: "التعدين المحصّل",
     open: "فتح التعدين",

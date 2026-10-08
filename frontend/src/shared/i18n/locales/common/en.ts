@@ -25,6 +25,8 @@ export default {
     requestFailedRetry: "The request could not be completed. Try again.",
   },
   state: {
+    pro: "Pro",
+    free: "Free",
     on: "On",
     off: "Off",
     active: "Active",

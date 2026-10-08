@@ -154,6 +154,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    */
   const sessionRejected = profile.error instanceof ApiError && profile.error.status === 401;
   const loading = !profile.data && (profile.isPending || sessionRejected);
+  const accountDataPending = transactions.isPending || security.isPending;
   const failure = [profile, transactions, security].find(
     (query) => query.error && !query.data,
   )?.error;
@@ -181,15 +182,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * event, a freeze changes the wallet status, a profile edit changes the account. It is always an
    * explicit call, never a side effect of mounting a page.
    */
-  const refresh = useCallback(
-    () =>
-      refetchAccount(queryClient, [
-        serverStateKeys.profile,
-        serverStateKeys.transactions,
-        serverStateKeys.security,
-      ]),
-    [queryClient],
-  );
+  const refresh = useCallback(async () => {
+    await refetchAccount(queryClient, [
+      serverStateKeys.profile,
+      serverStateKeys.transactions,
+      serverStateKeys.security,
+    ]);
+    await queryClient.invalidateQueries({ queryKey: serverStateKeys.transactionWindows });
+  }, [queryClient]);
 
   const refreshSecurity = useCallback(
     () => refetchAccount(queryClient, [serverStateKeys.security]),
@@ -297,6 +297,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       nextCursor,
       security: securityOverview,
       loading,
+      accountDataPending,
       error,
       refresh,
       refreshNotifications,
@@ -311,6 +312,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       nextCursor,
       securityOverview,
       loading,
+      accountDataPending,
       error,
       refresh,
       refreshNotifications,

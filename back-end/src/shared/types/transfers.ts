@@ -31,8 +31,10 @@ export const TRANSFER_AUTHORIZATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export interface TransferIntent {
   recipientWalletId: string;
   recipientUserId: string;
-  /** The wallet's canonical address (`customAddress` when it has one), never the spelling typed. */
+  /** The immutable canonical address used by the ledger. */
   recipientAddress: string;
+  /** Present when preview used an alias; must remain active at execution time. */
+  recipientCustomAddress?: string;
   amountMinor: number;
   feeMinor: number;
   netAmountMinor: number;

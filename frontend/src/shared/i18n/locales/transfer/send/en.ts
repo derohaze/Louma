@@ -7,12 +7,10 @@ export default {
   address: {
     savedRecipients: "Saved recipients",
     label: "Recipient wallet address",
-    placeholder: "LMA… (31 characters) or @handle",
+    placeholder: "LMA… (31 characters) or Ali123",
     own: "This is your own address.",
     note: "Nothing leaves your wallet at this step: the address is checked against the ledger before an amount is even asked for.",
     checking: "Checking the address…",
-    scan: "Scan QR",
-    hideScanner: "Hide scanner",
   },
   amount: {
     verified: "Address verified",
@@ -50,7 +48,8 @@ export default {
     send: "Send {amount}",
   },
   errors: {
-    invalidTarget: "Enter a 31-character Louma wallet address beginning with LMA or a @handle.",
+    invalidTarget:
+      "Enter a 31-character Louma wallet address beginning with LMA or a custom address of 3–16 English letters/digits, starting with a letter.",
     ownAddress: "This is your own address. Use another wallet.",
     quoteFailed: "The amount could not be quoted. Try again.",
     insufficient: "That is more than this wallet holds. {balance} is available.",
@@ -60,16 +59,5 @@ export default {
     enterCode: "Enter a code from your authenticator app.",
     enterPassword: "Enter your transfer password.",
     shortCode: "That code is too short. Enter the six digits, or a recovery code.",
-  },
-  scanner: {
-    camera: "Scan with camera",
-    scanning: "Scanning…",
-    upload: "Upload QR image",
-    previewAria: "QR scanner preview",
-    unsupported: "This browser cannot read QR codes. Paste the address instead.",
-    cameraFailed: "The camera could not be opened. Check permission, or upload an image.",
-    notFound: "No wallet address was found in that image.",
-    unreadable: "That image could not be read. Try a clearer one.",
-    hint: "Point at a Louma receive QR. Nothing is filled in until an address is recognised.",
   },
 };

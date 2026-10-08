@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import * as mining from "../../mining/service.js";
 import * as pools from "../../mining/pools.js";
-import { authBody, pageLimitSchema } from "../schemas.js";
+import { historyWindowDays } from "../../subscriptions/service.js";
+import { authBody, historyDaysSchema, pageLimitSchema } from "../schemas.js";
 import { authenticated, clientIp, getAuth, parseBody } from "../http-helpers.js";
 import { enforceRateLimit, membershipCache, settingsCache } from "../../../app.js";
 
@@ -140,15 +141,17 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
 
   app.get("/api/v1/mining/history", authenticated, async (request) => {
     const query = parseBody(
-      z.object({ cursor: z.string().uuid().optional(), limit: pageLimitSchema }).strict(),
+      z.object({ cursor: z.string().uuid().optional(), limit: pageLimitSchema, days: historyDaysSchema }).strict(),
       request.query,
     );
+    const days = await historyWindowDays(app.collections, getAuth(request).userId, query.days);
     return mining.listMiningHistory({
       collections: app.collections,
       config: app.config,
       ownerUserId: getAuth(request).userId,
       cursor: query.cursor,
       limit: query.limit,
+      days,
     });
   });
 }

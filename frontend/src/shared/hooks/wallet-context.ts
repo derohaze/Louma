@@ -29,6 +29,8 @@ interface WalletContextValue {
   nextCursor: string | null;
   security: ApiSecurityOverview | null;
   loading: boolean;
+  /** Initial transaction and security reads, used by pages that need a complete account snapshot. */
+  accountDataPending: boolean;
   error: string;
   refresh: () => Promise<void>;
   /** Called by anything that may have created a notification, so the bell re-reads its own query. */

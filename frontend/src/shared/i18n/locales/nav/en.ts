@@ -13,6 +13,7 @@ export default {
     transfer: "Transfer",
     mining: "Mining",
     transactions: "Transactions",
+    billing: "Billing",
     profile: "Profile",
     security: "Security",
     settings: "Settings",
@@ -62,6 +63,14 @@ export default {
       label: "Transactions",
       search: "transactions history transfers search filter",
     },
+    billing: {
+      label: "Billing",
+      search: "billing subscription plan pro benefits dates",
+    },
+    billingBenefits: {
+      label: "Plan benefits",
+      search: "plan benefits compare free pro history ranges custom address",
+    },
     profile: {
       label: "Profile",
       search: "account details identity",
@@ -93,6 +102,7 @@ export default {
   },
   chrome: {
     more: "More",
+    pro: "Pro",
     allPages: "All pages",
     allPagesDescription: "Every Louma page, grouped by section.",
     primaryNav: "Primary",

@@ -1,10 +1,24 @@
 export interface ApiUser {
+  subscription: ApiSubscription;
   id: string;
   email: string;
   displayName: string;
   country: string | null;
   emailVerifiedAt: string | null;
   createdAt: string;
+}
+
+export interface ApiSubscription {
+  serverNow: string;
+  tier: "free" | "pro";
+  plan: "monthly" | "yearly" | "lifetime" | null;
+  startsAt: string | null;
+  expiresAt: string | null;
+}
+
+export interface ApiCustomAddressState {
+  subscription: ApiSubscription;
+  history: { id: string; previousAddress: string; nextAddress: string; reason: "changed" | "subscription_expired" | "subscription_inactive"; createdAt: string }[];
 }
 
 export interface ApiWallet {
