@@ -5,7 +5,7 @@ import { api, ApiError, type ApiCustomAddressState } from "@/shared/api";
 import { WalletPage } from "@/app/shell";
 import { CustomAddressPage } from "@/features/wallet";
 import { pageHead } from "@/shared/lib/platform";
-import { useProAccess, useWallet } from "@/shared/hooks";
+import { useWallet } from "@/shared/hooks";
 import { useT } from "@/shared/i18n";
 import { PageDataLoader } from "@/shared/ui/page-data-loader";
 import { Button } from "@/shared/ui/button";
@@ -32,11 +32,10 @@ function CustomAddressGate() {
   const navigate = useNavigate();
   const t = useT("wallet.customAddress");
   const common = useT("common");
-  const pro = useProAccess();
   const state = useQuery({
     queryKey: ["account", "custom-address", user?.id],
     queryFn: () => api.get<ApiCustomAddressState>("/api/v1/wallet/custom-address"),
-    enabled: typeof window !== "undefined" && !!user && pro,
+    enabled: typeof window !== "undefined" && !!user,
     staleTime: 0,
     refetchOnMount: "always",
     retry: false,
@@ -49,13 +48,12 @@ function CustomAddressGate() {
   }, [refusalStatus, state.isFetchedAfterMount, navigate]);
   useEffect(() => {
     if (loading || !user) return;
-    if (!pro || (refused && refusalStatus === 403)) {
+    if (refused && refusalStatus === 403) {
       void navigate({ to: "/billing", replace: true });
     }
-  }, [loading, user, pro, refused, refusalStatus, navigate]);
+  }, [loading, user, refused, refusalStatus, navigate]);
   // Re-check even cached successes and refusals before using them on a new visit.
   if (loading || !user) return <PageDataLoader title={t("title")} />;
-  if (!pro) return null;
   if (!state.isFetchedAfterMount) return <PageDataLoader title={t("title")} />;
   if (refused && refusalStatus === 401) return null;
   if (refused && refusalStatus === 403) return null;

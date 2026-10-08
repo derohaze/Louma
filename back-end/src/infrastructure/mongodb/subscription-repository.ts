@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ObjectId, type ClientSession, type MongoClient } from "mongodb";
 import type { Collections } from "./collections.js";
-import type { SubscriptionRecord, WalletAddressHistoryRecord } from "../../shared/types/subscriptions.js";
+import type { SubscriptionGrantRecord, SubscriptionRecord, WalletAddressHistoryRecord } from "../../shared/types/subscriptions.js";
 import type { WalletRecord } from "../../shared/types.js";
 
 export async function subscriptionTransaction<T>(client: MongoClient, operation: (session: ClientSession) => Promise<T>): Promise<T> {
@@ -28,19 +28,34 @@ export function lockActiveSubscription(collections: Collections, ownerUserId: st
 }
 
 export function findActivation(collections: Collections, activationKey: string, session: ClientSession) {
-  return collections.subscriptions.findOne({ activationKey }, { session });
+  return collections.subscriptionGrants.findOne({ activationKey }, { session })
+    .then((grant) => grant ?? collections.subscriptions.findOne({ activationKey }, { session }));
 }
 
 export function findActiveOwner(collections: Collections, ownerUserId: string, session: ClientSession) {
   return collections.users.findOne({ publicId: ownerUserId, status: "active" }, { session, projection: { publicId: 1 } });
 }
 
-export async function closeSubscription(collections: Collections, record: SubscriptionRecord, status: "expired" | "superseded", now: Date, session: ClientSession) {
+export async function closeSubscription(collections: Collections, record: SubscriptionRecord, status: "expired", now: Date, session: ClientSession) {
   await collections.subscriptions.updateOne({ _id: record._id, status: "active" }, { $set: { status, endedAt: now }, $inc: { version: 1 } }, { session });
 }
 
 export async function insertSubscription(collections: Collections, record: SubscriptionRecord, session: ClientSession) {
   await collections.subscriptions.insertOne(record, { session });
+}
+
+export async function insertSubscriptionGrant(collections: Collections, grant: SubscriptionGrantRecord, session: ClientSession) {
+  await collections.subscriptionGrants.insertOne(grant, { session });
+}
+
+export async function updateCurrentSubscription(collections: Collections, current: SubscriptionRecord, grant: SubscriptionRecord, session: ClientSession) {
+  const result = await collections.subscriptions.updateOne(
+    { _id: current._id, status: "active", version: current.version },
+    { $set: { plan: grant.plan, startsAt: grant.startsAt, expiresAt: grant.expiresAt, endedAt: null, createdAt: grant.createdAt, createdBy: grant.createdBy, activationKey: grant.activationKey }, $inc: { version: 1 } },
+    { session },
+  );
+  if (result.modifiedCount !== 1) throw new Error("Current subscription changed during grant");
+  return { ...grant, _id: current._id, publicId: current.publicId, version: current.version + 1 };
 }
 
 /** The wallet write conflicts with alias-based transfers; the archive commits with it. */

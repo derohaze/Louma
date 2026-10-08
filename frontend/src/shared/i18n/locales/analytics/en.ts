@@ -1,6 +1,9 @@
 export default {
   title: "Analytics",
   description: "Where the money goes: flow, counterparties, and mining over time.",
+  historyLoading: "Loading transfer statistics…",
+  historyError: "Transfer statistics are unavailable right now.",
+  retry: "Try again",
   range: {
     label: "Time range",
     days: "{days}d",

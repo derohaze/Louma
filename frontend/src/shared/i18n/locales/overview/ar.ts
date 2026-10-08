@@ -12,6 +12,8 @@ const ar: Strings<typeof en> = {
     last120: "آخر 120 يومًا",
   },
   periodLabel: "الفترة",
+  historyLoading: "جارٍ تحميل إحصاءات التحويلات…",
+  historyError: "إحصاءات التحويلات غير متاحة الآن.",
   statistics: "الإحصائيات",
   expenses: "المصروفات",
   incomes: "الإيرادات",

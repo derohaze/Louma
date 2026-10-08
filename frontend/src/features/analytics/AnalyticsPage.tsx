@@ -37,6 +37,7 @@ import {
   type TransactionPage,
 } from "@/shared/lib/platform";
 import { Icon } from "@/shared/ui/page";
+import { Button } from "@/shared/ui/button";
 
 /**
  * Analytics: the second page of the Home section, next to Overview.
@@ -346,9 +347,9 @@ export function AnalyticsContent() {
   );
 
   const window = useMemo(() => {
-    const to = Date.now();
+    const to = Math.max(Date.now(), transactionHistory.dataUpdatedAt, history.dataUpdatedAt);
     return { from: to - range.days * DAY_MS, to };
-  }, [range]);
+  }, [range, transactionHistory.dataUpdatedAt, history.dataUpdatedAt]);
 
   // One plan-bounded snapshot serves every selected window; changing ranges is client-side only.
   useHistoryWalk({
@@ -444,6 +445,19 @@ export function AnalyticsContent() {
   const minedTotal = sumMoney(miningPayouts.map((payout) => payout.amount));
 
   const show = (v: number) => amount(v.toFixed(4));
+
+  if (!transactionHistory.isSuccess) {
+    return (
+      <section role={transactionHistory.isError ? "alert" : "status"} className={`${CARD} p-6`}>
+        <p>{transactionHistory.isError ? t("historyError") : t("historyLoading")}</p>
+        {transactionHistory.isError && (
+          <Button className="mt-4" onClick={() => void transactionHistory.refetch()}>
+            {t("retry")}
+          </Button>
+        )}
+      </section>
+    );
+  }
 
   return (
     <div className="grid gap-4">

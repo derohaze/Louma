@@ -31,7 +31,7 @@ try {
     if (sweep) return;
     sweep = sweepSubscriptions({ collections: app.collections, mongoClient: client, afterAddress })
       .then((cursor) => { afterAddress = cursor; })
-      .catch(() => { app.log.error("subscription_sweep_failed"); })
+      .catch((error: unknown) => { app.log.error({ err: error, afterAddress }, "subscription_sweep_failed"); })
       .finally(() => { sweep = null; });
   }, 60_000);
   timer.unref();

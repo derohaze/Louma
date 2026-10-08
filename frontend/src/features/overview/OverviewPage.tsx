@@ -37,6 +37,7 @@ import { currentLocale, translate, useT } from "@/shared/i18n";
 import { OverviewSkeleton } from "@/shared/skeletons";
 import { Icon, CopyButton, revealDelay } from "@/shared/ui/page";
 import { Switch } from "@/shared/ui/switch";
+import { Button } from "@/shared/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { countdown, liveSnapshot } from "@/features/mining/cycle/mining-format";
 
@@ -206,8 +207,8 @@ function BarChart({ slices }: { slices: readonly Slice[] }) {
 }
 
 /** The trend line: this window against the window of the same length immediately before it. */
-function Change({ current, previous }: { current: number; previous: number }) {
-  if (previous <= 0) return null;
+function Change({ current, previous }: { current: number; previous: number | null }) {
+  if (previous === null || previous <= 0) return null;
   const percent = Math.round(((current - previous) / previous) * 100);
   const up = percent >= 0;
   return (
@@ -455,9 +456,9 @@ export function OverviewContent() {
 
   /** The window the period-scoped cards describe. Rolling, not calendar months. */
   const range = useMemo(() => {
-    const to = Date.now();
+    const to = Math.max(Date.now(), periodTransactions.dataUpdatedAt, history.dataUpdatedAt);
     return { from: to - period.days * DAY_MS, to, days: period.days };
-  }, [period]);
+  }, [period, periodTransactions.dataUpdatedAt, history.dataUpdatedAt]);
 
   /**
    * Walks the plan-bounded lists into their shared cache once. All dashboard date selectors then
@@ -500,9 +501,11 @@ export function OverviewContent() {
       };
     };
     const now = side(range.from, range.to);
-    const before = side(range.from - range.days * DAY_MS, range.from);
-    return { ...now, countBefore: before.count };
-  }, [transactions, range]);
+    const comparisonAvailable =
+      historyDays >= range.days * 2 && periodTransactions.data?.pages.at(-1)?.nextCursor === null;
+    const before = comparisonAvailable ? side(range.from - range.days * DAY_MS, range.from) : null;
+    return { ...now, countBefore: before?.count ?? null };
+  }, [transactions, range, historyDays, periodTransactions.data]);
 
   /** The bars behind the statistics card: the window split into equal slices, newest at the right. */
   const slices = useMemo<Slice[]>(() => {
@@ -575,6 +578,18 @@ export function OverviewContent() {
 
   if (accountDataPending || mining.isPending) {
     return <OverviewSkeleton title={t("title")} />;
+  }
+  if (!periodTransactions.isSuccess) {
+    return (
+      <section role={periodTransactions.isError ? "alert" : "status"} className={`${CARD} p-6`}>
+        <p>{periodTransactions.isError ? t("historyError") : t("historyLoading")}</p>
+        {periodTransactions.isError && (
+          <Button className="mt-4" onClick={() => void periodTransactions.refetch()}>
+            {common("actions.retry")}
+          </Button>
+        )}
+      </section>
+    );
   }
 
   return (

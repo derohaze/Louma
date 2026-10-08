@@ -31,6 +31,26 @@ export const schemas: Record<string, Document> = {
       ] } },
     ],
   },
+  subscription_grants: {
+    $and: [
+      { $jsonSchema: {
+        bsonType: "object",
+        required: ["publicId", "ownerUserId", "name", "plan", "status", "startsAt", "expiresAt", "endedAt", "createdAt", "createdBy", "activationKey", "version"],
+        properties: {
+          publicId: { bsonType: "string", maxLength: 36 }, ownerUserId: { bsonType: "string", maxLength: 36 },
+          name: { enum: ["Louma Pro"] }, plan: { enum: ["monthly", "yearly", "lifetime"] },
+          status: { enum: ["active", "expired", "superseded"] }, startsAt: { bsonType: "date" },
+          expiresAt: { bsonType: ["date", "null"] }, endedAt: { bsonType: ["date", "null"] }, createdAt: { bsonType: "date" },
+          createdBy: { bsonType: "string", minLength: 1, maxLength: 128 }, activationKey: { bsonType: "string", minLength: 1, maxLength: 128 },
+          version: { bsonType: "int", minimum: 0 },
+        },
+      } },
+      { $expr: { $and: [
+        { $cond: [{ $eq: ["$plan", "lifetime"] }, { $eq: ["$expiresAt", null] }, { $gt: ["$expiresAt", "$startsAt"] }] },
+        { $cond: [{ $eq: ["$status", "active"] }, { $eq: ["$endedAt", null] }, { $ne: ["$endedAt", null] }] },
+      ] } },
+    ],
+  },
   wallet_address_history: {
     $jsonSchema: {
       bsonType: "object",
