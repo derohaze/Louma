@@ -21,11 +21,13 @@ import type {
   UserRecord,
   WalletRecord,
   SubscriptionRecord,
+  SubscriptionGrantRecord,
   WalletAddressHistoryRecord,
 } from "../../shared/types.js";
 
 export interface Collections {
   subscriptions: Collection<SubscriptionRecord>;
+  subscriptionGrants: Collection<SubscriptionGrantRecord>;
   walletAddressHistory: Collection<WalletAddressHistoryRecord>;
   users: Collection<UserRecord>;
   wallets: Collection<WalletRecord>;
@@ -63,6 +65,7 @@ export interface Collections {
 export function getCollections(db: Db): Collections {
   return {
     subscriptions: db.collection<SubscriptionRecord>("subscriptions"),
+    subscriptionGrants: db.collection<SubscriptionGrantRecord>("subscription_grants"),
     walletAddressHistory: db.collection<WalletAddressHistoryRecord>("wallet_address_history"),
     users: db.collection<UserRecord>("users"),
     wallets: db.collection<WalletRecord>("wallets"),

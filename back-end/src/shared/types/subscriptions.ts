@@ -18,6 +18,8 @@ export interface SubscriptionRecord {
   version: number;
 }
 
+export type SubscriptionGrantRecord = SubscriptionRecord;
+
 export interface PublicSubscription {
   serverNow: string;
   tier: "free" | "pro";

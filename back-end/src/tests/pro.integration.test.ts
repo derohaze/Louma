@@ -63,18 +63,32 @@ test("free accounts are blocked on page data and mutation; client cannot grant i
 test("trusted grants, renewals and activation retries preserve subscription history", async () => {
   const key = randomUUID();
   const first = await grant(owner, "monthly", key);
+  const currentId = (await collections.subscriptions.findOne({ ownerUserId: owner.user.id }))?.publicId;
   assert.equal(first.tier, "pro"); assert.equal(first.plan, "monthly");
   const retried = await grant(owner, "monthly", key);
   assert.equal(retried.plan, first.plan); assert.equal(retried.expiresAt, first.expiresAt);
   await assert.rejects(() => grant(other, "yearly", key), { code: "activation_key_reused" });
   const second = await grant(owner, "yearly");
   assert.ok(Date.parse(second.expiresAt!) > Date.parse(first.expiresAt!));
-  assert.equal(await collections.subscriptions.countDocuments({ ownerUserId: owner.user.id }), 2);
+  assert.equal(await collections.subscriptions.countDocuments({ ownerUserId: owner.user.id }), 1);
   assert.equal(await collections.subscriptions.countDocuments({ ownerUserId: owner.user.id, status: "active" }), 1);
+  assert.equal(await collections.subscriptionGrants.countDocuments({ ownerUserId: owner.user.id }), 2);
+  assert.equal((await collections.subscriptions.findOne({ ownerUserId: owner.user.id }))?.publicId, currentId);
   assert.equal((await call(owner, "GET", "/api/v1/me")).json().user.subscription.plan, "yearly");
   await grant(other, "lifetime");
   assert.equal((await getSubscription(collections, other.user.id)).expiresAt, null);
   await assert.rejects(() => grant(other), { code: "lifetime_already_active" });
+});
+
+test("an expired current row can be reactivated before the subscription sweep", async () => {
+  const account = await makeAccount();
+  await grant(account);
+  const currentId = (await collections.subscriptions.findOne({ ownerUserId: account.user.id }))?.publicId;
+  await collections.subscriptions.updateOne({ ownerUserId: account.user.id }, { $set: { expiresAt: new Date(Date.now() - 1) } });
+  const renewed = await grant(account, "yearly");
+  assert.equal(renewed.tier, "pro");
+  assert.equal((await collections.subscriptions.findOne({ ownerUserId: account.user.id }))?.publicId, currentId);
+  assert.equal(await collections.subscriptions.countDocuments({ ownerUserId: account.user.id, status: "active" }), 1);
 });
 
 test("validation, case-insensitive uniqueness, immutable canonical address and atomic archives", async () => {
@@ -143,7 +157,7 @@ test("archive failure rolls back the alias and its subscription authorization wr
   finally { collections.walletAddressHistory.insertOne = insert; }
   assert.equal((await collections.wallets.findOne({ publicId: account.wallet.id }))?.customAddress, null);
   assert.equal(await collections.walletAddressHistory.countDocuments({ ownerUserId: account.user.id }), 0);
-  assert.equal((await collections.subscriptions.findOne({ ownerUserId: account.user.id, status: "active" }))?.version, 0);
+  assert.equal((await collections.subscriptions.findOne({ ownerUserId: account.user.id, status: "active" }))?.version, 1);
   assert.equal((await setAddress(account, "Archive123")).customAddress, "archive123", "failed change spent no cooldown");
 });
 

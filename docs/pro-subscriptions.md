@@ -25,7 +25,8 @@ bun --env-file=.env.development src/scripts/activate-pro.ts person@example.com m
 ```
 
 A new script invocation generates a new grant and extends an active finite
-subscription. Same key with a different account/plan is rejected. A lifetime
+subscription. The CLI prints its key before connecting, so a lost reply can be
+replayed with the same intent. Same key with a different account/plan is rejected. A lifetime
 account cannot receive another grant. Suspended or missing accounts are rejected.
 The account reference identifies its owner in `users`; passwords and tokens are
 never copied into subscription records. Login, session refresh and `/api/v1/me`
@@ -83,8 +84,11 @@ policy and its integration coverage together with the frontend range controls an
 
 ## Rollout and rollback
 
-This release adds `subscriptions` and `wallet_address_history` with validators
-and documented indexes. It keeps all existing wallet/financial uniqueness
+This release adds `subscription_grants` alongside `subscriptions` and
+`wallet_address_history` with validators and documented indexes. `subscriptions`
+contains one stable current row per owner; each new activation is recorded in
+`subscription_grants` in the same transaction. Existing historical subscription
+rows remain available for activation-key replay checks. It keeps all existing wallet/financial uniqueness
 constraints. Startup installs them additively; the operator CLI installs only
 the two new collections and their indexes. No historical ledger amount, wallet
 identity, or transaction snapshot is rewritten. Existing legacy aliases are

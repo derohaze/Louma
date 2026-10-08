@@ -86,10 +86,14 @@ owner-scoped, while each mining settlement uses the session's concrete
 ## ADR-010 — Pro subscriptions and custom address lifecycle
 
 MongoDB `subscriptions` is the authorization source for monthly, yearly and
-lifetime Pro. Customer tokens and Redis never grant this entitlement. A partial
-unique owner index permits one active record; renewals preserve superseded
-records and extend a finite subscription from its current expiry. Durations
-use UTC calendar months/years, clamping month-end dates; lifetime has no expiry.
+lifetime Pro. Customer tokens and Redis never grant this entitlement. It keeps
+one stable current row per owner; renewals and reactivations update that row in
+place so the partial unique owner index remains valid through transaction commit.
+Each activation is separately preserved in `subscription_grants`, which also
+owns activation-key replay protection. Legacy subscription rows remain readable
+for replay checks. Finite renewals extend from the current expiry while active;
+reactivation starts from now. Durations use UTC calendar months/years, clamping
+month-end dates; lifetime has no expiry.
 Validity requires `startsAt <= now < expiresAt`, or an active lifetime record.
 
 Custom addresses are bare, case-insensitive ASCII aliases of 3–16 characters,
@@ -108,8 +112,9 @@ Renewals and alias changes conflict with in-flight alias transfers.
 
 `wallet_address_history` holds one document per change/release, committed
 atomically with the wallet mutation. **Explicit exception to ADR-007's TTL
-history policy:** address and subscription history are permanent, as requested
-for subscription lifecycle auditing. Neither collection embeds history arrays.
+history policy:** address and subscription-grant history are permanent, as
+requested for subscription lifecycle auditing. Neither collection embeds
+history arrays.
 Customer history reads return at most the latest 20 rows, scoped to the owner.
 
 Activation is available only through trusted local operator tooling with database

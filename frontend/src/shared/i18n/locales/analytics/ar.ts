@@ -4,6 +4,9 @@ import type { Strings } from "@/shared/i18n/types";
 const ar: Strings<typeof en> = {
   title: "التحليلات",
   description: "إلى أين يذهب المال: التدفق والأطراف والتعدين على مدى الوقت.",
+  historyLoading: "جارٍ تحميل إحصاءات التحويلات…",
+  historyError: "إحصاءات التحويلات غير متاحة الآن.",
+  retry: "إعادة المحاولة",
   range: {
     label: "المدة الزمنية",
     days: "{days} يوم",

@@ -44,10 +44,10 @@ export async function lockPro(collections: Collections, ownerUserId: string, ses
 }
 
 /** Called inside a transaction, including when another account immediately reclaims an alias. */
-export async function releaseInactiveAddress(collections: Collections, ownerUserId: string, now: Date, session: ClientSession): Promise<boolean> {
+export async function releaseInactiveAddress(collections: Collections, ownerUserId: string, now: Date, session: ClientSession, closeStatus: "expired" | null = "expired"): Promise<boolean> {
   const subscription = await repository.findCurrentSubscription(collections, ownerUserId, session);
   if (isActiveSubscription(subscription, now)) return false;
-  if (subscription) await repository.closeSubscription(collections, subscription, "expired", now, session);
+  if (subscription && closeStatus) await repository.closeSubscription(collections, subscription, closeStatus, now, session);
   const wallet = await repository.findPrimaryAddressWallet(collections, ownerUserId, session);
   if (wallet && wallet.customAddress !== null) {
     if (!await repository.changeWalletAddress({ collections, wallet, address: null, subscriptionId: subscription?.publicId ?? null,
@@ -73,23 +73,26 @@ export async function grantSubscription(input: {
           if (prior.ownerUserId !== input.ownerUserId || prior.plan !== input.plan) {
             throw conflict("activation_key_reused", "This activation key belongs to a different subscription.");
           }
-          return publicSubscription(prior);
+          return publicSubscription(await repository.findCurrentSubscription(input.collections, input.ownerUserId, session), now);
         }
         const owner = await repository.findActiveOwner(input.collections, input.ownerUserId, session);
         if (!owner) throw notFound();
         const current = await repository.findCurrentSubscription(input.collections, input.ownerUserId, session);
         const active = isActiveSubscription(current, now);
         if (active && current?.plan === "lifetime") throw conflict("lifetime_already_active", "This account already has lifetime Pro.");
-        if (!active) await releaseInactiveAddress(input.collections, input.ownerUserId, now, session);
-        else if (current) await repository.closeSubscription(input.collections, current, "superseded", now, session);
+        if (!active) await releaseInactiveAddress(input.collections, input.ownerUserId, now, session, null);
         const base = active && current?.expiresAt ? current.expiresAt : now;
         const record: SubscriptionRecord = {
           _id: new ObjectId(), publicId: recordId, ownerUserId: input.ownerUserId, name: "Louma Pro", plan: input.plan,
           status: "active", startsAt: now, expiresAt: subscriptionExpiry(input.plan, base), endedAt: null,
           createdAt: now, createdBy: input.createdBy, activationKey: input.activationKey, version: 0,
         };
-        await repository.insertSubscription(input.collections, record, session);
-        return publicSubscription(record, now);
+        await repository.insertSubscriptionGrant(input.collections, record, session);
+        if (!current) {
+          await repository.insertSubscription(input.collections, record, session);
+          return publicSubscription(record, now);
+        }
+        return publicSubscription(await repository.updateCurrentSubscription(input.collections, current, record, session), now);
       });
     } catch (error) {
       // Concurrent first activations converge through the authoritative unique owner/key indexes.

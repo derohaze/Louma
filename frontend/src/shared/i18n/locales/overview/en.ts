@@ -9,6 +9,8 @@ export default {
     last120: "Last 120 days",
   },
   periodLabel: "Period",
+  historyLoading: "Loading transfer statistics…",
+  historyError: "Transfer statistics are unavailable right now.",
   statistics: "Statistics",
   expenses: "Expenses",
   incomes: "Incomes",

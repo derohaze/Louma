@@ -12,6 +12,7 @@ async function main() {
   if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["monthly", "yearly", "lifetime"].includes(plan ?? "")) {
     throw new Error("Use an account email and monthly, yearly, or lifetime.");
   }
+  console.log(`Activation key: ${activationKey}`);
   const mongoUri = process.env["MONGODB_URI"];
   const mongoDatabase = process.env["MONGODB_DATABASE"];
   if (!mongoUri || !mongoDatabase) throw new Error("Configure MONGODB_URI and MONGODB_DATABASE in the selected environment file.");

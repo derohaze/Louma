@@ -18,15 +18,19 @@ export async function listMiningHistory(input: {
 }): Promise<{ sessions: PublicMiningSession[]; nextCursor: string | null }> {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), MAX_PAGE_SIZE);
   const cutoff = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
-  const filter: Record<string, unknown> = { ownerUserId: input.ownerUserId, createdAt: { $gte: cutoff } };
+  const payoutSessionIds = await input.collections.transactions.distinct("miningSessionId", {
+    type: "mining", ownerUserId: input.ownerUserId, createdAt: { $gte: cutoff },
+  });
+  const eligible = { $or: [{ createdAt: { $gte: cutoff } }, { publicId: { $in: payoutSessionIds } }] };
+  const filter: Record<string, unknown> = { ownerUserId: input.ownerUserId, ...eligible };
   if (input.cursor) {
     const cursor = await input.collections.miningSessions.findOne(
-      { publicId: input.cursor, ownerUserId: input.ownerUserId, createdAt: { $gte: cutoff } },
+      { publicId: input.cursor, ownerUserId: input.ownerUserId, ...eligible },
       { projection: { createdAt: 1, publicId: 1 } },
     );
     if (!cursor) throw notFound();
     filter["$and"] = [
-      { ownerUserId: input.ownerUserId },
+      eligible,
       { $or: [{ createdAt: { $lt: cursor.createdAt } }, { createdAt: cursor.createdAt, publicId: { $lt: cursor.publicId } }] },
     ];
   }
@@ -44,7 +48,7 @@ export async function listMiningHistory(input: {
   const settlementRows = sessionIds.length
     ? await input.collections.transactions
         .find(
-          { type: "mining", miningSessionId: { $in: sessionIds } },
+          { type: "mining", miningSessionId: { $in: sessionIds }, createdAt: { $gte: cutoff } },
           { projection: { miningSessionId: 1, amountMinor: 1, createdAt: 1, sequenceNumber: 1 } },
         )
         .sort({ sequenceNumber: 1 })

@@ -1,9 +1,10 @@
 # Database (MongoDB — the source of truth)
 
-## Collections (24 total, including subscription and address archives)
+## Collections (25 total, including subscription and address archives)
 
 Core: users, wallets, ledger_accounts, ledger_entries, transactions.
-Pro: subscriptions, wallet_address_history (permanent history; ADR-010).
+Pro: subscriptions, subscription_grants, wallet_address_history (permanent
+history; ADR-010).
 Auth/security: sessions, security_events, two_factor_credentials,
 transfer_password_credentials, transfer_authorizations, two_factor_uses,
 financial_controls, notifications.
@@ -47,7 +48,8 @@ and immutable after provisioning; custom handles remain separate aliases.
 ## Validators
 
 Pro authorization uses `subscriptions_owner_active_unique`; activation retries
-use `subscriptions_activation_unique`. The expiry sweep uses
+use `subscription_grants_activation_unique` (with the legacy subscription key
+index retained for older grants). The expiry sweep uses
 `subscriptions_expiry`, and latest-20 owner history uses
 `wallet_address_history_owner`. `wallets_custom_address_unique` keeps active
 aliases globally unique and also serves the bounded alias sweep. History has
