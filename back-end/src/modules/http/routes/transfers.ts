@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import * as transfers from "../../transfers/service.js";
+import { historyWindowDays } from "../../subscriptions/service.js";
 import { MAX_NOTE_LENGTH } from "../../../shared/types.js";
-import { pageLimitSchema, publicIdSchema, transferPreviewSchema, transferSchema } from "../schemas.js";
+import { historyDaysSchema, pageLimitSchema, publicIdSchema, transferPreviewSchema, transferSchema } from "../schemas.js";
 import { authenticated, getAuth, parseBody } from "../http-helpers.js";
 import { displayNameCache, enforceRateLimit, settingsCache } from "../../../app.js";
 
@@ -119,16 +120,21 @@ export async function registerTransferRoutes(app: FastifyInstance): Promise<void
           cursor: z.string().uuid().optional(),
           limit: pageLimitSchema,
           direction: z.enum(["sent", "received", "all"]).optional(),
+          days: historyDaysSchema,
         })
         .strict(),
       request.query,
     );
+    if (query.days !== undefined) {
+      await historyWindowDays(app.collections, getAuth(request).userId, query.days);
+    }
     return transfers.listTransactions({
       collections: app.collections,
       ownerUserId: getAuth(request).userId,
       cursor: query.cursor,
       limit: query.limit,
       direction: query.direction,
+      days: query.days,
     });
   });
 

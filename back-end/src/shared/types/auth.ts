@@ -150,6 +150,7 @@ export interface NotificationData {
 }
 
 export interface PublicUser {
+  subscription: import("./subscriptions.js").PublicSubscription;
   id: string;
   email: string;
   displayName: string;

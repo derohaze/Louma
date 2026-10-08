@@ -3,6 +3,7 @@ import type { Strings } from "../types";
 
 import analyticsEn from "./analytics/en";
 import authEn from "./auth/en";
+import billingEn from "./billing/en";
 import commonEn from "./common/en";
 import miningPageEn from "./mining/page/en";
 import miningCycleEn from "./mining/cycle/en";
@@ -33,6 +34,7 @@ import walletCustomAddressEn from "./wallet/custom-address/en";
 
 import analyticsAr from "./analytics/ar";
 import authAr from "./auth/ar";
+import billingAr from "./billing/ar";
 import commonAr from "./common/ar";
 import miningPageAr from "./mining/page/ar";
 import miningCycleAr from "./mining/cycle/ar";
@@ -77,6 +79,7 @@ import walletCustomAddressAr from "./wallet/custom-address/ar";
 export const en = {
   analytics: analyticsEn,
   auth: authEn,
+  billing: billingEn,
   common: commonEn,
   mining: {
     page: miningPageEn,
@@ -126,6 +129,7 @@ export const dictionaries: Record<LanguageCode, Dictionary> = {
   ar: {
     analytics: analyticsAr,
     auth: authAr,
+    billing: billingAr,
     common: commonAr,
     mining: {
       page: miningPageAr,

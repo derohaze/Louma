@@ -1,30 +1,17 @@
+import { useProAccess } from "@/shared/hooks";
 import { Link } from "@tanstack/react-router";
-import { Menu01Icon } from "@hugeicons/core-free-icons";
+import { LockIcon, Menu01Icon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/shared/ui/page";
 import { translate, useT } from "@/shared/i18n";
 import { cn } from "@/shared/lib/platform";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/ui/dialog";
-import {
-  findActiveSection,
-  navItems,
-  navSections,
-  type NavHref,
-  type NavSection,
-} from "@/shared/lib/wallet";
-
-/** Flat position of every page, so the staggered entrance follows the visible order. */
-const navOrder = new Map<NavHref, number>(navItems.map((item, index) => [item.href, index]));
+import { findActiveSection, navSections, type NavSection } from "@/shared/lib/wallet";
 
 /**
  * Compact rail item: the rail lists sections, and the panel below shows the pages of the one
  * the route belongs to. Clicking a section opens its landing page.
  *
- * Layout follows Hostinger's own rail: the icon sits plainly in the middle of the column with
- * the label centred underneath it. There is deliberately no chip behind the icon — the
- * reference carries no box on its current item either, so the current section is marked by
- * colour alone (bright icon and label against the muted rest). The icon is drawn at 22px
- * rather than 20px because that is what the reference uses, and at 20px inside a 72px column
- * it read as a detail next to the label rather than the anchor of the item.
+ * Only the active icon gets a static surface; its label stays directly on the rail.
  */
 export function RailLink({ section, current }: { section: NavSection; current: boolean }) {
   useT("nav");
@@ -33,17 +20,43 @@ export function RailLink({ section, current }: { section: NavSection; current: b
       to={section.items[0].href}
       aria-current={current ? "page" : undefined}
       className={cn(
-        "group flex min-h-[68px] flex-col items-center justify-center gap-2 px-1 text-[11px] font-medium",
+        "group mx-1 flex min-h-[68px] flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-medium",
         current
           ? "text-[#323234] dark:text-white"
           : "text-[#58585E] hover:text-[#323234] dark:text-zinc-400 dark:hover:text-white",
       )}
     >
-      <Icon icon={section.icon} size={22} className="shrink-0" />
+      <span
+        className={cn(
+          "grid size-10 place-items-center rounded-xl",
+          current && "bg-card shadow-md dark:bg-secondary",
+        )}
+      >
+        <Icon icon={section.icon} size={22} className="shrink-0" />
+      </span>
       <span className="max-w-[64px] text-center leading-4 text-balance">
         {translate(section.titleKey)}
       </span>
     </Link>
+  );
+}
+
+const railSections = navSections.filter(
+  (section) => !section.accountLevel && section.titleKey !== "nav.sections.billing",
+);
+
+/** Renders the section links with an immediate active state. */
+export function PrimaryRail({ activeSection }: { activeSection: NavSection | undefined }) {
+  return (
+    <div className="flex h-full flex-col">
+      {railSections.map((section) => (
+        <RailLink
+          key={section.titleKey}
+          section={section}
+          current={section.titleKey === activeSection?.titleKey}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -65,7 +78,8 @@ export function SidebarNav({
   /** Width/layout of the panel. The desktop panel takes its own column; the sheet fills the sheet. */
   className?: string;
 }) {
-  useT("nav");
+  const t = useT("nav");
+  const pro = useProAccess();
   const activeSection = findActiveSection(pathname);
   const sections = scope === "all" || !activeSection ? navSections : [activeSection];
   return (
@@ -84,24 +98,66 @@ export function SidebarNav({
               </p>
             )}
             {section.items.map((item) => {
-              const current = pathname === item.href;
+              const proFeature = item.href === "/custom-address";
+              const locked = proFeature && !pro;
+              const current = pathname === item.href && !locked;
+              const rowClassName = cn(
+                "mb-1 flex h-11 w-full items-center rounded-xl text-sm font-semibold",
+                proFeature ? "gap-2 px-2" : "gap-2.5 px-3",
+                locked
+                  ? "cursor-not-allowed text-muted-foreground"
+                  : current
+                    ? "bg-card text-[#323234] shadow-sm dark:bg-secondary dark:text-white"
+                    : "text-[#58585E] hover:text-[#323234] dark:text-zinc-400 dark:hover:text-white",
+              );
+              const rowContent = (
+                <>
+                  <Icon icon={item.icon} size={proFeature ? 19 : 21} className="shrink-0" />
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1",
+                      proFeature ? "whitespace-nowrap text-[13px]" : "truncate",
+                    )}
+                  >
+                    {translate(item.titleKey)}
+                  </span>
+                  {proFeature && (
+                    <span
+                      dir="ltr"
+                      className="inline-flex h-6 shrink-0 items-center justify-center gap-1 rounded-full bg-primary/10 px-2 text-[10px] font-bold leading-none text-primary"
+                    >
+                      {t("chrome.pro")}
+                      {locked && (
+                        <span aria-hidden="true" className="inline-flex items-center">
+                          <Icon icon={LockIcon} size={11} />
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </>
+              );
+              if (locked) {
+                return (
+                  <button
+                    key={item.href}
+                    type="button"
+                    disabled
+                    aria-disabled="true"
+                    className={rowClassName}
+                  >
+                    {rowContent}
+                  </button>
+                );
+              }
               return (
                 <Link
                   key={item.href}
                   to={item.href}
                   onClick={onNavigate}
                   aria-current={current ? "page" : undefined}
-                  style={{ transitionDelay: `${(navOrder.get(item.href) ?? 0) * 60}ms` }}
-                  className={cn(
-                    "mb-1 flex h-11 w-full items-center gap-2.5 rounded-xl px-3 text-sm font-semibold transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]",
-                    "translate-y-0 opacity-100",
-                    current
-                      ? "bg-card text-[#323234] shadow-sm dark:bg-secondary dark:text-white"
-                      : "text-[#58585E] hover:bg-card/70 hover:text-[#323234] dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white",
-                  )}
+                  className={rowClassName}
                 >
-                  <Icon icon={item.icon} size={21} />
-                  <span>{translate(item.titleKey)}</span>
+                  {rowContent}
                 </Link>
               );
             })}
@@ -171,9 +227,7 @@ export function MobileTabBar({
           className={tw(moreActive(activeSection))}
         >
           <Icon icon={Menu01Icon} size={22} />
-          <span className="min-w-0 max-w-full truncate whitespace-nowrap">
-            {t("chrome.more")}
-          </span>
+          <span className="min-w-0 max-w-full truncate whitespace-nowrap">{t("chrome.more")}</span>
         </button>
       </div>
     </nav>

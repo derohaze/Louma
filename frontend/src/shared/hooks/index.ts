@@ -7,3 +7,7 @@ export { THEME_COOKIE, parseTheme, readThemeCookie, useTheme } from "./use-theme
 export type { Wallet, Transaction, Session } from "./wallet-context";
 export { WalletContext, useWallet } from "./wallet-context";
 export { useHistoryWalk } from "./use-history-walk";
+export { RouteLoadingContext, useRouteLoadingStatus } from "./route-loading";
+export type { RouteLoadingContextValue } from "./route-loading";
+export { useProAccess } from "./use-pro-access";
+export { useSlidingIndicator } from "./use-sliding-indicator";

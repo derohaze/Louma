@@ -1,5 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { useInfiniteQuery, useQuery, type InfiniteData } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import NumberFlow from "@number-flow/react";
 import {
@@ -8,24 +13,28 @@ import {
   ArrowRight01Icon,
   ArrowUpRight01Icon,
 } from "@hugeicons/core-free-icons";
-import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
+import { useProAccess, useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
 import type { ApiMiningState } from "@/shared/api";
 import {
   moneyChartValue,
   moneyFromMinorUnits,
+  miningPayoutsInWindow,
   prefillTransfer,
   shortAddress,
   sumMoney,
 } from "@/shared/lib/wallet";
 import {
   accountFetchers,
+  availableHistoryDays,
   hasBrowserSession,
+  maximumHistoryDays,
   serverStateFreshness,
   serverStateKeys,
   type TransactionPage,
   type MiningHistoryPage,
 } from "@/shared/lib/platform";
 import { currentLocale, translate, useT } from "@/shared/i18n";
+import { OverviewSkeleton } from "@/shared/skeletons";
 import { Icon, CopyButton, revealDelay } from "@/shared/ui/page";
 import { Switch } from "@/shared/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
@@ -56,8 +65,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 const HISTORY_PAGE_CAP = 200;
 
-/** Cycles settle about once a day, so ten pages cover a 90-day window with room to spare. */
-const MINING_HISTORY_PAGE_CAP = 10;
+/** Cycles usually settle about once a day; this bounds abnormal cursor histories. */
+const MINING_HISTORY_PAGE_CAP = 20;
 
 /** How many bars the statistics card draws across the window. */
 const BAR_COUNT = 10;
@@ -70,10 +79,19 @@ const COUNTERPARTY_LIMIT = 5;
  * The windows the board can describe, chosen once from the statistics card. The label is a key,
  * resolved where the card renders, so the same period reads in whichever language is current.
  */
-const PERIODS: readonly { id: string; labelKey: "periods.last7" | "periods.last30" | "periods.last90"; days: number }[] = [
+type Period = {
+  id: string;
+  labelKey:
+    "periods.last1" | "periods.last7" | "periods.last30" | "periods.last90" | "periods.last120";
+  days: number;
+};
+
+const PERIODS: readonly Period[] = [
+  { id: "1", labelKey: "periods.last1", days: 1 },
   { id: "7", labelKey: "periods.last7", days: 7 },
   { id: "30", labelKey: "periods.last30", days: 30 },
   { id: "90", labelKey: "periods.last90", days: 90 },
+  { id: "120", labelKey: "periods.last120", days: 120 },
 ];
 
 /** One slice of the window: what came in and what went out inside it. */
@@ -83,10 +101,11 @@ type Slice = { income: number; expense: number };
  * The board's three card surfaces, in the same shapes the mining screens use: a bordered white card,
  * the filled brand surface behind the live figure, and the inverted one the board closes on.
  */
-const CARD = "card-enter card-enter-hover rounded-[22px] border bg-card shadow-sm";
+const CARD = "card-enter card-enter-hover min-w-0 rounded-[22px] border bg-card shadow-sm";
 const FILLED =
-  "card-enter card-enter-hover rounded-[22px] bg-primary text-primary-foreground shadow-sm";
-const INK = "card-enter card-enter-hover rounded-[22px] bg-foreground text-background shadow-sm";
+  "card-enter card-enter-hover min-w-0 rounded-[22px] bg-primary text-primary-foreground shadow-sm";
+const INK =
+  "card-enter card-enter-hover min-w-0 rounded-[22px] bg-foreground text-background shadow-sm";
 
 /**
  * The figure inside a card, grouped the way the board prints one: `currency` is the right formatter
@@ -170,13 +189,13 @@ function BarChart({ slices }: { slices: readonly Slice[] }) {
         >
           {slice.expense > 0 && (
             <div
-              className="w-full bg-chart-2"
+              className="w-full bg-chart-2 transition-[height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
               style={{ height: `${(slice.expense / peak) * 100}%` }}
             />
           )}
           {slice.income > 0 && (
             <div
-              className="w-full bg-primary"
+              className="w-full bg-primary transition-[height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none"
               style={{ height: `${(slice.income / peak) * 100}%` }}
             />
           )}
@@ -253,10 +272,12 @@ function MaskSwitch({ hidden, onToggle }: { hidden: boolean; onToggle: () => voi
  */
 function MiningCycleCard({
   state,
+  failed,
   className,
   style,
 }: {
   state: ApiMiningState | undefined;
+  failed: boolean;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -291,45 +312,57 @@ function MiningCycleCard({
       aria-label={translate("overview.mining.cardAria")}
     >
       <div className="flex h-full flex-col p-5">
-        <p className="font-display text-[22px] leading-none font-bold">
+        <p className="font-display text-[22px] leading-tight font-bold">
           {session ? (
-            <NumberFlow
-              value={moneyChartValue(earned)}
-              format={{ minimumFractionDigits: 4, maximumFractionDigits: 4 }}
-              trend={1}
-            />
+            <>
+              <NumberFlow
+                value={moneyChartValue(earned)}
+                format={{ minimumFractionDigits: 4, maximumFractionDigits: 4 }}
+                trend={1}
+              />
+              <span className="text-[15px] opacity-70">
+                {` ${translate("overview.mining.ofTotal")} ${amount(maximum)}`}
+              </span>
+            </>
           ) : (
-            "—"
+            translate(failed ? "overview.mining.unavailableTitle" : "overview.mining.noneTitle")
           )}
-          <span className="text-[15px] opacity-70"> / {session ? amount(maximum) : "—"}</span>
         </p>
-        <p className="mt-1.5 text-[12px] opacity-70">
-          {session
-            ? translate("overview.mining.progress", {
-                number: session.cycleNumber,
-                rate: session.rate,
-              })
-            : translate("overview.mining.none")}
-        </p>
+        {session && (
+          <p className="mt-1.5 text-[12px] opacity-70">
+            {translate("overview.mining.progress", {
+              number: session.cycleNumber,
+              rate: session.rate,
+            })}
+          </p>
+        )}
         <div className="mt-auto pt-6">
-          <div className="flex items-baseline justify-between gap-2">
-            <p className="text-[12px] font-semibold opacity-70">
-              {translate("overview.mining.completed", { percent })}
+          {session ? (
+            <>
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-[12px] font-semibold opacity-70">
+                  {translate("overview.mining.completed", { percent })}
+                </p>
+                {live && (
+                  <p className="text-[12px] font-semibold tabular-nums opacity-70">
+                    {translate("overview.mining.remaining", {
+                      time: countdown(live.remainingSeconds),
+                    })}
+                  </p>
+                )}
+              </div>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-primary-foreground/25">
+                <div
+                  className="h-full rounded-full bg-primary-foreground transition-[width] duration-1000 ease-linear"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="text-[12px] font-semibold opacity-80">
+              {translate(failed ? "overview.mining.unavailableDetail" : "overview.mining.none")}
             </p>
-            {live && (
-              <p className="text-[12px] font-semibold tabular-nums opacity-70">
-                {translate("overview.mining.remaining", {
-                  time: countdown(live.remainingSeconds),
-                })}
-              </p>
-            )}
-          </div>
-          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-primary-foreground/25">
-            <div
-              className="h-full rounded-full bg-primary-foreground transition-[width] duration-1000 ease-linear"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
+          )}
         </div>
       </div>
     </Link>
@@ -339,7 +372,36 @@ function MiningCycleCard({
 export function OverviewContent() {
   const t = useT("overview");
   const common = useT("common");
-  const { wallet, transactions, security } = useWallet();
+  const queryClient = useQueryClient();
+  const { wallet, transactions: recentTransactions, security, accountDataPending } = useWallet();
+  const pro = useProAccess();
+  const allowedDays = availableHistoryDays(pro);
+  const historyDays = maximumHistoryDays(pro);
+  const periods = PERIODS.filter((entry) => allowedDays.includes(entry.days));
+  const [periodId, setPeriodId] = useState("30");
+  const period = periods.find((entry) => entry.id === periodId) ?? PERIODS[2]!;
+  useEffect(() => {
+    if (!periods.some((entry) => entry.id === periodId)) setPeriodId("30");
+  }, [periodId, periods]);
+  const transactionKey = useMemo(
+    () => serverStateKeys.transactionsForDays(historyDays),
+    [historyDays],
+  );
+  const periodTransactions = useInfiniteQuery<
+    TransactionPage,
+    Error,
+    InfiniteData<TransactionPage, string | null>,
+    typeof transactionKey,
+    string | null
+  >({
+    queryKey: transactionKey,
+    queryFn: ({ pageParam }) => accountFetchers.transactions(pageParam, historyDays),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    staleTime: serverStateFreshness.dashboardHistoryMs,
+    enabled: hasBrowserSession && wallet !== null,
+  });
+  const miningKey = useMemo(() => serverStateKeys.miningHistory(historyDays), [historyDays]);
   const mining = useQuery({
     queryKey: serverStateKeys.mining,
     queryFn: accountFetchers.mining,
@@ -350,20 +412,21 @@ export function OverviewContent() {
     MiningHistoryPage,
     Error,
     InfiniteData<MiningHistoryPage, string | null>,
-    typeof serverStateKeys.miningHistory,
+    typeof miningKey,
     string | null
   >({
-    queryKey: serverStateKeys.miningHistory,
-    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam),
+    queryKey: miningKey,
+    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam, historyDays),
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    staleTime: serverStateFreshness.miningHistoryMs,
+    staleTime: serverStateFreshness.dashboardHistoryMs,
     enabled: hasBrowserSession,
   });
   const [balanceHidden, setBalanceHidden] = useState(readBalanceHidden);
-  const periods = PERIODS.map((entry) => ({ id: entry.id, label: t(entry.labelKey), days: entry.days }));
-  const [periodId, setPeriodId] = useState(PERIODS[1]!.id);
-  const period = periods.find((entry) => entry.id === periodId) ?? periods[1]!;
+  const transactions = useMemo(
+    () => (periodTransactions.data?.pages ?? []).flatMap((page) => page.transactions),
+    [periodTransactions.data],
+  );
   const toggleBalanceHidden = () => {
     setBalanceHidden((current) => {
       const next = !current;
@@ -376,20 +439,19 @@ export function OverviewContent() {
     });
   };
 
-  /**
-   * The one request this board makes about mining: a re-read when the tab comes back to the
-   * foreground, the same trigger the mining page uses. Between reads the cycle card advances on its
-   * own clock, so there is nothing to poll and the database is never asked for a clock it has
-   * already given us.
-   */
-  const refetchMining = mining.refetch;
+  /** The mining card re-reads on return only after its existing freshness window expires. */
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") void refetchMining();
+      if (document.visibilityState === "visible") {
+        void queryClient.refetchQueries(
+          { queryKey: serverStateKeys.mining, stale: true },
+          { cancelRefetch: false },
+        );
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [refetchMining]);
+  }, [queryClient]);
 
   /** The window the period-scoped cards describe. Rolling, not calendar months. */
   const range = useMemo(() => {
@@ -398,27 +460,19 @@ export function OverviewContent() {
   }, [period]);
 
   /**
-   * Walks the shared transactions and mining-history lists, one page at a time, so every card's
-   * period totals cover the whole window instead of only the pages already loaded. The pages are
-   * appended to the cache every screen reads, so this is not a private copy. The transaction walk
-   * stops once it reaches a page older than the window, so a busy wallet's totals are not truncated
-   * at a fixed page count; `cap` only bounds a pathological cursor. Only starts once the session is
-   * confirmed, and a failure leaves the pages already loaded on screen rather than blanking them.
+   * Walks the plan-bounded lists into their shared cache once. All dashboard date selectors then
+   * derive their totals from this same snapshot without issuing a new request.
    */
   useHistoryWalk<TransactionPage>({
-    queryKey: serverStateKeys.transactions,
-    fetchPage: accountFetchers.transactions,
+    queryKey: transactionKey,
+    fetchPage: (cursor) => accountFetchers.transactions(cursor, historyDays),
     nextCursor: (page) => page.nextCursor,
     cap: HISTORY_PAGE_CAP,
     enabled: wallet !== null,
-    shouldContinue: (page) => {
-      const oldest = page.transactions.at(-1);
-      return !oldest || new Date(oldest.createdAt).getTime() >= range.from;
-    },
   });
   useHistoryWalk<MiningHistoryPage>({
-    queryKey: serverStateKeys.miningHistory,
-    fetchPage: accountFetchers.miningHistory,
+    queryKey: miningKey,
+    fetchPage: (cursor) => accountFetchers.miningHistory(cursor, historyDays),
     nextCursor: (page) => page.nextCursor,
     cap: MINING_HISTORY_PAGE_CAP,
     enabled: wallet !== null,
@@ -469,8 +523,8 @@ export function OverviewContent() {
 
   /** The activity feed: the newest transfers, which is a different cut than the period totals. */
   const recent = useMemo(
-    () => [...transactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    [transactions],
+    () => [...recentTransactions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [recentTransactions],
   );
 
   /** Who this wallet actually moves money with, newest contact first, for a one-tap resend. */
@@ -487,9 +541,18 @@ export function OverviewContent() {
    * The balance is printed once on this board, and nowhere else: a figure repeated across cards
    * reads as three different accounts, and a stale copy is worse than no copy at all.
    */
-  const balance = wallet?.balance ?? "0";
-  const show = (value: string | number) => (balanceHidden ? "••••••" : amount(value));
-
+  const maskedAmount = "••••••";
+  const showAmount = (amountValue: string | number) => {
+    const formatted = amount(amountValue);
+    return (
+      <span
+        className="inline-flex h-[1em] items-center overflow-hidden whitespace-nowrap align-middle tabular-nums"
+        style={{ minWidth: `${Math.max(formatted.length, maskedAmount.length)}ch` }}
+      >
+        {balanceHidden ? maskedAmount : formatted}
+      </span>
+    );
+  };
   /**
    * Everything mining has already paid out, which is a total and not a live figure. A cycle can
    * carry wallet-credited payouts while still `active` (collecting mid-cycle never closes it),
@@ -499,12 +562,23 @@ export function OverviewContent() {
     () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
     [history.data],
   );
-  const settledCycles = cycles.filter((cycle) => cycle.settledMinor > 0 && cycle.lastSettledAt);
-  const mined = sumMoney(settledCycles.map((cycle) => cycle.settled));
-  const lastSettled = settledCycles[0]?.lastSettledAt ?? null;
+  const miningPayouts = useMemo(
+    () => miningPayoutsInWindow(cycles, range.from, range.to),
+    [cycles, range],
+  );
+  const settledSessionIds = new Set(miningPayouts.map((payout) => payout.sessionId));
+  const mined = sumMoney(miningPayouts.map((payout) => payout.amount));
+  const lastSettled = miningPayouts.reduce<string | null>(
+    (latest, payout) => (latest === null || payout.at > latest ? payout.at : latest),
+    null,
+  );
+
+  if (accountDataPending || mining.isPending) {
+    return <OverviewSkeleton title={t("title")} />;
+  }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1.04fr_1fr] lg:grid-rows-[auto_auto_auto]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.04fr)_minmax(0,1fr)] lg:grid-rows-[auto_auto_auto]">
       {/* What moved in the period. The only card that reports the two totals themselves. */}
       <section
         style={revealDelay(0)}
@@ -519,7 +593,7 @@ export function OverviewContent() {
               <PillSelect
                 value={period.id}
                 label={t("periodLabel")}
-                options={periods}
+                options={periods.map((entry) => ({ id: entry.id, label: t(entry.labelKey) }))}
                 onChange={setPeriodId}
               />
             </div>
@@ -531,7 +605,7 @@ export function OverviewContent() {
                 {t("expenses")}
               </p>
               <p className="mt-1.5 font-display text-[24px] leading-none font-bold tabular-nums">
-                {show(flow.expense)}
+                {showAmount(flow.expense)}
               </p>
             </div>
             <div>
@@ -540,7 +614,7 @@ export function OverviewContent() {
                 {t("incomes")}
               </p>
               <p className="mt-1.5 font-display text-[24px] leading-none font-bold tabular-nums">
-                {show(flow.income)}
+                {showAmount(flow.income)}
               </p>
             </div>
           </div>
@@ -562,10 +636,10 @@ export function OverviewContent() {
           <div className="mt-6 flex items-end justify-between gap-3">
             <div>
               <p className="text-[13px] font-semibold text-muted-foreground">
-                {t("transfers.label", { period: period.label })}
+                {t("transfers.label", { period: t(period.labelKey).toLowerCase() })}
               </p>
               <p className="mt-1 font-display text-[30px] leading-none font-bold tabular-nums">
-                {flow.count}
+                <NumberFlow value={flow.count} />
               </p>
             </div>
             <Change current={flow.count} previous={flow.countBefore} />
@@ -592,14 +666,15 @@ export function OverviewContent() {
                     <span className="block truncate text-[13px] font-bold">
                       {shortAddress(transaction.counterpartyAddress)}
                     </span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {received ? common("direction.received") : common("direction.sent")}
-                      {" · "}
-                      {relativeTime(transaction.createdAt)}
+                    <span className="flex min-w-0 gap-1.5 truncate text-[11px] text-muted-foreground">
+                      <span>
+                        {received ? common("direction.received") : common("direction.sent")}
+                      </span>
+                      <span>{relativeTime(transaction.createdAt)}</span>
                     </span>
                   </span>
                   <span className="shrink-0 text-[13px] font-bold tabular-nums">
-                    {show(received ? transaction.netAmount : transaction.amount)}
+                    {showAmount(received ? transaction.netAmount : transaction.amount)}
                   </span>
                 </Link>
               </li>
@@ -616,7 +691,7 @@ export function OverviewContent() {
       {/* The balance — the board's one dark card, and the number the eye lands on first.
           On a phone it comes first (see the order utilities): the bento pairs only exist to arrange
           the desktop grid, and the mobile column should open on the money, not on the charts. */}
-      <div className="contents gap-4 sm:grid sm:grid-cols-2">
+      <div className="contents min-w-0 gap-4 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <section style={revealDelay(2)} className={`${INK} order-1 sm:order-none`}>
           <div className="flex h-full flex-col justify-between p-5">
             <div className="flex items-center justify-between gap-2">
@@ -629,24 +704,41 @@ export function OverviewContent() {
               <MaskSwitch hidden={balanceHidden} onToggle={toggleBalanceHidden} />
             </div>
             <div className="mt-6 sm:mt-8">
-              <p className="font-display text-[26px] leading-none font-bold tabular-nums sm:text-[30px]">
-                {show(balance)}
+              <p
+                className={`font-display font-bold ${
+                  wallet
+                    ? "text-[26px] leading-none tabular-nums sm:text-[30px]"
+                    : "text-[15px] leading-snug"
+                }`}
+              >
+                {wallet ? showAmount(wallet.balance) : t("balance.unavailable")}
               </p>
-              <p className="mt-2.5 text-[11px] tracking-wide opacity-70">
-                LMA ·{" "}
-                {security?.wallet.status === "frozen"
-                  ? t("balance.frozen")
-                  : t("balance.ready")}
-              </p>
+              {wallet && (
+                <p className="mt-2.5 text-[11px] tracking-wide opacity-70">
+                  LMA.{" "}
+                  {security
+                    ? security.wallet.status === "frozen"
+                      ? t("balance.frozen")
+                      : t("balance.ready")
+                    : t("account.unavailable")}
+                </p>
+              )}
               {/* The address lives here and nowhere else: once, with the copy that makes it usable. */}
               <div className="mt-2 flex min-w-0 items-center gap-1">
-                <code className="truncate text-[11px] opacity-70">
-                  {wallet?.address ? shortAddress(wallet.address) : "—"}
-                </code>
                 {wallet?.address && (
-                  <div className="[&>button]:size-6 [&>button]:shrink-0 [&>button]:text-background/70 [&>button:hover]:bg-background/10 [&>button:hover]:text-background">
-                    <CopyButton text={wallet.address} />
-                  </div>
+                  <>
+                    <code className="truncate text-[11px] opacity-70">
+                      {shortAddress(wallet.address)}
+                    </code>
+                    <div className="[&>button]:size-6 [&>button]:shrink-0 [&>button]:text-background/70 [&>button:hover]:bg-background/10 [&>button:hover]:text-background">
+                      <CopyButton text={wallet.address} />
+                    </div>
+                  </>
+                )}
+                {!wallet?.address && (
+                  <span className="truncate text-[11px] opacity-70">
+                    {t("balance.addressUnavailable")}
+                  </span>
                 )}
               </div>
             </div>
@@ -656,6 +748,7 @@ export function OverviewContent() {
         {/* The live cycle, and how much of its window is still left to earn. */}
         <MiningCycleCard
           state={mining.data}
+          failed={mining.isError}
           style={revealDelay(3)}
           className="order-3 sm:order-none"
         />
@@ -703,7 +796,7 @@ export function OverviewContent() {
           </Link>
           <Link
             to="/transfer"
-            className="flex items-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-[13px] font-bold tracking-wide text-primary-foreground transition-transform hover:scale-[1.02]"
+            className="flex items-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-[13px] font-bold tracking-wide text-primary-foreground transition-colors hover:bg-primary/90"
           >
             {t("quickSend.transfer")}
             <Icon icon={ArrowUpRight01Icon} size={16} />
@@ -723,15 +816,16 @@ export function OverviewContent() {
           <div className="mt-8">
             <p className="text-[12px] font-semibold text-muted-foreground">
               {t("mined.label", {
-                count: settledCycles.length,
+                count: settledSessionIds.size,
+                period: t(period.labelKey).toLowerCase(),
                 unit:
-                  settledCycles.length === 1
+                  settledSessionIds.size === 1
                     ? common("units.cycleOne")
                     : common("units.cycleOther"),
               })}
             </p>
             <p className="mt-1 font-display text-[26px] leading-none font-bold tabular-nums">
-              {show(mined)}
+              {showAmount(mined)}
             </p>
             <p className="mt-2 text-[11px] text-muted-foreground">
               {lastSettled
@@ -752,28 +846,42 @@ export function OverviewContent() {
               <dt className="text-[12px] text-muted-foreground">{t("account.twoFactor")}</dt>
               <dd
                 className={`text-[13px] font-semibold ${
-                  security?.twoFactor.enabled ? "text-success" : "text-destructive"
+                  !security
+                    ? "text-muted-foreground"
+                    : security.twoFactor.enabled
+                      ? "text-success"
+                      : "text-destructive"
                 }`}
               >
-                {security?.twoFactor.enabled ? common("state.on") : common("state.off")}
+                {security
+                  ? security.twoFactor.enabled
+                    ? common("state.on")
+                    : common("state.off")
+                  : t("account.unavailable")}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-2">
               <dt className="text-[12px] text-muted-foreground">{t("account.sessions")}</dt>
               <dd className="text-[13px] font-semibold tabular-nums">
-                {security?.activeSessions ?? "—"}
+                {security ? security.activeSessions : t("account.unavailable")}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-2">
               <dt className="text-[12px] text-muted-foreground">{t("account.wallet")}</dt>
               <dd
                 className={`text-[13px] font-semibold ${
-                  security?.wallet.status === "frozen" ? "text-destructive" : "text-success"
+                  !security
+                    ? "text-muted-foreground"
+                    : security.wallet.status === "frozen"
+                      ? "text-destructive"
+                      : "text-success"
                 }`}
               >
-                {security?.wallet.status === "frozen"
-                  ? common("state.frozen")
-                  : common("state.active")}
+                {security
+                  ? security.wallet.status === "frozen"
+                    ? common("state.frozen")
+                    : common("state.active")
+                  : t("account.unavailable")}
               </dd>
             </div>
           </dl>

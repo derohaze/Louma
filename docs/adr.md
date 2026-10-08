@@ -83,3 +83,36 @@ global uniqueness of `addressNormalized`; sharding only by owner would not make
 that uniqueness guarantee enforceable. Account-level mining quotas remain
 owner-scoped, while each mining settlement uses the session's concrete
 `walletId` and `ledgerAccountId`.
+## ADR-010 — Pro subscriptions and custom address lifecycle
+
+MongoDB `subscriptions` is the authorization source for monthly, yearly and
+lifetime Pro. Customer tokens and Redis never grant this entitlement. A partial
+unique owner index permits one active record; renewals preserve superseded
+records and extend a finite subscription from its current expiry. Durations
+use UTC calendar months/years, clamping month-end dates; lifetime has no expiry.
+Validity requires `startsAt <= now < expiresAt`, or an active lifetime record.
+
+Custom addresses are bare, case-insensitive ASCII aliases of 3–16 characters,
+starting with a letter. The canonical random wallet address remains immutable
+and usable. Protected reads and writes query subscription validity directly.
+Alias-based transfer approvals bind the alias in their intent hash and recheck
+both subscription and alias ownership through conflicting writes inside the
+monetary transaction. Existing canonical approvals retain their hash format.
+
+Expiry immediately disables routing and exposes the canonical address, without
+depending on the sweep. A bounded, non-overlapping sweep archives and clears
+inactive aliases. An immediate claim first releases an expired owner's alias
+in a separate transaction, then claims through the existing global unique
+alias index: MongoDB must commit the old unique-key release before reuse.
+Renewals and alias changes conflict with in-flight alias transfers.
+
+`wallet_address_history` holds one document per change/release, committed
+atomically with the wallet mutation. **Explicit exception to ADR-007's TTL
+history policy:** address and subscription history are permanent, as requested
+for subscription lifecycle auditing. Neither collection embeds history arrays.
+Customer history reads return at most the latest 20 rows, scoped to the owner.
+
+Activation is available only through trusted local operator tooling with database
+credentials. There is no customer activation endpoint, payment gateway or admin
+UI. The operator script shares the same transactional service and activation-key
+replay protection. See `docs/pro-subscriptions.md` for rollout and rollback.

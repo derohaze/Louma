@@ -4,6 +4,7 @@ export default {
     brand: "Louma",
     logoAlt: "Louma logo",
     searchAria: "Search",
+    billingAria: "Billing and subscription",
     accountMenuAria: "Account menu",
   },
   search: {

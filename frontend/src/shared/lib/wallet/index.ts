@@ -16,6 +16,7 @@ export {
   displayNote,
 } from "./address-book";
 export { downloadCsv, transactionsToCsv } from "./statements";
+export { miningPayoutsInWindow, type MiningPayout } from "./mining-payouts";
 export type { WalletSnapshot } from "./wallet-cache";
 export { readWalletSnapshot, writeWalletSnapshot, clearWalletSnapshot } from "./wallet-cache";
 export {

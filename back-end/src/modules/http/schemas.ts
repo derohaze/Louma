@@ -11,6 +11,7 @@ export const passwordSchema = z
 export const loginPasswordSchema = z.string().min(1).max(128);
 export const publicIdSchema = z.string().uuid();
 export const pageLimitSchema = z.coerce.number().int().min(1).max(50).optional();
+export const historyDaysSchema = z.enum(["1", "7", "30", "90", "120"]).transform(Number).optional();
 
 export const transferSchema = z
   .object({

@@ -5,6 +5,8 @@ import { ensureDatabaseIndexes } from "./infrastructure/mongodb/indexes.js";
 import { getCollections } from "./infrastructure/mongodb/collections.js";
 import { RedisHandle } from "./infrastructure/redis/client.js";
 
+import { sweepSubscriptions } from "./modules/subscriptions/service.js";
+
 const config = loadConfig();
 const { client, db } = await connectMongo(config);
 // Redis is optional infrastructure: construct-and-connect never rejects, and a dead Redis only
@@ -23,6 +25,17 @@ try {
     );
   }
   const app = await buildApp({ config, collections: getCollections(db), mongoClient: client, redis });
+  let afterAddress: string | null = null;
+  let sweep: Promise<void> | null = null;
+  const timer = setInterval(() => {
+    if (sweep) return;
+    sweep = sweepSubscriptions({ collections: app.collections, mongoClient: client, afterAddress })
+      .then((cursor) => { afterAddress = cursor; })
+      .catch(() => { app.log.error("subscription_sweep_failed"); })
+      .finally(() => { sweep = null; });
+  }, 60_000);
+  timer.unref();
+  app.addHook("onClose", async () => { clearInterval(timer); await sweep; });
   redis.describe().then((state) => {
     app.log.info({ redis: state.status }, "redis_state_at_boot");
   }).catch(() => undefined);

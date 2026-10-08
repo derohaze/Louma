@@ -21,12 +21,13 @@ export async function getTransaction(input: { collections: Collections; ownerUse
   return publicTransaction(transaction, input.ownerUserId);
 }
 
-export async function listTransactions(input: { collections: Collections; ownerUserId: string; cursor: string | undefined; limit: number | undefined; direction: "sent" | "received" | "all" | undefined }) {
+export async function listTransactions(input: { collections: Collections; ownerUserId: string; cursor: string | undefined; limit: number | undefined; direction: "sent" | "received" | "all" | undefined; days?: number | undefined }) {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), MAX_PAGE_SIZE);
+  const cutoff = input.days === undefined ? undefined : new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
   if (input.direction === "sent" || input.direction === "received") {
     const directionFilter = input.direction === "sent" ? { senderUserId: input.ownerUserId } : { receiverUserId: input.ownerUserId };
     // Mining issuance headers share this collection and must never surface in transfer history.
-    const ownerFilter = { type: "transfer" as const, ...directionFilter };
+    const ownerFilter = { type: "transfer" as const, ...directionFilter, ...(cutoff ? { createdAt: { $gte: cutoff } } : {}) };
     const filter: Record<string, unknown> = { ...ownerFilter };
     if (input.cursor) {
       const cursor = await input.collections.transactions.findOne({ publicId: input.cursor, ...ownerFilter }, { projection: { createdAt: 1, publicId: 1 } });
@@ -58,7 +59,7 @@ export async function listTransactions(input: { collections: Collections; ownerU
     if (!cursor) throw notFound();
     pageBound = { $or: [{ createdAt: { $lt: cursor.createdAt } }, { createdAt: cursor.createdAt, publicId: { $lt: cursor.publicId } }] };
   }
-  const participantsFilter: Record<string, unknown> = { type: "transfer", participants: input.ownerUserId };
+  const participantsFilter: Record<string, unknown> = { type: "transfer", participants: input.ownerUserId, ...(cutoff ? { createdAt: { $gte: cutoff } } : {}) };
   // `$ne` also matches documents where the field is missing, which is exactly the legacy shape.
   // It is disjoint from the participants branch, so the merge below never sees a row twice.
   const legacyFilter: Record<string, unknown> = {
@@ -66,6 +67,7 @@ export async function listTransactions(input: { collections: Collections; ownerU
       { type: "transfer" },
       { $or: [{ senderUserId: input.ownerUserId }, { receiverUserId: input.ownerUserId }] },
       { participants: { $ne: input.ownerUserId } },
+      ...(cutoff ? [{ createdAt: { $gte: cutoff } }] : []),
     ],
   };
   const primaryFilter: Record<string, unknown> = pageBound ? { $and: [participantsFilter, pageBound] } : participantsFilter;

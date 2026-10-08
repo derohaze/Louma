@@ -11,6 +11,38 @@ import { MAX_CLUSTER_ALIASES, MAX_NETWORK_TRUSTS } from "../../modules/mining-de
  * against a shape the database already forbids.
  */
 export const schemas: Record<string, Document> = {
+  subscriptions: {
+    $and: [
+      { $jsonSchema: {
+        bsonType: "object",
+        required: ["publicId", "ownerUserId", "name", "plan", "status", "startsAt", "expiresAt", "endedAt", "createdAt", "createdBy", "activationKey", "version"],
+        properties: {
+          publicId: { bsonType: "string", maxLength: 36 }, ownerUserId: { bsonType: "string", maxLength: 36 },
+          name: { enum: ["Louma Pro"] }, plan: { enum: ["monthly", "yearly", "lifetime"] },
+          status: { enum: ["active", "expired", "superseded"] }, startsAt: { bsonType: "date" },
+          expiresAt: { bsonType: ["date", "null"] }, endedAt: { bsonType: ["date", "null"] }, createdAt: { bsonType: "date" },
+          createdBy: { bsonType: "string", minLength: 1, maxLength: 128 }, activationKey: { bsonType: "string", minLength: 1, maxLength: 128 },
+          version: { bsonType: "int", minimum: 0 },
+        },
+      } },
+      { $expr: { $and: [
+        { $cond: [{ $eq: ["$plan", "lifetime"] }, { $eq: ["$expiresAt", null] }, { $gt: ["$expiresAt", "$startsAt"] }] },
+        { $cond: [{ $eq: ["$status", "active"] }, { $eq: ["$endedAt", null] }, { $ne: ["$endedAt", null] }] },
+      ] } },
+    ],
+  },
+  wallet_address_history: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["publicId", "ownerUserId", "walletId", "subscriptionId", "previousAddress", "nextAddress", "reason", "createdAt"],
+      properties: {
+        publicId: { bsonType: "string", maxLength: 36 }, ownerUserId: { bsonType: "string", maxLength: 36 },
+        walletId: { bsonType: "string", maxLength: 36 }, subscriptionId: { bsonType: ["string", "null"], maxLength: 36 },
+        previousAddress: { bsonType: "string", maxLength: 128 }, nextAddress: { bsonType: "string", maxLength: 128 },
+        reason: { enum: ["changed", "subscription_expired", "subscription_inactive"] }, createdAt: { bsonType: "date" },
+      },
+    },
+  },
   users: {
     $jsonSchema: {
       bsonType: "object",
@@ -182,6 +214,7 @@ export const schemas: Record<string, Document> = {
             recipientWalletId: { bsonType: "string" },
             recipientUserId: { bsonType: "string" },
             recipientAddress: { bsonType: "string" },
+            recipientCustomAddress: { bsonType: "string", pattern: "^[a-z][a-z0-9]{2,15}$" },
             amountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR },
             feeMinor: { bsonType: "number", minimum: 0, maximum: LEDGER_AMOUNT_MAX_MINOR },
             netAmountMinor: { bsonType: "number", minimum: 1, maximum: LEDGER_AMOUNT_MAX_MINOR },

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import NumberFlow from "@number-flow/react";
 import { Link } from "@tanstack/react-router";
 import {
   Area,
@@ -10,21 +11,30 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ArrowDownLeft01Icon, ArrowUpRight01Icon, PickaxeIcon } from "@hugeicons/core-free-icons";
 import {
-  ArrowDownLeft01Icon,
-  ArrowUpRight01Icon,
-  BitcoinCpuIcon,
-} from "@hugeicons/core-free-icons";
-import { useWallet, useHistoryWalk, type Transaction } from "@/shared/hooks";
-import { currentLocale, useI18n, useT } from "@/shared/i18n";
-import { moneyChartValue, shortAddress, sumMoney } from "@/shared/lib/wallet";
+  useProAccess,
+  useWallet,
+  useHistoryWalk,
+  useSlidingIndicator,
+  type Transaction,
+} from "@/shared/hooks";
+import { currentLocale, languageLocale, useI18n, useT } from "@/shared/i18n";
+import {
+  miningPayoutsInWindow,
+  moneyChartValue,
+  shortAddress,
+  sumMoney,
+} from "@/shared/lib/wallet";
 import {
   accountFetchers,
-  cn,
+  availableHistoryDays,
   hasBrowserSession,
+  maximumHistoryDays,
   serverStateFreshness,
   serverStateKeys,
   type MiningHistoryPage,
+  type TransactionPage,
 } from "@/shared/lib/platform";
 import { Icon } from "@/shared/ui/page";
 
@@ -37,15 +47,19 @@ import { Icon } from "@/shared/ui/page";
  * Everything reads the same shared queries the overview reads, so the two
  * pages can never disagree — only the cut is different.
  */
-const RANGES: readonly {
+type Range = {
   id: string;
-  labelKey: "range.last7" | "range.last30" | "range.last90";
+  labelKey: "range.last1" | "range.last7" | "range.last30" | "range.last90" | "range.last120";
   days: number;
   buckets: number;
-}[] = [
+};
+
+const RANGES: readonly Range[] = [
+  { id: "1", labelKey: "range.last1", days: 1, buckets: 24 },
   { id: "7", labelKey: "range.last7", days: 7, buckets: 7 },
   { id: "30", labelKey: "range.last30", days: 30, buckets: 15 },
   { id: "90", labelKey: "range.last90", days: 90, buckets: 30 },
+  { id: "120", labelKey: "range.last120", days: 120, buckets: 40 },
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -61,10 +75,15 @@ function amount(value: string | number): string {
   return trimmed ? `${grouped}.${trimmed}` : grouped;
 }
 
-function dayLabel(at: number): string {
-  return new Intl.DateTimeFormat(currentLocale(), { day: "numeric", month: "short" }).format(
-    new Date(at),
-  );
+function AnimatedAmount({ value }: { value: number }) {
+  return <NumberFlow value={value} format={{ maximumFractionDigits: 4 }} />;
+}
+
+function dayLabel(at: number, hourly: boolean): string {
+  return new Intl.DateTimeFormat(
+    currentLocale(),
+    hourly ? { hour: "numeric" } : { day: "numeric", month: "short" },
+  ).format(new Date(at));
 }
 
 /**
@@ -72,25 +91,53 @@ function dayLabel(at: number): string {
  * desktop/mobile variants), so the chart and the totals always describe the
  * same window.
  */
-function RangePills({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+function RangePills({
+  value,
+  ranges,
+  onChange,
+}: {
+  value: string;
+  ranges: readonly Range[];
+  onChange: (next: string) => void;
+}) {
   const t = useT("analytics");
+  const { containerRef, activeRef, position } = useSlidingIndicator<
+    HTMLDivElement,
+    HTMLButtonElement
+  >(value);
   return (
     <div
+      ref={containerRef}
       role="group"
       aria-label={t("range.label")}
-      className="flex flex-wrap gap-1.5 rounded-full bg-secondary p-1"
+      className="relative isolate flex flex-wrap gap-1.5 rounded-full bg-secondary p-1"
     >
-      {RANGES.map((range) => {
+      {position && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0 top-0 z-0 rounded-full bg-primary shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform motion-reduce:transition-none"
+          style={{
+            width: position.width,
+            height: position.height,
+            transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${position.scaleX}, ${position.scaleY})`,
+            transformOrigin: "top left",
+          }}
+        />
+      )}
+      {ranges.map((range) => {
         const active = range.id === value;
         return (
           <button
             key={range.id}
             type="button"
             onClick={() => onChange(range.id)}
+            ref={active ? activeRef : undefined}
             aria-pressed={active}
-            className={`rounded-full px-4 py-1.5 text-[12px] font-bold transition-all duration-300 ${
+            className={`relative z-10 rounded-full px-4 py-1.5 text-[12px] font-bold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${
               active
-                ? "bg-primary text-primary-foreground shadow-sm"
+                ? position
+                  ? "text-primary-foreground"
+                  : "bg-primary text-primary-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -145,7 +192,7 @@ function FlowTooltip({
 
 type ChartPoint = { label: string; full: string; income: number; expense: number; mined: number };
 
-function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
+function FlowChart({ buckets, hourly }: { buckets: readonly Bucket[]; hourly: boolean }) {
   const t = useT("analytics");
   // Read through the hook (not just the module mirror): the axis and tooltip labels are formatted
   // inside this memo, so the language must be a dependency or they freeze in the previous language.
@@ -153,16 +200,18 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
   const data = useMemo<ChartPoint[]>(
     () =>
       buckets.map((b) => ({
-        label: dayLabel(b.start),
-        full: new Intl.DateTimeFormat(currentLocale(), {
-          day: "numeric",
-          month: "short",
-        }).format(new Date(b.start)),
+        label: dayLabel(b.start, hourly),
+        full: new Intl.DateTimeFormat(
+          languageLocale(language),
+          hourly
+            ? { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }
+            : { day: "numeric", month: "short" },
+        ).format(new Date(b.start)),
         income: Math.round(b.income * 10_000) / 10_000,
         expense: Math.round(b.expense * 10_000) / 10_000,
         mined: b.mined,
       })),
-    [buckets, language],
+    [buckets, hourly, language],
   );
   const peak = useMemo(() => Math.max(...buckets.map((b) => b.income + b.expense), 1), [buckets]);
 
@@ -247,60 +296,82 @@ function FlowChart({ buckets }: { buckets: readonly Bucket[] }) {
 
 export function AnalyticsContent() {
   const t = useT("analytics");
-  const { transactions, wallet } = useWallet();
+  const { wallet } = useWallet();
+  const pro = useProAccess();
+  const allowedDays = availableHistoryDays(pro);
+  const historyDays = maximumHistoryDays(pro);
+  const ranges = RANGES.filter((item) => allowedDays.includes(item.days));
+  const [rangeId, setRangeId] = useState("30");
+  const range = ranges.find((item) => item.id === rangeId) ?? RANGES[2]!;
+  useEffect(() => {
+    if (!ranges.some((item) => item.id === rangeId)) setRangeId("30");
+  }, [rangeId, ranges]);
+
+  const transactionKey = useMemo(
+    () => serverStateKeys.transactionsForDays(historyDays),
+    [historyDays],
+  );
+  const transactionHistory = useInfiniteQuery<
+    TransactionPage,
+    Error,
+    InfiniteData<TransactionPage, string | null>,
+    typeof transactionKey,
+    string | null
+  >({
+    queryKey: transactionKey,
+    queryFn: ({ pageParam }) => accountFetchers.transactions(pageParam, historyDays),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    staleTime: serverStateFreshness.dashboardHistoryMs,
+    enabled: hasBrowserSession && wallet !== null,
+  });
+  const miningKey = useMemo(() => serverStateKeys.miningHistory(historyDays), [historyDays]);
   const history = useInfiniteQuery<
     MiningHistoryPage,
     Error,
     InfiniteData<MiningHistoryPage, string | null>,
-    typeof serverStateKeys.miningHistory,
+    typeof miningKey,
     string | null
   >({
-    queryKey: serverStateKeys.miningHistory,
-    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam),
+    queryKey: miningKey,
+    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam, historyDays),
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    staleTime: serverStateFreshness.miningHistoryMs,
+    staleTime: serverStateFreshness.dashboardHistoryMs,
     enabled: hasBrowserSession,
   });
-  const [rangeId, setRangeId] = useState(RANGES[2]!.id);
-  const range = RANGES.find((r) => r.id === rangeId) ?? RANGES[2]!;
-  const [cardsIn, setCardsIn] = useState(false);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setCardsIn(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
+  const transactions = useMemo(
+    () => (transactionHistory.data?.pages ?? []).flatMap((page) => page.transactions),
+    [transactionHistory.data],
+  );
 
   const window = useMemo(() => {
     const to = Date.now();
     return { from: to - range.days * DAY_MS, to };
   }, [range]);
 
-  // The totals below read the shared lists, so the walks feed every dashboard at once: totals
-  // computed from only the loaded pages would understate income, expenses, counts, and mining
-  // for any wallet whose window reaches past the first page. The transaction walk keeps going until
-  // it reaches a page older than the selected window, so a busy wallet's totals cover the whole
-  // range rather than the first 500 rows; `cap` only bounds a pathological cursor.
+  // One plan-bounded snapshot serves every selected window; changing ranges is client-side only.
   useHistoryWalk({
-    queryKey: serverStateKeys.transactions,
-    fetchPage: accountFetchers.transactions,
+    queryKey: transactionKey,
+    fetchPage: (cursor) => accountFetchers.transactions(cursor, historyDays),
     nextCursor: (page) => page.nextCursor,
     cap: 200,
     enabled: wallet !== null,
-    shouldContinue: (page) => {
-      const oldest = page.transactions.at(-1);
-      return !oldest || new Date(oldest.createdAt).getTime() >= window.from;
-    },
   });
   useHistoryWalk<MiningHistoryPage>({
-    queryKey: serverStateKeys.miningHistory,
-    fetchPage: accountFetchers.miningHistory,
+    queryKey: miningKey,
+    fetchPage: (cursor) => accountFetchers.miningHistory(cursor, historyDays),
     nextCursor: (page) => page.nextCursor,
-    cap: 10,
+    cap: 20,
     enabled: wallet !== null,
   });
   const sessions = useMemo(
     () => (history.data?.pages ?? []).flatMap((page) => page.sessions),
     [history.data],
+  );
+  const miningPayouts = useMemo(
+    () => miningPayoutsInWindow(sessions, window.from, window.to),
+    [sessions, window],
   );
 
   /** One pass over transfers + paid-out mining cycles, bucketed by day slice. */
@@ -329,25 +400,16 @@ export function AnalyticsContent() {
     // landed — booking the cumulative `settled` total at `lastSettledAt` would move a payout earned
     // before the window into it. An older payload without the per-settlement list falls back to the
     // cumulative amount at its settle time.
-    for (const s of sessions) {
-      if (s.settledMinor <= 0) continue;
-      const payouts = s.settlements?.length
-        ? s.settlements
-        : s.lastSettledAt
-          ? [{ amount: s.settled, at: s.lastSettledAt }]
-          : [];
-      for (const payout of payouts) {
-        const time = new Date(payout.at).getTime();
-        if (time < window.from || time >= window.to) continue;
-        const i = Math.min(
-          range.buckets - 1,
-          Math.floor(((time - window.from) / span) * range.buckets),
-        );
-        list[i]!.mined += moneyChartValue(payout.amount);
-      }
+    for (const payout of miningPayouts) {
+      const time = new Date(payout.at).getTime();
+      const i = Math.min(
+        range.buckets - 1,
+        Math.floor(((time - window.from) / span) * range.buckets),
+      );
+      list[i]!.mined += moneyChartValue(payout.amount);
     }
     return list;
-  }, [transactions, sessions, window, range]);
+  }, [transactions, miningPayouts, window, range]);
 
   const totals = useMemo(() => {
     const income = buckets.reduce((s, b) => s + b.income, 0);
@@ -378,11 +440,8 @@ export function AnalyticsContent() {
     return [...byAddress.entries()].sort((a, b) => b[1].volume - a[1].volume).slice(0, 4);
   }, [transactions, window]);
 
-  const settledSessions = sessions.filter(
-    (s) =>
-      s.settledMinor > 0 && s.lastSettledAt && new Date(s.lastSettledAt).getTime() >= window.from,
-  );
-  const minedTotal = sumMoney(settledSessions.map((s) => s.settled));
+  const settledSessionIds = new Set(miningPayouts.map((payout) => payout.sessionId));
+  const minedTotal = sumMoney(miningPayouts.map((payout) => payout.amount));
 
   const show = (v: number) => amount(v.toFixed(4));
 
@@ -397,63 +456,45 @@ export function AnalyticsContent() {
               {t("flow.subtitle", { range: t(range.labelKey).toLowerCase() })}
             </p>
           </div>
-          <RangePills value={rangeId} onChange={setRangeId} />
+          <RangePills value={range.id} ranges={ranges} onChange={setRangeId} />
         </div>
         <div key={rangeId} className="card-enter mt-6">
-          <FlowChart buckets={buckets} />
+          <FlowChart buckets={buckets} hourly={range.days === 1} />
         </div>
       </section>
 
       {/* The totals behind the chart: income, expenses, transfers, mined. */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <section
-          style={{ transitionDelay: cardsIn ? `${0 * 75}ms` : "0ms" }}
-          className={cn(
-            "rounded-[22px] border bg-card p-5 shadow-sm transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] hover:-translate-y-0.5 hover:shadow-md motion-reduce:translate-y-0 motion-reduce:opacity-100 motion-reduce:transition-none",
-            cardsIn ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-          )}
-        >
+        <section className="rounded-[22px] border bg-card p-5 shadow-sm transition-shadow duration-200 hover:shadow-md motion-reduce:transition-none">
           <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
             <span aria-hidden className="size-2 rounded-full bg-primary" />
             {t("totals.income")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
-            {show(totals.income)}
+            <AnimatedAmount value={totals.income} />
           </p>
           <p className="mt-2 text-[11px] text-muted-foreground">
             {t("totals.incomeDetail", { range: t(range.labelKey).toLowerCase() })}
           </p>
         </section>
-        <section
-          style={{ transitionDelay: cardsIn ? `${1 * 75}ms` : "0ms" }}
-          className={cn(
-            "rounded-[22px] border bg-card p-5 shadow-sm transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] hover:-translate-y-0.5 hover:shadow-md motion-reduce:translate-y-0 motion-reduce:opacity-100 motion-reduce:transition-none",
-            cardsIn ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-          )}
-        >
+        <section className="rounded-[22px] border bg-card p-5 shadow-sm transition-shadow duration-200 hover:shadow-md motion-reduce:transition-none">
           <p className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground">
             <span aria-hidden className="size-2 rounded-full bg-chart-2" />
             {t("totals.expenses")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
-            {show(totals.expense)}
+            <AnimatedAmount value={totals.expense} />
           </p>
           <p className="mt-2 text-[11px] text-muted-foreground">
             {t("totals.expensesDetail", { range: t(range.labelKey).toLowerCase() })}
           </p>
         </section>
-        <section
-          style={{ transitionDelay: cardsIn ? `${2 * 75}ms` : "0ms" }}
-          className={cn(
-            "rounded-[22px] bg-foreground p-5 text-background shadow-sm transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] hover:-translate-y-0.5 hover:shadow-md motion-reduce:translate-y-0 motion-reduce:opacity-100 motion-reduce:transition-none",
-            cardsIn ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-          )}
-        >
+        <section className="rounded-[22px] bg-foreground p-5 text-background shadow-sm transition-shadow duration-200 hover:shadow-md motion-reduce:transition-none">
           <p className="text-[12px] font-semibold tracking-wide opacity-70">
             {t("totals.transfers")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
-            {totals.count}
+            <NumberFlow value={totals.count} />
           </p>
           <p className="mt-2 text-[11px] opacity-70">
             {t("totals.net", {
@@ -463,23 +504,19 @@ export function AnalyticsContent() {
         </section>
         <Link
           to="/mining/history"
-          style={{ transitionDelay: cardsIn ? `${3 * 75}ms` : "0ms" }}
-          className={cn(
-            "rounded-[22px] bg-primary p-5 text-primary-foreground shadow-sm transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] hover:-translate-y-0.5 hover:shadow-md motion-reduce:translate-y-0 motion-reduce:opacity-100 motion-reduce:transition-none",
-            cardsIn ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-          )}
+          className="rounded-[22px] bg-primary p-5 text-primary-foreground shadow-sm transition-shadow duration-200 hover:shadow-md motion-reduce:transition-none"
         >
           <p className="flex items-center gap-2 text-[12px] font-semibold opacity-80">
-            <Icon icon={BitcoinCpuIcon} size={15} />
+            <Icon icon={PickaxeIcon} size={15} />
             {t("totals.mined")}
           </p>
           <p className="mt-2 font-display text-[26px] leading-none font-bold tabular-nums">
-            {amount(minedTotal)}
+            <AnimatedAmount value={moneyChartValue(minedTotal)} />
           </p>
           <p className="mt-2 text-[11px] opacity-70">
-            {settledSessions.length === 1
-              ? t("totals.cycleOne", { count: settledSessions.length })
-              : t("totals.cycles", { count: settledSessions.length })}
+            {settledSessionIds.size === 1
+              ? t("totals.cycleOne", { count: settledSessionIds.size })
+              : t("totals.cycles", { count: settledSessionIds.size })}
           </p>
         </Link>
       </div>
@@ -536,7 +573,7 @@ export function AnalyticsContent() {
         <section style={{ animationDelay: "375ms" }} className={`${CARD} flex flex-col p-5`}>
           <h2 className="font-display text-[18px] font-semibold">{t("mining.title")}</h2>
           <p className="mt-1 text-[12px] font-semibold text-muted-foreground">
-            {t("mining.subtitle", { days: range.days })}
+            {t("mining.subtitle", { range: t(range.labelKey).toLowerCase() })}
           </p>
           <div className="mt-5 space-y-4">
             <div>

@@ -1,11 +1,10 @@
-import { ArrowRight01Icon, FavouriteIcon, QrCodeScanIcon } from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon, FavouriteIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Icon } from "@/shared/ui/page";
 import { FormMessage } from "@/shared/ui/panels";
 import { LIMITS } from "@/shared/lib/platform";
 import { useT } from "@/shared/i18n";
-import { QrScanner } from "@/features/transfer/send/TransferQrScanner";
 import type { TransferFlow } from "@/features/transfer/send/useTransferFlow";
 
 /** Stage one: the recipient address, checked against the ledger before an amount is asked for. */
@@ -20,8 +19,6 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
     hasShortcuts,
     savedShortcuts,
     looksLikeOwnAddress,
-    scannerOpen,
-    setScannerOpen,
     changeAddress,
     verifyAddress,
   } = flow;
@@ -35,7 +32,9 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
     >
       {hasShortcuts && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground">{t("address.savedRecipients")}</p>
+          <p className="text-xs font-semibold text-muted-foreground">
+            {t("address.savedRecipients")}
+          </p>
           <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {savedShortcuts.map((entry) => (
               <button
@@ -69,29 +68,10 @@ export function TransferStageAddress({ flow }: { flow: TransferFlow }) {
       {looksLikeOwnAddress && <p className="text-xs text-destructive">{t("address.own")}</p>}
       <p className="text-xs text-muted-foreground">{t("address.note")}</p>
       {error && <FormMessage tone="error">{error}</FormMessage>}
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={busy !== null || frozen || !address.trim()}>
-          {busy === "address" ? t("address.checking") : common("actions.continue")}
-          <Icon icon={ArrowRight01Icon} size={16} />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          className="h-9 rounded-full px-4 text-xs font-semibold"
-          onClick={() => setScannerOpen((open) => !open)}
-        >
-          <Icon icon={QrCodeScanIcon} size={16} />
-          {scannerOpen ? t("address.hideScanner") : t("address.scan")}
-        </Button>
-      </div>
-      {scannerOpen && (
-        <QrScanner
-          onDetected={(detected) => {
-            changeAddress(detected);
-            setScannerOpen(false);
-          }}
-        />
-      )}
+      <Button type="submit" disabled={busy !== null || frozen || !address.trim()}>
+        {busy === "address" ? t("address.checking") : common("actions.continue")}
+        <Icon icon={ArrowRight01Icon} size={16} />
+      </Button>
     </form>
   );
 }

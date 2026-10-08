@@ -38,8 +38,6 @@ export function useTransferFlow() {
   const [busy, setBusy] = useState<"address" | "amount" | "send" | null>(null);
   const [error, setError] = useState("");
   const [sent, setSent] = useState<Transaction | null>(null);
-  /** Whether the inline QR scanner under the address field is open. */
-  const [scannerOpen, setScannerOpen] = useState(false);
   /**
    * One idempotency key per transfer attempt, kept together with the parameters it was minted for.
    * A retry of the same parameters — including a retry after a response that never arrived, the one
@@ -49,7 +47,7 @@ export function useTransferFlow() {
   const attempt = useRef<{ key: string; fingerprint: string } | null>(null);
   /** Mirrors the backend's fingerprint: recipient and amounts make two attempts the same one. */
   const attemptFingerprint = (target: string, amountValue: string) =>
-    JSON.stringify([target.trim().toLowerCase(), amountValue]);
+    JSON.stringify([target.toLowerCase(), address.toLowerCase(), amountValue]);
   const frozen = security?.wallet.status === "frozen";
   const passwordSet = security?.transferPassword.enabled ?? false;
   const authenticatorSet = security?.twoFactor.enabled ?? false;
@@ -65,7 +63,10 @@ export function useTransferFlow() {
   const net = amountValid ? transferNet(decimalAmount) : "0.0000";
   /** The address is checked against the wallet on every keystroke, before the server is asked. */
   const looksLikeOwnAddress =
-    address.length > 0 && address.toLowerCase() === wallet?.address.toLowerCase();
+    address.length > 0 &&
+    [wallet?.address, wallet?.customAddress].some(
+      (value) => value?.toLowerCase() === address.toLowerCase(),
+    );
   /** The canonical address the API resolved at stage one: the transfer is sent to exactly this. */
   const verifiedAddress = recipient?.address ?? "";
 
@@ -99,12 +100,12 @@ export function useTransferFlow() {
    */
   const verifyAddress = async () => {
     setError("");
-    const target = address.trim();
+    const target = address;
     if (!isTransferTarget(target)) {
       setError(translate("transfer.send.errors.invalidTarget"));
       return;
     }
-    if (target.toLowerCase() === wallet?.address.toLowerCase()) {
+    if (looksLikeOwnAddress) {
       setError(translate("transfer.send.errors.ownAddress"));
       return;
     }
@@ -136,8 +137,16 @@ export function useTransferFlow() {
     try {
       const { preview } = await api.post<{ preview: ApiTransferPreview }>(
         "/api/v1/transfers/preview",
-        { recipientAddress: verifiedAddress, amount: amountCheck.value },
+        { recipientAddress: address, amount: amountCheck.value },
       );
+      if (preview.recipient.address.toLowerCase() !== verifiedAddress.toLowerCase()) {
+        setRecipient(null);
+        setQuote(null);
+        setAuthorization(null);
+        setStage(1);
+        setError(translate("transfer.send.errors.reapprove"));
+        return;
+      }
       if (!preview.quote || !preview.authorization) {
         throw new Error(translate("transfer.send.errors.quoteFailed"));
       }
@@ -290,8 +299,6 @@ export function useTransferFlow() {
     error,
     setError,
     sent,
-    scannerOpen,
-    setScannerOpen,
     frozen,
     passwordSet,
     authenticatorSet,

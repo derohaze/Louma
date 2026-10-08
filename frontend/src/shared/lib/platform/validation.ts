@@ -21,8 +21,8 @@ export const LIMITS = {
   maxAmountLength: 32,
   maxSearchLength: 60,
   maxDisplayNameLength: 32,
-  maxHandleLength: 24,
-  minHandleLength: 4,
+  maxHandleLength: 16,
+  minHandleLength: 3,
   oneTimeCodeLength: 6,
 } as const; /**
  * Drops control characters (and DEL), which never belong in text a person types. Written as a
@@ -42,29 +42,22 @@ export const sanitizeText = (value: string, maxLength: number): string =>
 
 /** Canonical wallet address: the fixed prefix, 26 Crockford symbols, and two checksum symbols. */
 const WALLET_ADDRESS_PATTERN = /^LMA[0-7][0-9A-HJKMNP-TV-Z]{27}$/;
-/** Public handle, written with the leading "@". */
-const HANDLE_PATTERN = /^@[a-z0-9_]{4,24}$/;
+/** Custom receiving address: 3–16 ASCII letters/digits, starting with a letter. */
+const HANDLE_PATTERN = /^[A-Za-z][A-Za-z0-9]{2,15}$/;
 
 /** Addresses are compared in upper case, so a lower-cased paste still resolves. */
 const isWalletAddress = (value: string): boolean =>
-  WALLET_ADDRESS_PATTERN.test(value.trim().toUpperCase());
+  WALLET_ADDRESS_PATTERN.test(value.toUpperCase());
 
 /** Handles are compared in lower case, matching how the wallet stores them. */
-const isHandle = (value: string): boolean => HANDLE_PATTERN.test(value.trim().toLowerCase());
+export const isCustomAddress = (value: string): boolean => HANDLE_PATTERN.test(value);
 
 /** A transfer target is either a wallet address or a public handle. */
 export const isTransferTarget = (value: string): boolean =>
-  isWalletAddress(value) || isHandle(value);
+  isWalletAddress(value) || isCustomAddress(value);
 
-/**
- * Tidies a typed or pasted transfer target as it is typed: a wallet address is upper case by
- * convention and a handle is lower case, so both are normalised rather than shown rejected, and an
- * address pasted with spaces around its groups still resolves.
- */
-export const normalizeTransferTarget = (value: string): string => {
-  const collapsed = value.replace(/\s+/g, "").slice(0, LIMITS.maxRecipientLength);
-  return collapsed.startsWith("@") ? collapsed.toLowerCase() : collapsed.toUpperCase();
-};
+/** Preserve invalid spaces/symbols so validation explains them instead of changing intent. */
+export const normalizeTransferTarget = (value: string): string => value.slice(0, LIMITS.maxRecipientLength);
 
 /** Six digits from the authenticator app. */
 export const isOneTimeCode = (value: string): boolean =>

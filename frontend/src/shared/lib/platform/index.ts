@@ -24,10 +24,12 @@ export {
   clearAccountCache,
 } from "./server-state";
 export { cn } from "./utils";
+export { availableHistoryDays, maximumHistoryDays } from "./history-ranges";
 export {
   LIMITS,
   sanitizeText,
   isTransferTarget,
+  isCustomAddress,
   normalizeTransferTarget,
   isOneTimeCode,
   oneTimeCodeDigits,

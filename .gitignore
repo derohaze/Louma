@@ -56,3 +56,5 @@ customer-dashboard
 
 
 portal
+# Local Pro activation tool (operator only).
+/scripts/activate-pro.py

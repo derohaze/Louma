@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import {
-  BitcoinCpuIcon,
   Coins01Icon,
+  PickaxeIcon,
   StopCircleIcon,
   UserGroupIcon,
 } from "@hugeicons/core-free-icons";
@@ -88,7 +88,7 @@ export function MiningPage() {
       ) : (
         <MiningBusyButton
           label={t("actions.start")}
-          icon={BitcoinCpuIcon}
+          icon={PickaxeIcon}
           busy={busy === "start"}
           onAction={start}
           disabled={busy !== null || loading}
@@ -145,7 +145,7 @@ export function MiningPage() {
     ) : mining.data.canStart ? (
       <MiningBusyButton
         label={t("actions.start")}
-        icon={BitcoinCpuIcon}
+        icon={PickaxeIcon}
         busy={busy === "start"}
         onAction={start}
         disabled={busy !== null}

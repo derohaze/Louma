@@ -11,3 +11,4 @@ export * from "./types/wallet-ledger.js";
 export * from "./types/mining.js";
 export * from "./types/device.js";
 export * from "./types/transfers.js";
+export * from "./types/subscriptions.js";

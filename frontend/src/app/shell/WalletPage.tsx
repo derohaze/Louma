@@ -1,5 +1,7 @@
+import { useProAccess } from "@/shared/hooks";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useIsFetching } from "@tanstack/react-query";
 import {
   ArrowRight01Icon,
   ArrowDownLeft01Icon,
@@ -12,6 +14,7 @@ import {
   UserCircleIcon,
   SecurityCheckIcon,
   Logout01Icon,
+  CreditCardIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/shared/ui/button";
@@ -25,21 +28,26 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
-import { useWallet } from "@/shared/hooks";
-import { useTheme } from "@/shared/hooks";
+import {
+  RouteLoadingContext,
+  useIsomorphicLayoutEffect,
+  useTheme,
+  useWallet,
+} from "@/shared/hooks";
 import { messageForError } from "@/shared/api";
-import { translate, translateIn, useI18n, useT, type TranslationPath } from "@/shared/i18n";
+import { translate, useI18n, useT, type TranslationPath } from "@/shared/i18n";
 import { LanguageMenu } from "@/app/shell/language-menu";
 import { WalletProvider } from "@/app/session";
 import { WalletNotifications } from "@/features/notifications";
-import { skeletonForPath } from "@/shared/skeletons";
 import { Switch } from "@/shared/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip";
 import { cn } from "@/shared/lib/platform";
-import { findActiveSection, navSections, type NavHref } from "@/shared/lib/wallet";
-import { LIMITS } from "@/shared/lib/platform";
+import { findActiveSection, type NavHref } from "@/shared/lib/wallet";
+import { LIMITS, serverStateKeys } from "@/shared/lib/platform";
 import { currency, loadLocalNote, transactionDateText } from "@/shared/lib/wallet";
 import { EmptyState, Icon } from "@/shared/ui/page";
-import { MobileMoreSheet, MobileTabBar, RailLink, SidebarNav } from "@/app/shell/shell-nav";
+import { PageDataLoader } from "@/shared/ui/page-data-loader";
+import { MobileMoreSheet, MobileTabBar, PrimaryRail, SidebarNav } from "@/app/shell/shell-nav";
 import {
   buildSearchPages,
   searchPageLimit,
@@ -48,13 +56,7 @@ import {
   type SearchEntry,
 } from "@/app/shell/shell-search";
 
-/**
- * Every wallet page renders inside this shell. The provider loads the account, the wallet, the
- * first page of transactions, and the security overview from the API; the shell then gates the
- * content on that state, so no page ever renders a number the server has not confirmed. A page the
- * tab has already visited reopens from its cached snapshot, so the skeleton below is what a first
- * visit (or a hard reload) shows, not what every click does.
- */
+/** Every authenticated wallet page shares this data gate, loader, and application chrome. */
 export function WalletPage({
   children,
   titleKey,
@@ -62,8 +64,8 @@ export function WalletPage({
   children: ReactNode;
   /**
    * The page's name, as a translation key rather than as text: the shell is rendered before a route
-   * can know the language, and the breadcrumb, the browser tab, and the skeleton behind the page all
-   * have to agree on one name in the language current at paint time.
+   * can know the language, and the breadcrumb, browser tab, and loader label all use the language
+   * current at paint time.
    */
   titleKey: TranslationPath;
 }) {
@@ -75,11 +77,9 @@ export function WalletPage({
 }
 
 /**
- * The shell gates every page on the shared account load, and the loading state mirrors the page
- * behind it: `skeletonForPath()` resolves by the current route path (exact → section prefix →
- * title → generic), so renames can't break it, sub-pages inherit their section's shape
- * automatically, and unknown paths fall back loudly (dev warn + `check:skeletons` failure).
- * A new page only has to register its path in shared/skeletons — the shell needs no change.
+ * The shell keeps route content hidden until every active account read and page-specific request
+ * completes. The child route still mounts behind the loader, so its queries start together and the
+ * page never appears in pieces as individual requests finish.
  */
 function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: TranslationPath }) {
   const { user, userId, wallet, transactions, security, loading, error, refresh, signOut } =
@@ -98,6 +98,41 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
   const navigate = useNavigate();
   const location = useLocation();
   const mainRef = useRef<HTMLElement | null>(null);
+  const currentPathRef = useRef(location.pathname);
+  currentPathRef.current = location.pathname;
+  const [readyPath, setReadyPath] = useState<string | null>(null);
+  const [reportedLoads, setReportedLoads] = useState<{ pathname: string; ids: Set<string> }>({
+    pathname: location.pathname,
+    ids: new Set(),
+  });
+  const reportRouteLoad = useMemo(
+    () => (pathname: string, id: string, pending: boolean) => {
+      if (currentPathRef.current !== pathname) return;
+      setReportedLoads((current) => {
+        const ids = new Set(current.pathname === pathname ? current.ids : []);
+        const wasPending = ids.has(id);
+        if (pending) ids.add(id);
+        else ids.delete(id);
+        if (current.pathname === pathname && wasPending === pending) return current;
+        return { pathname, ids };
+      });
+    },
+    [],
+  );
+  const routeLoadingContext = useMemo(
+    () => ({ pathname: location.pathname, report: reportRouteLoad }),
+    [location.pathname, reportRouteLoad],
+  );
+  const routeQueryCount = useIsFetching({
+    type: "active",
+    predicate: (query) =>
+      query.state.data === undefined &&
+      (query.queryKey[0] === serverStateKeys.account[0] ||
+        (location.pathname.startsWith("/notifications") &&
+          query.queryKey[0] === serverStateKeys.notifications[0])),
+  });
+  const routeLoadsPending =
+    reportedLoads.pathname === location.pathname && reportedLoads.ids.size > 0;
   // <main> is the app shell's scroll container, so the router's window-based scroll
   // restoration cannot reset it: do it here whenever the route changes.
   useEffect(() => {
@@ -133,13 +168,37 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
    * visitor can never open a dashboard on the strength of old data.
    */
   const sessionConfirmed = user !== null;
+  const routeDataPending = routeQueryCount > 0 || routeLoadsPending;
+  const pageLoading = readyPath !== location.pathname || routeDataPending;
+
+  useIsomorphicLayoutEffect(() => {
+    if (
+      loading ||
+      !sessionConfirmed ||
+      error ||
+      accessClosed ||
+      routeQueryCount > 0 ||
+      routeLoadsPending
+    )
+      return;
+    setReadyPath(location.pathname);
+  }, [
+    accessClosed,
+    error,
+    loading,
+    location.pathname,
+    routeLoadsPending,
+    routeQueryCount,
+    sessionConfirmed,
+  ]);
   /**
    * With no query the panel is a quick launcher, so it lists the most used pages instead of all of
    * them. Transactions join the list as soon as the owner types.
    */
   const query = search.trim().toLowerCase();
   const browsing = query.length === 0;
-  const searchPages = useMemo(buildSearchPages, [language]);
+  const pro = useProAccess();
+  const searchPages = useMemo(() => buildSearchPages(language, pro), [language, pro]);
   const matchedPages = searchPages.filter(
     (page) =>
       !query || `${page.title} ${page.subtitle} ${page.terms}`.toLowerCase().includes(query),
@@ -176,8 +235,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
     void navigate({ to: href });
   };
   const closeMore = () => setMoreOpen(false);
-  // The chrome — header, rail, navigation — renders from data the app already has, so it is painted
-  // at once and only the page body waits (see PageSkeleton).
+  // The chrome stays in place while the page body waits for its complete data set.
   return (
     <div suppressHydrationWarning className="min-h-dvh bg-shell text-foreground">
       <header className="sticky top-0 z-50 flex h-[68px] items-center gap-2 bg-shell px-3 text-primary-foreground sm:gap-4 sm:px-5 dark:text-white">
@@ -230,11 +288,11 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
               collisionPadding={12}
               avoidCollisions
               aria-label={t("search.dialogAria")}
-              className="w-[min(880px,calc(100vw-2rem))] gap-0 overflow-hidden rounded-[26px] border-0 bg-card p-0 shadow-2xl"
+              className="w-[min(800px,calc(100vw-1.5rem))] gap-0 overflow-hidden rounded-[30px] border border-border/80 bg-card p-0 shadow-xl shadow-primary/10"
             >
-              <div className="p-3">
-                <div className="flex h-14 items-center gap-3 rounded-2xl border bg-card px-4 shadow-sm">
-                  <Icon icon={Search01Icon} size={20} className="shrink-0 text-muted-foreground" />
+              <div className="p-2.5 sm:p-3">
+                <div className="flex h-[52px] items-center gap-2.5 rounded-[18px] border bg-card px-3.5 shadow-sm sm:px-4">
+                  <Icon icon={Search01Icon} size={19} className="shrink-0 text-muted-foreground" />
                   <Input
                     autoFocus
                     aria-label={t("header.searchAria")}
@@ -242,36 +300,36 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder={t("search.placeholder")}
-                    className="h-auto flex-1 border-0 bg-transparent p-0 ps-2 text-[15px] shadow-none focus-visible:ring-0"
+                    className="h-auto flex-1 border-0 bg-transparent p-0 ps-2 text-sm shadow-none focus-visible:ring-0"
                   />
                   <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
-                    <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                    <kbd className="rounded-lg border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
                       Ctrl
                     </kbd>
-                    <kbd className="rounded-md border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                    <kbd className="rounded-lg border bg-secondary px-2 py-1 text-[11px] font-semibold text-muted-foreground">
                       K
                     </kbd>
                   </span>
                 </div>
               </div>
-              <div className="max-h-[48vh] min-h-[286px] overflow-y-auto px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <p className="px-2 py-3 text-[13px] font-semibold">{resultsHeading}</p>
+              <div className="max-h-[42vh] min-h-[230px] overflow-y-auto px-2.5 pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:px-3">
+                <p className="px-2 py-2.5 text-xs font-semibold tracking-wide text-muted-foreground">
+                  {resultsHeading}
+                </p>
                 {results.length ? (
                   results.map((entry) => (
                     <button
                       key={entry.id}
                       type="button"
                       onClick={() => openResult(entry.href)}
-                      className="flex w-full cursor-pointer items-center gap-3.5 rounded-2xl px-3 py-2.5 text-start transition-colors hover:bg-secondary"
+                      className="flex w-full cursor-pointer items-center gap-3 rounded-[18px] px-2.5 py-2 text-start transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset"
                     >
-                      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
-                        <Icon icon={entry.icon} size={20} />
+                      <span className="grid size-10 shrink-0 place-items-center rounded-[13px] bg-secondary/80">
+                        <Icon icon={entry.icon} size={19} />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[15px] font-semibold">
-                          {entry.title}
-                        </span>
-                        <span className="block truncate text-xs text-muted-foreground">
+                        <span className="block truncate text-sm font-semibold">{entry.title}</span>
+                        <span className="block truncate text-[11px] text-muted-foreground">
                           {entry.subtitle}
                         </span>
                       </span>
@@ -288,15 +346,42 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                   </p>
                 )}
               </div>
-              <div className="flex items-center justify-between gap-3 border-t bg-secondary/40 px-4 py-3">
-                <p className="text-sm text-muted-foreground">{t("search.cantFind")}</p>
-                <Button className="h-10 rounded-full px-5" onClick={() => openResult("/transfer")}>
+              <div className="flex items-center justify-between gap-3 border-t bg-secondary/30 px-3.5 py-2.5 sm:px-4">
+                <p className="text-xs text-muted-foreground sm:text-sm">{t("search.cantFind")}</p>
+                <Button
+                  className="h-9 shrink-0 rounded-xl px-4 text-sm"
+                  onClick={() => openResult("/transfer")}
+                >
                   <Icon icon={ArrowUpRight01Icon} size={18} />
                   {t("search.newTransfer")}
                 </Button>
               </div>
             </PopoverContent>
           </Popover>
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("header.billingAria")}
+                  className="rounded-full border border-primary-foreground/10 text-primary-foreground hover:bg-primary/20 hover:text-primary-foreground dark:border-white/10 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
+                >
+                  <Link to="/billing">
+                    <Icon icon={CreditCardIcon} />
+                  </Link>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="bottom"
+                sideOffset={10}
+                className="rounded-xl border border-primary/10 bg-card px-3.5 py-2 text-xs font-semibold text-foreground shadow-lg"
+              >
+                {t("header.billingAria")}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <WalletNotifications />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -322,6 +407,9 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                 </strong>
                 <span className="block truncate text-xs font-normal text-muted-foreground">
                   {user?.email ?? t("menu.notSignedIn")}
+                </span>
+                <span className="mt-2 inline-flex rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                  {translate(pro ? "common.state.pro" : "common.state.free")}
                 </span>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
@@ -394,16 +482,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
          * column next to a bar that already covers the same sections.
          */}
         <aside className="hidden h-full w-[72px] shrink-0 overflow-x-hidden overflow-y-auto border-e border-border bg-[#E9E9EC] lg:flex lg:flex-col dark:bg-card">
-          {/* Account-level sections stay out of the rail: the account menu owns them. */}
-          {navSections
-            .filter((section) => !section.accountLevel)
-            .map((section) => (
-              <RailLink
-                key={section.titleKey}
-                section={section}
-                current={section.titleKey === activeSection?.titleKey}
-              />
-            ))}
+          <PrimaryRail activeSection={activeSection} />
         </aside>
         <div className="hidden h-full shrink-0 bg-[#E9E9EC] lg:flex dark:bg-card">
           <SidebarNav pathname={location.pathname} scope="section" onNavigate={closeMore} />
@@ -424,7 +503,10 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
            * The shell reserves the mobile tab bar below this scroll area, so the page's normal
            * padding stays visible above it; the desktop shell has no bar and uses wider padding.
            */}
-          <div className="relative mx-auto max-w-[1380px] p-4 sm:p-5 lg:p-8">
+          <div
+            key={location.pathname}
+            className="route-view-enter relative mx-auto max-w-[1380px] p-4 sm:p-5 lg:p-8"
+          >
             <div className="mb-5 flex min-w-0 flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <Icon icon={Home04Icon} size={17} />
               {activeSection && activeSectionTitle(activeSection) !== title && (
@@ -456,15 +538,7 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                 }
               />
             ) : loading || !sessionConfirmed ? (
-              (() => {
-                // The skeleton registry is keyed by English page names, so the lookup is made in
-                // English whatever language the page itself is painted in.
-                const PageSkeleton = skeletonForPath(
-                  location.pathname,
-                  translateIn("en", titleKey),
-                );
-                return <PageSkeleton title={title} />;
-              })()
+              <PageDataLoader title={title} />
             ) : error ? (
               <EmptyState
                 title={t("error.unavailable")}
@@ -491,7 +565,19 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                 }
               />
             ) : (
-              children
+              <div className="relative">
+                <RouteLoadingContext.Provider value={routeLoadingContext}>
+                  <div
+                    aria-hidden={pageLoading}
+                    className={cn(pageLoading && "invisible pointer-events-none select-none")}
+                  >
+                    {children}
+                  </div>
+                </RouteLoadingContext.Provider>
+                {pageLoading && (
+                  <PageDataLoader title={title} className="page-data-loader-overlay" />
+                )}
+              </div>
             )}
           </div>
         </main>

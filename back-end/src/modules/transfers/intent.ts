@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import { isValidWalletAddress } from "../wallets/address.js";
 import { formatMoney } from "../ledger/money.js";
 import { badRequest, conflict, forbidden, notFound } from "../../shared/errors.js";
 import {
@@ -14,8 +15,8 @@ import {
 } from "../../shared/types.js";
 
 export const MAX_RECIPIENT_LENGTH = 128;
-/** A canonical Louma wallet address or a public `@handle`. The client checks the same shape. */
-export const RECIPIENT_PATTERN = /^(?:LMA[0-7][0-9A-HJKMNP-TV-Z]{27}|@[a-z0-9_]{4,24})$/i;
+/** A canonical Louma wallet address or an active custom address. The client checks the same shape. */
+export const RECIPIENT_PATTERN = /^(?:LMA[0-7][0-9A-HJKMNP-TV-Z]{27}|[a-z][a-z0-9]{2,15})$/i;
 /** A server-issued approval id: the uuid the preview endpoint mints. */
 const AUTHORIZATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
@@ -47,6 +48,7 @@ export function intentHashOf(intent: TransferIntent, senderWalletId: string): st
         recipientWalletId: intent.recipientWalletId,
         recipientUserId: intent.recipientUserId,
         recipientAddress: intent.recipientAddress.toLowerCase(),
+        ...(intent.recipientCustomAddress ? { recipientCustomAddress: intent.recipientCustomAddress } : {}),
         amountMinor: intent.amountMinor,
         feeMinor: intent.feeMinor,
         netAmountMinor: intent.netAmountMinor,
@@ -164,11 +166,11 @@ export function publicTransaction(transaction: TransferTransactionRecord, ownerU
 
 export function parseRecipientAddress(value: unknown): string {
   if (typeof value !== "string" || value.length > MAX_RECIPIENT_LENGTH) throw new Error("Enter a valid receiving address.");
-  const address = value.trim();
+  const address = value;
   if (!RECIPIENT_PATTERN.test(address)) {
-    throw badRequest("invalid_recipient", "Enter a valid Louma wallet address or @handle.");
+    throw badRequest("invalid_recipient", "Enter a valid Louma wallet address or a 3–16 character custom address.");
   }
-  return address.slice(0, 3).toUpperCase() === "LMA" ? address.toUpperCase() : `@${address.replace(/^@/, "").toLowerCase()}`;
+  return isValidWalletAddress(address) ? address.toUpperCase() : address.toLowerCase();
 }
 
 /**

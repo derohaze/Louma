@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AnalyticsRouteImport } from './routes/analytics'
+import { Route as BillingRouteRouteImport } from './routes/billing/route'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as HistoryRouteRouteImport } from './routes/history/route'
@@ -21,6 +22,8 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TransactionsRouteRouteImport } from './routes/transactions/route'
 import { Route as TransferRouteRouteImport } from './routes/transfer/route'
 import { Route as WalletRouteRouteImport } from './routes/wallet/route'
+import { Route as BillingIndexRouteImport } from './routes/billing/index'
+import { Route as BillingBenefitsRouteImport } from './routes/billing/benefits'
 import { Route as HistoryIndexRouteImport } from './routes/history/index'
 import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
 import { Route as MiningIndexRouteImport } from './routes/mining/index'
@@ -47,6 +50,11 @@ const IndexRoute = IndexRouteImport.update({
 const AnalyticsRoute = AnalyticsRouteImport.update({
   id: '/analytics',
   path: '/analytics',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BillingRouteRoute = BillingRouteRouteImport.update({
+  id: '/billing',
+  path: '/billing',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CustomAddressRoute = CustomAddressRouteImport.update({
@@ -98,6 +106,16 @@ const WalletRouteRoute = WalletRouteRouteImport.update({
   id: '/wallet',
   path: '/wallet',
   getParentRoute: () => rootRouteImport,
+} as any)
+const BillingIndexRoute = BillingIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => BillingRouteRoute,
+} as any)
+const BillingBenefitsRoute = BillingBenefitsRouteImport.update({
+  id: '/benefits',
+  path: '/benefits',
+  getParentRoute: () => BillingRouteRoute,
 } as any)
 const HistoryIndexRoute = HistoryIndexRouteImport.update({
   id: '/',
@@ -188,6 +206,7 @@ const WalletIndexRoute = WalletIndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/billing': typeof BillingRouteRouteWithChildren
   '/history': typeof HistoryRouteRouteWithChildren
   '/mining': typeof MiningRouteRouteWithChildren
   '/transactions': typeof TransactionsRouteRouteWithChildren
@@ -199,6 +218,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
+  '/billing/benefits': typeof BillingBenefitsRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
   '/mining/pools': typeof MiningPoolsRoute
@@ -208,6 +228,7 @@ export interface FileRoutesByFullPath {
   '/security/two-factor': typeof SecurityTwoFactorRoute
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
+  '/billing/': typeof BillingIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/mining/': typeof MiningIndexRoute
   '/profile/': typeof ProfileIndexRoute
@@ -225,6 +246,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
+  '/billing/benefits': typeof BillingBenefitsRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
   '/mining/pools': typeof MiningPoolsRoute
@@ -234,6 +256,7 @@ export interface FileRoutesByTo {
   '/security/two-factor': typeof SecurityTwoFactorRoute
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
+  '/billing': typeof BillingIndexRoute
   '/history': typeof HistoryIndexRoute
   '/mining': typeof MiningIndexRoute
   '/profile': typeof ProfileIndexRoute
@@ -246,6 +269,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/billing': typeof BillingRouteRouteWithChildren
   '/history': typeof HistoryRouteRouteWithChildren
   '/mining': typeof MiningRouteRouteWithChildren
   '/transactions': typeof TransactionsRouteRouteWithChildren
@@ -257,6 +281,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
+  '/billing/benefits': typeof BillingBenefitsRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
   '/mining/pools': typeof MiningPoolsRoute
@@ -266,6 +291,7 @@ export interface FileRoutesById {
   '/security/two-factor': typeof SecurityTwoFactorRoute
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
+  '/billing/': typeof BillingIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/mining/': typeof MiningIndexRoute
   '/profile/': typeof ProfileIndexRoute
@@ -279,6 +305,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/billing'
     | '/history'
     | '/mining'
     | '/transactions'
@@ -290,6 +317,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/notifications'
     | '/signup'
+    | '/billing/benefits'
     | '/history/$transferId'
     | '/mining/history'
     | '/mining/pools'
@@ -299,6 +327,7 @@ export interface FileRouteTypes {
     | '/security/two-factor'
     | '/transactions/$transferId'
     | '/transfer/recipients'
+    | '/billing/'
     | '/history/'
     | '/mining/'
     | '/profile/'
@@ -316,6 +345,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/notifications'
     | '/signup'
+    | '/billing/benefits'
     | '/history/$transferId'
     | '/mining/history'
     | '/mining/pools'
@@ -325,6 +355,7 @@ export interface FileRouteTypes {
     | '/security/two-factor'
     | '/transactions/$transferId'
     | '/transfer/recipients'
+    | '/billing'
     | '/history'
     | '/mining'
     | '/profile'
@@ -336,6 +367,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/billing'
     | '/history'
     | '/mining'
     | '/transactions'
@@ -347,6 +379,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/notifications'
     | '/signup'
+    | '/billing/benefits'
     | '/history/$transferId'
     | '/mining/history'
     | '/mining/pools'
@@ -356,6 +389,7 @@ export interface FileRouteTypes {
     | '/security/two-factor'
     | '/transactions/$transferId'
     | '/transfer/recipients'
+    | '/billing/'
     | '/history/'
     | '/mining/'
     | '/profile/'
@@ -368,6 +402,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BillingRouteRoute: typeof BillingRouteRouteWithChildren
   HistoryRouteRoute: typeof HistoryRouteRouteWithChildren
   MiningRouteRoute: typeof MiningRouteRouteWithChildren
   TransactionsRouteRoute: typeof TransactionsRouteRouteWithChildren
@@ -402,6 +437,13 @@ declare module '@tanstack/react-router' {
       path: '/analytics'
       fullPath: '/analytics'
       preLoaderRoute: typeof AnalyticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/billing': {
+      id: '/billing'
+      path: '/billing'
+      fullPath: '/billing'
+      preLoaderRoute: typeof BillingRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/custom-address': {
@@ -473,6 +515,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/wallet'
       preLoaderRoute: typeof WalletRouteRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/billing/': {
+      id: '/billing/'
+      path: '/'
+      fullPath: '/billing/'
+      preLoaderRoute: typeof BillingIndexRouteImport
+      parentRoute: typeof BillingRouteRoute
+    }
+    '/billing/benefits': {
+      id: '/billing/benefits'
+      path: '/benefits'
+      fullPath: '/billing/benefits'
+      preLoaderRoute: typeof BillingBenefitsRouteImport
+      parentRoute: typeof BillingRouteRoute
     }
     '/history/': {
       id: '/history/'
@@ -596,6 +652,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface BillingRouteRouteChildren {
+  BillingBenefitsRoute: typeof BillingBenefitsRoute
+  BillingIndexRoute: typeof BillingIndexRoute
+}
+
+const BillingRouteRouteChildren: BillingRouteRouteChildren = {
+  BillingBenefitsRoute: BillingBenefitsRoute,
+  BillingIndexRoute: BillingIndexRoute,
+}
+
+const BillingRouteRouteWithChildren = BillingRouteRoute._addFileChildren(
+  BillingRouteRouteChildren,
+)
+
 interface HistoryRouteRouteChildren {
   HistoryTransferIdRoute: typeof HistoryTransferIdRoute
   HistoryIndexRoute: typeof HistoryIndexRoute
@@ -667,6 +737,7 @@ const WalletRouteRouteWithChildren = WalletRouteRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BillingRouteRoute: BillingRouteRouteWithChildren,
   HistoryRouteRoute: HistoryRouteRouteWithChildren,
   MiningRouteRoute: MiningRouteRouteWithChildren,
   TransactionsRouteRoute: TransactionsRouteRouteWithChildren,

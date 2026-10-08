@@ -77,10 +77,13 @@ export const serverStateKeys = {
   account: ["account"] as const,
   profile: ["account", "profile"] as const,
   transactions: ["account", "transactions", ACCOUNT_PAGE_SIZE] as const,
+  transactionWindows: ["account", "transactions-window", ACCOUNT_PAGE_SIZE] as const,
+  transactionsForDays: (days: number) => [...serverStateKeys.transactionWindows, days] as const,
+  transfer: (transferId: string) => ["account", "transfer", transferId] as const,
   security: ["account", "security"] as const,
   mining: ["account", "mining"] as const,
   miningPools: ["account", "mining", "pools"] as const,
-  miningHistory: ["account", "mining", "history"] as const,
+  miningHistory: (days: number) => ["account", "mining", "history", days] as const,
   sessions: ["account", "sessions"] as const,
   notifications: ["notifications", NOTIFICATION_PAGE_SIZE] as const,
 };
@@ -96,6 +99,8 @@ export const serverStateFreshness = {
   miningMs: 15_000,
   /** Cycle history changes at most once a day; a longer window keeps paging cheap. */
   miningHistoryMs: 60_000,
+  /** Reuse the plan-bounded dashboard snapshot across every date selector. */
+  dashboardHistoryMs: 120_000,
   /** The device list and the session count on the security overview are the same fact, read twice. */
   sessionsMs: 60_000,
   notificationsMs: 30_000,
@@ -106,14 +111,14 @@ export const accountFetchers = {
   security: () => api.get<ApiSecurityOverview>("/api/v1/security"),
   mining: () => api.get<ApiMiningState>("/api/v1/mining/state"),
   miningPools: () => api.get<ApiMiningPoolsState>("/api/v1/mining/pools"),
-  miningHistory: (cursor: string | null) =>
+  miningHistory: (cursor: string | null, days: number) =>
     api.get<MiningHistoryPage>(
-      `/api/v1/mining/history?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+      `/api/v1/mining/history?limit=20&days=${days}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     ),
   sessions: () => api.get<{ sessions: ApiSession[] }>("/api/v1/sessions"),
-  transactions: (cursor: string | null) =>
+  transactions: (cursor: string | null, days?: number) =>
     api.get<TransactionPage>(
-      `/api/v1/transactions?limit=${ACCOUNT_PAGE_SIZE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+      `/api/v1/transactions?limit=${ACCOUNT_PAGE_SIZE}${days === undefined ? "" : `&days=${days}`}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     ),
   notifications: (cursor: string | null) =>
     api.get<NotificationPage>(

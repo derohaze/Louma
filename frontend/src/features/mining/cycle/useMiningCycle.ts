@@ -91,11 +91,16 @@ export function useMiningCycle() {
   const refetch = mining.refetch;
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") void refetch();
+      if (document.visibilityState === "visible") {
+        void queryClient.refetchQueries(
+          { queryKey: serverStateKeys.mining, stale: true },
+          { cancelRefetch: false },
+        );
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [refetch]);
+  }, [queryClient]);
 
   const session = mining.data?.session ?? null;
   const serverNowMs = tick + clockOffsetMs;

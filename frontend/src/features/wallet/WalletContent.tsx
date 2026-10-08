@@ -1,3 +1,4 @@
+import { useProAccess } from "@/shared/hooks";
 import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
@@ -144,15 +145,18 @@ export function WalletContent() {
   const t = useT("wallet.page");
   const common = useT("common");
   const { wallet, transactions } = useWallet();
+  const pro = useProAccess();
+  const receivingAddress = pro && wallet?.customAddress ? wallet.customAddress : wallet?.address;
+  const miningKey = useMemo(() => serverStateKeys.miningHistory(WINDOW_DAYS), []);
   const history = useInfiniteQuery<
     MiningHistoryPage,
     Error,
     InfiniteData<MiningHistoryPage, string | null>,
-    typeof serverStateKeys.miningHistory,
+    typeof miningKey,
     string | null
   >({
-    queryKey: serverStateKeys.miningHistory,
-    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam),
+    queryKey: miningKey,
+    queryFn: ({ pageParam }) => accountFetchers.miningHistory(pageParam, WINDOW_DAYS),
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     staleTime: serverStateFreshness.miningHistoryMs,
@@ -176,10 +180,10 @@ export function WalletContent() {
     },
   });
   useHistoryWalk<MiningHistoryPage>({
-    queryKey: serverStateKeys.miningHistory,
-    fetchPage: accountFetchers.miningHistory,
+    queryKey: miningKey,
+    fetchPage: (cursor) => accountFetchers.miningHistory(cursor, WINDOW_DAYS),
     nextCursor: (page) => page.nextCursor,
-    cap: 10,
+    cap: 20,
     enabled: wallet !== null,
   });
   const sessions = useMemo(
@@ -298,11 +302,11 @@ export function WalletContent() {
         style={{ animationDelay: "0ms" }}
         className="card-enter card-enter-hover mb-4 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-[22px] border bg-card p-4 shadow-sm"
       >
-        {wallet?.address && (
+        {receivingAddress && (
           /* The QR is generated in the browser, so the address never leaves the page. */
           <div className="rounded-2xl border bg-white p-2">
             <QRCodeSVG
-              value={wallet.address}
+              value={receivingAddress}
               size={88}
               level="M"
               marginSize={1}
@@ -312,11 +316,13 @@ export function WalletContent() {
             />
           </div>
         )}
-        <span className="text-[12px] font-semibold text-muted-foreground">{t("primaryAddress")}</span>
+        <span className="text-[12px] font-semibold text-muted-foreground">
+          {t("primaryAddress")}
+        </span>
         <code className="min-w-0 flex-1 break-all text-sm font-semibold tabular-nums">
-          {wallet?.address ?? "—"}
+          {receivingAddress ?? "—"}
         </code>
-        {wallet?.address && <CopyButton text={wallet.address} />}
+        {receivingAddress && <CopyButton text={receivingAddress} />}
         <span
           className={`flex items-center gap-2 text-[13px] font-bold ${frozen ? "text-destructive" : "text-success"}`}
         >
@@ -431,7 +437,9 @@ export function WalletContent() {
             className="card-enter card-enter-hover rounded-[22px] bg-foreground p-5 text-background shadow-sm"
           >
             <p className="font-display text-3xl font-bold tabular-nums">+{stats.count}</p>
-            <p className="mt-1 text-[12px] opacity-70">{t("totals.transfers", { days: WINDOW_DAYS })}</p>
+            <p className="mt-1 text-[12px] opacity-70">
+              {t("totals.transfers", { days: WINDOW_DAYS })}
+            </p>
           </section>
           <section
             style={{ animationDelay: "450ms" }}

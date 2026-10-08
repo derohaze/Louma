@@ -3,7 +3,7 @@ import { Key01Icon, SquareLock02Icon } from "@hugeicons/core-free-icons";
 import { Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
 import { currency } from "@/shared/lib/wallet";
-import { SendStepper } from "@/features/transfer/send/TransferQrScanner";
+import { SendStepper } from "@/features/transfer/send/SendStepper";
 import { TransferStageAddress } from "@/features/transfer/send/TransferStageAddress";
 import { TransferStageAmount } from "@/features/transfer/send/TransferStageAmount";
 import { TransferStageConfirm } from "@/features/transfer/send/TransferStageConfirm";

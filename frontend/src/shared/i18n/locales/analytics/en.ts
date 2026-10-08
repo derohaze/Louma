@@ -4,9 +4,11 @@ export default {
   range: {
     label: "Time range",
     days: "{days}d",
+    last1: "Last 24 hours",
     last7: "Last 7 days",
     last30: "Last 30 days",
     last90: "Last 90 days",
+    last120: "Last 120 days",
   },
   flow: {
     title: "Flow",
@@ -41,7 +43,7 @@ export default {
   },
   mining: {
     title: "Mining inside the window",
-    subtitle: "Collected mining against transfers in the same {days} days",
+    subtitle: "Collected mining against transfers · {range}",
     moved: "Transfers moved",
     collected: "Mining collected",
     open: "Open mining",

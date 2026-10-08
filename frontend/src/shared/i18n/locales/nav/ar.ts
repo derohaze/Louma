@@ -8,6 +8,7 @@ const ar: Strings<typeof en> = {
     transfer: "التحويل",
     mining: "التعدين",
     transactions: "الحركات",
+    billing: "الفواتير",
     profile: "الملف الشخصي",
     security: "الأمان",
     settings: "الإعدادات",
@@ -57,6 +58,14 @@ const ar: Strings<typeof en> = {
       label: "الحركات",
       search: "حركات سجل تحويلات بحث تصفية",
     },
+    billing: {
+      label: "الفواتير",
+      search: "الفواتير الاشتراك الخطة برو المزايا التاريخ",
+    },
+    billingBenefits: {
+      label: "مزايا الخطط",
+      search: "مزايا الخطط مقارنة مجاني برو فترات السجل عنوان مخصص",
+    },
     profile: {
       label: "الملف الشخصي",
       search: "بيانات الحساب الهوية",
@@ -88,6 +97,7 @@ const ar: Strings<typeof en> = {
   },
   chrome: {
     more: "المزيد",
+    pro: "برو",
     allPages: "كل الصفحات",
     allPagesDescription: "كل صفحات لوما، مجمّعة حسب القسم.",
     primaryNav: "التنقل الرئيسي",

@@ -14,12 +14,14 @@ export async function listMiningHistory(input: {
   ownerUserId: string;
   cursor: string | undefined;
   limit: number | undefined;
+  days: number;
 }): Promise<{ sessions: PublicMiningSession[]; nextCursor: string | null }> {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), MAX_PAGE_SIZE);
-  const filter: Record<string, unknown> = { ownerUserId: input.ownerUserId };
+  const cutoff = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+  const filter: Record<string, unknown> = { ownerUserId: input.ownerUserId, createdAt: { $gte: cutoff } };
   if (input.cursor) {
     const cursor = await input.collections.miningSessions.findOne(
-      { publicId: input.cursor, ownerUserId: input.ownerUserId },
+      { publicId: input.cursor, ownerUserId: input.ownerUserId, createdAt: { $gte: cutoff } },
       { projection: { createdAt: 1, publicId: 1 } },
     );
     if (!cursor) throw notFound();

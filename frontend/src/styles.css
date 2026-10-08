@@ -437,7 +437,6 @@ html[lang="ar"] {
   }
 
   .card-enter-hover:hover {
-    transform: translateY(-2px);
     box-shadow: 0 14px 34px -14px color-mix(in oklab, var(--foreground) 28%, transparent);
   }
 
@@ -450,7 +449,6 @@ html[lang="ar"] {
       transition: none;
     }
     .card-enter-hover:hover {
-      transform: none;
       box-shadow: none;
     }
   }
@@ -495,6 +493,97 @@ html[lang="ar"] {
   .list-enter {
     animation: t-list-enter 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
     will-change: transform, opacity;
+  }
+
+  .route-view-enter {
+    animation: none;
+  }
+
+  .route-view-enter .page-enter,
+  .route-view-enter .card-enter,
+  .route-view-enter .list-enter {
+    animation: none;
+    will-change: auto;
+  }
+
+  .page-data-loader {
+    display: grid;
+    min-height: clamp(17rem, 56vh, 28rem);
+    place-content: center;
+    justify-items: center;
+  }
+
+  .page-data-loader-overlay {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 20;
+    height: clamp(17rem, 56vh, 28rem);
+    background: #f5f5f6;
+  }
+
+  .dark .page-data-loader-overlay {
+    background: var(--background);
+  }
+
+  .page-data-loader-spinner {
+    position: relative;
+    width: 6rem;
+    height: 6rem;
+    perspective: 340px;
+    transform-style: preserve-3d;
+  }
+
+  .page-data-loader-spinner::before,
+  .page-data-loader-spinner::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 5.025rem;
+    height: 5.625rem;
+    margin: -2.8125rem 0 0 -2.5125rem;
+    content: "";
+    background: #000;
+    -webkit-mask-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNjYgMjk3Ij48cGF0aCBkPSJNMTcxLjUwNzgxMyAzLjI1IEMyMjYuMjA4MTgzIDEyLjg1NzcxMTEgMjk3LjExMjcyMiA3MS40OTEyODIzIDI1MC44OTU1OTkgMTA4LjQxMDE1NSBDMjE2LjU4MjAyNCAxMzUuODIwMzEgMTg2LjUyODQwNSA5Ny4wNjI0OTY0IDE1Ni44MDA3NzQgODUuNzczNDM0NiBDMTI3LjA3MzE0MyA3NC40ODQzNzIxIDc2Ljg4ODQ2MzIgODQuMjE2MTQ2MiA2MC4xMjg5MDY1IDEwOC40MTAxNTMgQy0xNS45ODA0Njg1IDIxOC4yODEyNDcgMTQ1LjI3NzM0NCAyOTYuNjY3OTY4IDE0NS4yNzczNDQgMjk2LjY2Nzk2OCBDMTQ1LjI3NzM0NCAyOTYuNjY3OTY4IC0yNS40NDkyMTg3IDI1Ny4yNDIxOTggMy4zOTg0Mzc1IDEwOC40MTAxNTUgQzE2LjMwNzA2NjEgNDEuODExNDE3NCA4NC43Mjc1ODI5IC0xMS45OTIyOTg1IDE3MS41MDc4MTMgMy4yNTAwMDAzOCBaIiBmaWxsPSIjMDAwIi8+PC9zdmc+");
+    mask-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNjYgMjk3Ij48cGF0aCBkPSJNMTcxLjUwNzgxMyAzLjI1IEMyMjYuMjA4MTgzIDEyLjg1NzcxMTEgMjk3LjExMjcyMiA3MS40OTEyODIzIDI1MC44OTU1OTkgMTA4LjQxMDE1NSBDMjE2LjU4MjAyNCAxMzUuODIwMzEgMTg2LjUyODQwNSA5Ny4wNjI0OTY0IDE1Ni44MDA3NzQgODUuNzczNDM0NiBDMTI3LjA3MzE0MyA3NC40ODQzNzIxIDc2Ljg4ODQ2MzIgODQuMjE2MTQ2MiA2MC4xMjg5MDY1IDEwOC40MTAxNTMgQy0xNS45ODA0Njg1IDIxOC4yODEyNDcgMTQ1LjI3NzM0NCAyOTYuNjY3OTY4IDE0NS4yNzczNDQgMjk2LjY2Nzk2OCBDMTQ1LjI3NzM0NCAyOTYuNjY3OTY4IC0yNS40NDkyMTg3IDI1Ny4yNDIxOTggMy4zOTg0Mzc1IDEwOC40MTAxNTUgQzE2LjMwNzA2NjEgNDEuODExNDE3NCA4NC43Mjc1ODI5IC0xMS45OTIyOTg1IDE3MS41MDc4MTMgMy4yNTAwMDAzOCBaIiBmaWxsPSIjMDAwIi8+PC9zdmc+");
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    transform-style: preserve-3d;
+    transform-origin: center;
+  }
+
+  .dark .page-data-loader-spinner::before,
+  .dark .page-data-loader-spinner::after {
+    background: #fff;
+  }
+
+  .page-data-loader-spinner::before {
+    animation: page-loader-before 750ms linear infinite reverse;
+  }
+
+  .page-data-loader-spinner::after {
+    animation: page-loader-after 750ms linear infinite;
+  }
+
+  @keyframes page-loader-before {
+    from {
+      transform: rotateX(60deg) rotateY(45deg) rotateZ(0deg);
+    }
+    to {
+      transform: rotateX(60deg) rotateY(45deg) rotateZ(-360deg);
+    }
+  }
+
+  @keyframes page-loader-after {
+    from {
+      transform: rotateX(240deg) rotateY(45deg) rotateZ(0deg);
+    }
+    to {
+      transform: rotateX(240deg) rotateY(45deg) rotateZ(360deg);
+    }
   }
 
   /*
@@ -557,9 +646,15 @@ html[lang="ar"] {
     .page-enter,
     .list-enter,
     .stage-enter,
-    .orb-enter {
+    .orb-enter,
+    .route-view-enter {
       animation: none;
       will-change: auto;
+    }
+
+    .page-data-loader-spinner::before,
+    .page-data-loader-spinner::after {
+      animation: none;
     }
   }
 }
