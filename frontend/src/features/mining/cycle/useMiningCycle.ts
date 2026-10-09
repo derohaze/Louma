@@ -15,10 +15,11 @@ import {
   serverStateKeys,
 } from "@/shared/lib/platform";
 import { translate } from "@/shared/i18n";
-import { currency, dateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
+import { currency, utcDateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
 import {
   countdown,
   liveSnapshot,
+  miningServerNow,
   nextPaint,
   windowSnapshot,
 } from "@/features/mining/cycle/mining-format";
@@ -45,7 +46,6 @@ export function useMiningCycle() {
     enabled: hasBrowserSession,
   });
 
-  const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const [tick, setTick] = useState(() => Date.now());
   const [busy, setBusy] = useState<"start" | "settle" | "stop" | null>(null);
   const [error, setError] = useState("");
@@ -74,13 +74,6 @@ export function useMiningCycle() {
     setFeed((current) => [...current.slice(-11), line]);
   }, []);
 
-  // The server's clock is the reference: the tab's own clock may be wrong, and the offset is what
-  // lets the countdown agree with the accrual the server reported.
-  useEffect(() => {
-    const serverNow = mining.data?.serverNow;
-    if (serverNow) setClockOffsetMs(new Date(serverNow).getTime() - Date.now());
-  }, [mining.data]);
-
   // One interval for the whole page, and only while a cycle is on screen.
   useEffect(() => {
     if (!mining.data?.session) return;
@@ -103,7 +96,9 @@ export function useMiningCycle() {
   }, [queryClient]);
 
   const session = mining.data?.session ?? null;
-  const serverNowMs = tick + clockOffsetMs;
+  const serverNowMs = mining.data
+    ? miningServerNow(mining.data.serverNow, mining.dataUpdatedAt, tick)
+    : tick;
   const live = useMemo(
     () => (session ? liveSnapshot(session, serverNowMs) : null),
     [session, serverNowMs],
@@ -168,7 +163,7 @@ export function useMiningCycle() {
           rate: session.rate,
         }),
       );
-      pushFeed(translate("mining.cycle.feed.windowEnds", { date: dateText(session.endsAt) }));
+      pushFeed(translate("mining.cycle.feed.windowEnds", { date: utcDateText(session.endsAt) }));
     }
   }, [session, pushFeed]);
 

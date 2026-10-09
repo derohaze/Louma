@@ -1,7 +1,12 @@
-import { MONEY_SCALE } from "@/shared/lib/wallet";
+import { MONEY_SCALE } from "@/shared/lib/wallet/wallet-format";
 import type { ApiMiningQuota, ApiMiningSession } from "@/shared/api";
 
 const SECONDS_PER_HOUR = 3600n;
+
+/** Advance cached state from when the response arrived, including time spent away from the page. */
+export function miningServerNow(serverNow: string, receivedAt: number, nowMs: number): number {
+  return Date.parse(serverNow) + Math.max(0, nowMs - receivedAt);
+}
 
 /**
  * The live numbers the page paints between server reads.

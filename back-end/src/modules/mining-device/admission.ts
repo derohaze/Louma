@@ -3,6 +3,7 @@ import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { MiningDeviceRecord } from "../../shared/types.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import {
+  ambiguousLeaseKey,
   decideClusterMatch,
   ipHash,
   isPresentationFeature,
@@ -38,8 +39,8 @@ export interface StartEligibility {
   riskScore: number;
   device: MiningDeviceRecord;
   /**
-   * Every device identity this start must lease: the resolved record's key hash plus the key hashes
-   * of its exact duplicates, so a racing start cannot lease a duplicate row and open a second cycle.
+   * Device identities and pairwise ambiguity tokens this start must lease atomically with its
+   * session, so correlated profiles cannot both pass admission before either cycle commits.
    */
   equivalentLeaseKeys: string[];  conflictingLeaseOwner: string | null;
 }
@@ -148,6 +149,7 @@ export async function assessMiningStart(input: {
   }
   const sameClusterKeys: string[] = [];
   const ambiguousClusterKeys: string[] = [];
+  const ambiguousPairKeys: string[] = [];
   let bestScore = input.resolution.match.score;
   // "A trait this machine used to report is now hidden" is only meaningful against a machine we
   // actually matched, never against an unrelated candidate that happens to own a WebGL digest.
@@ -177,11 +179,20 @@ export async function assessMiningStart(input: {
       if (match.missingHighEntropy) missingHighEntropyFields = true;
     } else if (verdict === "ambiguous") {
       ambiguousClusterKeys.push(...keys);
+      ambiguousPairKeys.push(ambiguousLeaseKey(config.encryptionKey, device.publicId, candidate.publicId));
     }
   }
   // Every identity this machine is known by must be leased together, so a start that raced ours (or
   // one holding a lease an earlier build took on the browser key) cannot open a second cycle.
-  const equivalentLeaseKeys = [...new Set([...ownLeaseKeys, ...sameClusterKeys])];
+  // A live-lease read alone misses two ambiguous profiles that both finish admission before either
+  // commits. Both sides lease the same pair token in the session transaction. Leasing all of the
+  // candidate's identities here would wrongly make unrelated A and C conflict just because each
+  // resembles B; the pair tokens enforce only the comparisons we actually made.
+  const equivalentLeaseKeys = [...new Set([
+    ...ownLeaseKeys,
+    ...sameClusterKeys,
+    ...(config.lmdg.riskMode === "monitor" ? [] : ambiguousPairKeys),
+  ])];
   // Network-scoped evidence: whether another account is already mining from this network, read
   // directly from the live leases (each carries the network its cycle was taken on), so the answer
   // is complete regardless of how many device records were seen there or how recently. Then: has

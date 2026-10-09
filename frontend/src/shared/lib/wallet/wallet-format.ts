@@ -1,4 +1,4 @@
-import { currentLocale } from "@/shared/i18n";
+import { currentLocale } from "@/shared/i18n/config";
 
 /** Louma's ticker; every amount the wallet shows goes through here. */
 const CURRENCY = "LMA";
@@ -101,10 +101,12 @@ export const dateText = (date: string) =>
     new Date(date),
   );
 
-/** Transfer times use UTC so both wallets display the same instant across device time zones. */
-export const transactionDateText = (date: string) =>
+/** Shared event times stay identical even when a privacy browser reports a different time zone. */
+export const utcDateText = (date: string) =>
   `${new Intl.DateTimeFormat(currentLocale(), {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "UTC",
   }).format(new Date(date))} UTC`;
+
+export const transactionDateText = utcDateText;

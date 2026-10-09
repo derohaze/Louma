@@ -1021,6 +1021,80 @@ test("NEAR-CLONE RACE: two accounts editing identity slots cannot both mine one 
   }
 });
 
+test("EXISTING PROFILE RACE: ambiguous browser identities cannot both pass before either cycle commits", async (t) => {
+  const { resolveOrCreateDevice } = await import("../modules/mining-device/resolution.js");
+  const { toCandidate, observedFeatures } = await import("../modules/mining-device/resolution.js");
+  const a = await register("existing-race-a");
+  const b = await register("existing-race-b");
+  const evidenceA = deviceEvidence("laptop-x", "existing-profile-race");
+  const evidenceB = {
+    ...evidenceA,
+    hardwareConcurrency: evidenceA["hardwareConcurrency"] === 2 ? 8 : 2,
+    visitorId: `existing-profile-b-${RUN}`,
+    browserKeyPublicKey: `existing-profile-b-${RUN}`,
+  };
+  const intel = { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null };
+  const resolve = (account: Account, evidenceRaw: unknown) => resolveOrCreateDevice({
+    collections, config, evidenceRaw, ip: null, intel,
+    ownerUserId: account.userId, correlationId: randomUUID(),
+  });
+  const firstDevice = await resolve(a, evidenceA);
+  const secondDevice = await resolve(b, evidenceB);
+  assert.notEqual(firstDevice.device.publicId, secondDevice.device.publicId);
+  const match = matchDeviceFeatures(toCandidate(firstDevice.device), observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence(evidenceB))), config.encryptionKey);
+  assert.equal(decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold), "ambiguous");
+  // Both profiles have mined here before, as in the report. Network residency must not turn
+  // the device rule into a read-before-write check with no transactional conflict.
+  const ip = "10.18.18.18";
+  const now = new Date();
+  await collections.miningDevices.updateMany(
+    { publicId: { $in: [firstDevice.device.publicId, secondDevice.device.publicId] } },
+    { $set: {
+      trustState: "established", establishedAt: now, admissionCount: config.lmdg.establishMinAdmissions,
+      networkTrusts: [{ ipHash: ipHash(config.encryptionKey, ip)!, admissions: config.lmdg.establishMinAdmissions, proofs: 0, firstAt: now, lastAt: now }],
+    } },
+  );
+
+  // Both requests must finish admission before either inserts a session. An ordinary Promise.all
+  // can accidentally test the sequential refusal and miss this window entirely.
+  const insertOne = collections.miningSessions.insertOne.bind(collections.miningSessions);
+  let arrivals = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  const timeout = setTimeout(release, 10_000);
+  const insertion = t.mock.method(collections.miningSessions, "insertOne", async (...args: Parameters<typeof insertOne>) => {
+    if ([a.userId, b.userId].includes(args[0].ownerUserId)) {
+      if (++arrivals === 2) release();
+      await gate;
+    }
+    return insertOne(...args);
+  });
+  let results;
+  try {
+    results = await Promise.all([a, b].map((account, index) => call("POST", "/api/v1/mining/start", {
+      token: account.accessToken, body: { device: index === 0 ? evidenceA : evidenceB }, ip,
+    })));
+  } finally {
+    clearTimeout(timeout);
+    insertion.mock.restore();
+  }
+  assert.equal(arrivals, 2, "both starts reached persistence before either committed");
+  const statuses = results.map((result) => result.status).sort();
+  const activeSessions = await collections.miningSessions.countDocuments({ ownerUserId: { $in: [a.userId, b.userId] }, status: "active" });
+  t.diagnostic(`simultaneous start results: ${JSON.stringify(statuses)}; active sessions: ${activeSessions}`);
+  assert.deepEqual(statuses, [200, 409], `simultaneous start results: ${JSON.stringify(statuses)}`);
+  assert.equal((results.find((result) => result.status === 409)!.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  assert.equal(activeSessions, 1);
+  const winner = results[0]!.status === 200 ? a : b;
+  const loser = winner === a ? b : a;
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: loser.userId, status: "active" }), 0);
+  const retried = await call("POST", "/api/v1/mining/start", {
+    token: loser.accessToken, body: { device: loser === a ? evidenceA : evidenceB }, ip,
+  });
+  assert.equal(retried.status, 409, "the losing browser is also refused after the winner commits");
+  assert.equal((await call("POST", "/api/v1/mining/stop", { token: winner.accessToken })).status, 200);
+});
+
 /**
  * The two tests below start a *deliberately edited* fixture, and an edited shape is not covered by the
  * fixture code's three-slot minimum distance: it can land within a slot or two of an unrelated test's

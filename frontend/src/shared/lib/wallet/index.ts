@@ -30,6 +30,7 @@ export {
   transferTax,
   transferNet,
   dateText,
+  utcDateText,
   transactionDateText,
 } from "./wallet-format";
 export type { NavHref, NavSection } from "./wallet-nav";

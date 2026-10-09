@@ -2,7 +2,7 @@ import NumberFlow from "@number-flow/react";
 import { Coins01Icon, StopCircleIcon } from "@hugeicons/core-free-icons";
 import { useT } from "@/shared/i18n";
 import { FactList } from "@/shared/ui/panels";
-import { MONEY_SCALE, currency, dateText } from "@/shared/lib/wallet";
+import { MONEY_SCALE, currency, utcDateText } from "@/shared/lib/wallet";
 import { MiningOrb } from "@/features/mining/live/MiningOrb";
 import { MiningLiveLog } from "@/features/mining/live/MiningLiveLog";
 import { MiningBusyButton } from "@/features/mining/cycle/MiningBusyButton";
@@ -155,10 +155,10 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
                 t("active.facts.cycle"),
                 t("active.facts.cycleValue", {
                   number: session.cycleNumber,
-                  date: dateText(session.startedAt),
+                  date: utcDateText(session.startedAt),
                 }),
               ],
-              [t("active.facts.windowEnds"), dateText(session.endsAt)],
+              [t("active.facts.windowEnds"), utcDateText(session.endsAt)],
               [t("active.facts.maximum"), currency(session.totalAccrued)],
             ]}
           />
