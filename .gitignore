@@ -8,6 +8,7 @@ AGENTS.md
 .workbuddy-ai
 # Local-only developer tooling, never part of the shipped app.
 port-killer.py
+/scripts/activate-developer.py
 # ---------------------------------------------------------------------------
 # Dependencies and build output (frontend/.gitignore covers these too, repeated
 # here so they are ignored wherever the tooling runs from).
@@ -55,6 +56,6 @@ Thumbs.db
 customer-dashboard
 
 
-portal
+
 # Local Pro activation tool (operator only).
 /scripts/activate-pro.py

@@ -1,0 +1,184 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-danger-soft: var(--danger-soft);
+  --color-ink: var(--ink);
+  --color-ink-foreground: var(--ink-foreground);
+  --color-shell: var(--shell);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --shadow-soft: 0 1px 2px oklch(0.2 0.02 300 / 0.04), 0 8px 24px -8px oklch(0.2 0.02 300 / 0.08);
+  --shadow-float:
+    0 2px 4px oklch(0.2 0.02 300 / 0.04), 0 24px 60px -20px oklch(0.3 0.08 305 / 0.25);
+  --shadow-shell: 0 40px 120px -40px oklch(0.3 0.08 305 / 0.35), 0 0 0 1px oklch(1 0 0 / 0.7) inset;
+}
+
+:root {
+  --radius: 1rem;
+  /* Whole-console scale (1 = 100%). body zoom reads it; the shell
+     compensates its fixed viewport height with the same value. */
+  --ui-scale: 0.9;
+  --background: oklch(0.968 0.003 265);
+  --shell: oklch(0.955 0.006 300);
+  --foreground: oklch(0.22 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0 0);
+  --primary: oklch(0.52 0.155 305);
+  --primary-foreground: oklch(0.99 0 0);
+  --primary-soft: oklch(0.95 0.03 305);
+  --secondary: oklch(0.965 0.004 300);
+  --secondary-foreground: oklch(0.22 0 0);
+  --muted: oklch(0.965 0.004 300);
+  --muted-foreground: oklch(0.52 0.01 290);
+  --accent: oklch(0.95 0.03 305);
+  --accent-foreground: oklch(0.42 0.15 305);
+  --destructive: oklch(0.58 0.21 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --danger-soft: oklch(0.96 0.03 25);
+  --success: oklch(0.58 0.14 155);
+  --success-soft: oklch(0.96 0.04 155);
+  --warning: oklch(0.66 0.15 65);
+  --warning-soft: oklch(0.96 0.05 80);
+  --info: oklch(0.56 0.13 245);
+  --info-soft: oklch(0.96 0.03 245);
+  --ink: oklch(0.19 0 0);
+  --ink-foreground: oklch(0.85 0 0);
+  --border: oklch(0.92 0.005 300);
+  --input: oklch(0.92 0.005 300);
+  --ring: oklch(0.52 0.155 305 / 0.5);
+  --chart-1: oklch(0.52 0.155 305);
+  --chart-2: oklch(0.72 0.1 305);
+  --chart-3: oklch(0.86 0.05 305);
+  --chart-4: oklch(0.58 0.14 155);
+  --chart-5: oklch(0.66 0.15 65);
+  --sidebar: oklch(0.955 0.006 300);
+  --sidebar-foreground: oklch(0.22 0 0);
+  --sidebar-primary: oklch(0.52 0.155 305);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(1 0 0);
+  --sidebar-accent-foreground: oklch(0.22 0 0);
+  --sidebar-border: oklch(0.92 0.005 300);
+  --sidebar-ring: oklch(0.52 0.155 305);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    font-family: var(--font-sans);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    /* Whole-console scale: render the interface at 90% like browser zoom. */
+    zoom: var(--ui-scale);
+  }
+
+  /*
+   * No visible scrollbars anywhere: scrolling still works with wheel, touch,
+   * and keyboard — only the classic scrollbar chrome is removed.
+   */
+  * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  *::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer components {
+  .app-backdrop {
+    background:
+      radial-gradient(60% 50% at 10% 0%, oklch(0.9 0.05 305 / 0.7), transparent 70%),
+      radial-gradient(50% 50% at 100% 100%, oklch(0.92 0.04 260 / 0.6), transparent 70%),
+      var(--background);
+  }
+  .app-shell {
+    background: var(--shell);
+    box-shadow: var(--shadow-shell);
+  }
+  .surface {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-soft);
+  }
+  .surface-inset {
+    background: var(--muted);
+    border-radius: var(--radius-lg);
+  }
+  .nav-item {
+    @apply flex items-center gap-3 rounded-xl px-3 py-2 text-[13.5px] font-medium text-muted-foreground transition-all duration-200;
+  }
+  .nav-item:hover {
+    @apply bg-card text-foreground;
+    box-shadow: var(--shadow-soft);
+  }
+  .nav-item-active {
+    @apply bg-card text-foreground;
+    box-shadow: var(--shadow-soft);
+  }
+  .lift {
+    @apply transition-all duration-200;
+  }
+  .lift:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-float);
+  }
+}

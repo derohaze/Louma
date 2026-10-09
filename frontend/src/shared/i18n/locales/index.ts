@@ -5,6 +5,8 @@ import analyticsEn from "./analytics/en";
 import authEn from "./auth/en";
 import billingEn from "./billing/en";
 import commonEn from "./common/en";
+import developerEn from "./developer/en";
+import checkoutEn from "./checkout/en";
 import miningPageEn from "./mining/page/en";
 import miningCycleEn from "./mining/cycle/en";
 import miningHistoryEn from "./mining/history/en";
@@ -36,6 +38,8 @@ import analyticsAr from "./analytics/ar";
 import authAr from "./auth/ar";
 import billingAr from "./billing/ar";
 import commonAr from "./common/ar";
+import developerAr from "./developer/ar";
+import checkoutAr from "./checkout/ar";
 import miningPageAr from "./mining/page/ar";
 import miningCycleAr from "./mining/cycle/ar";
 import miningHistoryAr from "./mining/history/ar";
@@ -81,6 +85,8 @@ export const en = {
   auth: authEn,
   billing: billingEn,
   common: commonEn,
+  developer: developerEn,
+  checkout: checkoutEn,
   mining: {
     page: miningPageEn,
     cycle: miningCycleEn,
@@ -131,6 +137,8 @@ export const dictionaries: Record<LanguageCode, Dictionary> = {
     auth: authAr,
     billing: billingAr,
     common: commonAr,
+    developer: developerAr,
+    checkout: checkoutAr,
     mining: {
       page: miningPageAr,
       cycle: miningCycleAr,

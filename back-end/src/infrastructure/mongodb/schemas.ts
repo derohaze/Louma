@@ -163,7 +163,7 @@ export const schemas: Record<string, Document> = {
       required: ["publicId", "type", "currency", "status", "correlationId", "createdAt", "completedAt"],
       properties: {
         publicId: { bsonType: "string" },
-        type: { enum: ["transfer", "mining"] },
+        type: { enum: ["transfer", "mining", "merchant_payment", "merchant_refund"] },
         currency: { enum: ["LMA"] },
         status: { enum: ["completed"] },
         correlationId: { bsonType: "string" },
@@ -197,8 +197,43 @@ export const schemas: Record<string, Document> = {
               required: ["ownerUserId", "walletId", "miningSessionId", "sequenceNumber", "amountMinor", "treasuryAccountId", "idempotencyKey"],
               properties: { type: { enum: ["mining"] }, ownerUserId: { bsonType: "string" }, walletId: { bsonType: "string" }, miningSessionId: { bsonType: "string" }, sequenceNumber: { bsonType: "int", minimum: 1 }, treasuryAccountId: { bsonType: "string" }, walletAccountId: { bsonType: "string" } },
             },
+            {
+              required: ["paymentId", "operationId", "merchantId", "senderUserId", "receiverUserId", "senderWalletId", "receiverWalletId", "participants", "senderAddress", "receiverAddress", "amountMinor", "feeMinor", "netAmountMinor", "note", "idempotencyKey", "requestFingerprint", "balanceAfterMinor"],
+              properties: {
+                type: { enum: ["merchant_payment", "merchant_refund"] },
+                paymentId: { bsonType: "string", minLength: 36, maxLength: 36 },
+                operationId: { bsonType: "string", minLength: 36, maxLength: 36 },
+                merchantId: { bsonType: "string", minLength: 36, maxLength: 36 },
+                senderUserId: { bsonType: "string" }, receiverUserId: { bsonType: "string" },
+                senderWalletId: { bsonType: "string" }, receiverWalletId: { bsonType: "string" },
+                senderAddress: { bsonType: "string" }, receiverAddress: { bsonType: "string" },
+                note: { bsonType: "string", maxLength: 240 },
+              },
+              allOf: [
+                { not: { required: ["transferId"] } },
+                { anyOf: [
+                  { properties: { type: { enum: ["merchant_payment"] } }, not: { required: ["originalPaymentId"] } },
+                  { required: ["originalPaymentId"], properties: { type: { enum: ["merchant_refund"] }, originalPaymentId: { bsonType: "string", minLength: 36, maxLength: 36 }, feeMinor: { enum: [0] } } },
+                ] },
+              ],
+            },
           ],
         },
+      ],
+    },
+    $expr: {
+      $cond: [
+        { $in: ["$type", ["merchant_payment", "merchant_refund"]] },
+        { $and: [
+          { $eq: ["$amountMinor", { $add: ["$feeMinor", "$netAmountMinor"] }] },
+          { $eq: ["$amountMinor", { $trunc: "$amountMinor" }] },
+          { $eq: ["$feeMinor", { $trunc: "$feeMinor" }] },
+          { $eq: ["$netAmountMinor", { $trunc: "$netAmountMinor" }] },
+          { $eq: ["$balanceAfterMinor", { $trunc: "$balanceAfterMinor" }] },
+          { $eq: ["$participants", ["$senderUserId", "$receiverUserId"]] },
+          { $ne: ["$senderWalletId", "$receiverWalletId"] },
+        ] },
+        true,
       ],
     },
   },

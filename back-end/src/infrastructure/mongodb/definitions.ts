@@ -66,6 +66,11 @@ export async function ensureCoreIndexes(db: Db): Promise<void> {
     db.collection("ledger_entries").createIndex({ transactionId: 1, lineNumber: 1 }, { unique: true, name: "ledger_entries_transaction_line_unique" }),
     db.collection("ledger_entries").createIndex({ ledgerAccountId: 1, createdAt: -1, publicId: -1 }, { name: "ledger_entries_account_history" }),
     db.collection("transactions").createIndex({ publicId: 1 }, { unique: true, name: "transactions_public_id_unique" }),
+    // One durable journal per gateway operation, independently of P2P/mining replay namespaces.
+    db.collection("transactions").createIndex(
+      { type: 1, operationId: 1 },
+      { unique: true, partialFilterExpression: { type: { $in: ["merchant_payment", "merchant_refund"] } }, name: "transactions_merchant_operation_unique" },
+    ),
     // Scoped to transfers: a mining header has neither a transfer id nor an idempotency key in the
     // customer's namespace, so it must not be forced to invent one to satisfy a unique index.
     db.collection("transactions").createIndex({ senderUserId: 1, createdAt: -1, publicId: -1 }, { name: "transactions_sender_history" }),

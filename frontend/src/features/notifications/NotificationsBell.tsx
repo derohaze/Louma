@@ -5,9 +5,8 @@ import { ArrowRight01Icon, Notification01Icon } from "@hugeicons/core-free-icons
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { useT } from "@/shared/i18n";
-import { dateText } from "@/shared/lib/wallet";
 import { notificationKindIcons } from "./notification-icons";
-import { notificationText } from "./notification-text";
+import { notificationDateText, notificationText } from "./notification-text";
 import { useNotificationFeed } from "./useNotificationFeed";
 
 /**
@@ -160,7 +159,7 @@ export function WalletNotifications() {
                             {copy.body}
                           </p>
                           <p className="mt-1 text-[12px] text-gray-400 dark:text-zinc-500">
-                            {dateText(item.createdAt)}
+                            {notificationDateText(item)}
                           </p>
                         </div>
                       </div>

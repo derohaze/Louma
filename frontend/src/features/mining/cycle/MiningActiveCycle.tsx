@@ -122,8 +122,8 @@ export function MiningActiveCycle({ cycle }: { cycle: MiningCycle }) {
           </div>
           {/**
            * The bar carries the *window*, not the segment: the big countdown above is this cycle's
-           * own remaining time, while this is the account's whole 10 hours — mined across every
-           * cycle, in whichever browser, read back from the server — so it never restarts at zero
+           * own remaining time, while this is the limiting account/device allowance — used across
+           * cycles and accounts on the device, read back from the server — so it never restarts at zero
            * when a page is reopened or a cycle is stopped and resumed.
            */}
           <div className="mt-2 flex flex-wrap justify-between gap-x-4 text-xs text-muted-foreground">

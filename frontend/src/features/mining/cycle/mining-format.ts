@@ -35,11 +35,10 @@ export function liveSnapshot(session: ApiMiningSession, serverNowMs: number) {
 export type LiveSnapshot = ReturnType<typeof liveSnapshot>;
 
 /**
- * The window's own numbers — what the account has mined inside its 24-hour window, and what is left
- * of the 10 hours — advanced locally between server reads.
+ * The limiting account/device window's numbers, advanced locally between server reads.
  *
  * `quota.consumedSeconds` is the server's accumulated sum for that window, so it already contains
- * every earlier segment of this account, whichever browser or device mined it. The only local
+ * every earlier segment of the limiting account or device. The only local
  * addition is the growth of the *running* segment since that read, measured on the same live
  * snapshot the cycle countdown uses: a stopped account's window stops counting, and a reopened page
  * continues the same total instead of restarting from zero.

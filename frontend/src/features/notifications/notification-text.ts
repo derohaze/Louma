@@ -1,6 +1,15 @@
 import type { ApiNotification } from "@/shared/api";
 import type { TranslationParams } from "@/shared/i18n";
-import { moneyFromMinorUnits } from "@/shared/lib/wallet";
+import { dateText, moneyFromMinorUnits, transactionDateText } from "@/shared/lib/wallet";
+
+/** Transfer notices use the receipt's UTC time in both notification views. */
+export function notificationDateText(
+  notification: Pick<ApiNotification, "kind" | "createdAt">,
+): string {
+  return notification.kind === "transfer_sent" || notification.kind === "transfer_received"
+    ? transactionDateText(notification.createdAt)
+    : dateText(notification.createdAt);
+}
 
 /**
  * The title and body of one notice in the reader's language.

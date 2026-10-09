@@ -1,6 +1,14 @@
 import type { ClientSession, MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
-import type { ReconciliationIssue } from "../../shared/types.js";
+import {
+  LEDGER_AMOUNT_MAX_MINOR,
+  type LedgerAccountRecord,
+  type LedgerEntryRecord,
+  type MerchantPaymentTransactionRecord,
+  type MerchantRefundTransactionRecord,
+  type ReconciliationIssue,
+  type WalletRecord,
+} from "../../shared/types.js";
 
 /**
  * Internal financial reconciliation. Not a public or customer-facing surface: it exists so the
@@ -15,6 +23,84 @@ import type { ReconciliationIssue } from "../../shared/types.js";
  */
 
 const SCAN_BATCH_SIZE = 500;
+
+type MerchantJournal = MerchantPaymentTransactionRecord | MerchantRefundTransactionRecord;
+
+interface MerchantJournalEvidence {
+  header: MerchantJournal;
+  lines: readonly LedgerEntryRecord[];
+  accounts: readonly LedgerAccountRecord[];
+  wallets: readonly Pick<WalletRecord, "publicId" | "ownerUserId">[];
+  original: MerchantPaymentTransactionRecord | null;
+}
+
+function merchantHeaderMatches(header: MerchantJournal): boolean {
+  const monetaryFields = [header.amountMinor, header.feeMinor, header.netAmountMinor];
+  return monetaryFields.every((amount) => Number.isSafeInteger(amount) && amount >= 0 && amount <= LEDGER_AMOUNT_MAX_MINOR) &&
+    header.amountMinor > 0 && header.netAmountMinor > 0 && header.amountMinor - header.feeMinor === header.netAmountMinor &&
+    header.senderWalletId !== header.receiverWalletId &&
+    header.participants?.length === 2 && header.participants[0] === header.senderUserId && header.participants[1] === header.receiverUserId &&
+    (header.type !== "merchant_refund" || (header.feeMinor === 0 && header.netAmountMinor === header.amountMinor));
+}
+
+function merchantRefundMatches(header: MerchantRefundTransactionRecord, original: MerchantPaymentTransactionRecord | null): boolean {
+  return original !== null && original.paymentId === header.originalPaymentId && header.paymentId === original.paymentId &&
+    original.merchantId === header.merchantId && header.amountMinor <= original.amountMinor &&
+    header.senderUserId === original.receiverUserId && header.receiverUserId === original.senderUserId &&
+    header.senderWalletId === original.receiverWalletId && header.receiverWalletId === original.senderWalletId;
+}
+
+/** A balanced set alone cannot prove which wallet received a merchant's money. */
+export function merchantJournalIssues(evidence: MerchantJournalEvidence): ReconciliationIssue[] {
+  const { header, lines, accounts, wallets, original } = evidence;
+  const issues: ReconciliationIssue[] = [];
+  const mismatch = (detail: string) => issues.push({ kind: "journal_mismatch", severity: "critical", transactionId: header.publicId, detail: `Transaction ${header.publicId}: ${detail}` });
+  if (!merchantHeaderMatches(header)) mismatch("merchant financial intent or participants are inconsistent");
+  if (header.type === "merchant_refund" && !merchantRefundMatches(header, original)) mismatch("refund does not reverse its original merchant payment");
+  const expected = [
+    { walletId: header.senderWalletId, ownerUserId: header.senderUserId, side: "debit", amountMinor: header.amountMinor, accountType: "wallet" },
+    { walletId: header.receiverWalletId, ownerUserId: header.receiverUserId, side: "credit", amountMinor: header.netAmountMinor, accountType: "wallet" },
+    ...(header.feeMinor > 0 ? [{ walletId: null, ownerUserId: null, side: "credit", amountMinor: header.feeMinor, accountType: "fee_revenue" }] : []),
+  ];
+  if (lines.length !== expected.length) mismatch("merchant journal has an unexpected number of ledger lines");
+  for (const posting of expected) {
+    const matching = lines.filter((line) => line.walletId === posting.walletId && line.side === posting.side && line.amountMinor === posting.amountMinor);
+    const line = matching[0];
+    const account = line && accounts.find((candidate) => candidate.publicId === line.ledgerAccountId);
+    if (matching.length !== 1 || !line || line.currency !== "LMA" || account?.currency !== "LMA" || account.accountType !== posting.accountType || account.walletId !== posting.walletId) mismatch("ledger lines do not implement the authorized wallet and fee breakdown");
+    if (posting.walletId && !wallets.some((wallet) => wallet.publicId === posting.walletId && wallet.ownerUserId === posting.ownerUserId)) mismatch("journal wallet ownership does not match its participant");
+  }
+  return issues;
+}
+
+async function reconcileMerchantJournals(input: { collections: Collections; session?: ClientSession }): Promise<ReconciliationIssue[]> {
+  const issues: ReconciliationIssue[] = [];
+  const sessionOptions = input.session ? { session: input.session } : {};
+  const cursor = input.collections.transactions.find({ type: { $in: ["merchant_payment", "merchant_refund"] } }, { batchSize: SCAN_BATCH_SIZE, ...sessionOptions });
+  while (await cursor.hasNext()) {
+    const header = await cursor.next();
+    if (!header || (header.type !== "merchant_payment" && header.type !== "merchant_refund")) continue;
+    // Four rows also expose an extra line without materializing an unbounded corrupt journal.
+    const lines = await input.collections.ledgerEntries.find({ transactionId: header.publicId }, sessionOptions).limit(4).toArray();
+    const accounts = await input.collections.ledgerAccounts.find({ publicId: { $in: lines.map((line) => line.ledgerAccountId) } }, sessionOptions).toArray();
+    const wallets = await input.collections.wallets.find({ publicId: { $in: [header.senderWalletId, header.receiverWalletId] } }, { projection: { publicId: 1, ownerUserId: 1 }, ...sessionOptions }).toArray();
+    const original = header.type === "merchant_refund" ? await input.collections.transactions.findOne({ type: "merchant_payment", operationId: header.originalPaymentId }, sessionOptions) : null;
+    issues.push(...merchantJournalIssues({ header, lines, accounts, wallets, original: original?.type === "merchant_payment" ? original : null }));
+  }
+  await cursor.close();
+  const refunds = input.collections.transactions.aggregate<{ _id: string; refundedMinor: number }>([
+    { $match: { type: "merchant_refund" } },
+    { $group: { _id: "$originalPaymentId", refundedMinor: { $sum: "$amountMinor" } } },
+  ], { batchSize: SCAN_BATCH_SIZE, allowDiskUse: true, ...sessionOptions });
+  while (await refunds.hasNext()) {
+    const refund = await refunds.next();
+    if (!refund) break;
+    const original = await input.collections.transactions.findOne({ type: "merchant_payment", operationId: refund._id }, sessionOptions);
+    if (original?.type === "merchant_payment" && refund.refundedMinor > original.amountMinor) issues.push({ kind: "journal_mismatch", severity: "critical", transactionId: original.publicId, detail: `Payment ${refund._id}: total refunds ${refund.refundedMinor} exceed buyer total ${original.amountMinor}` });
+  }
+  await refunds.close();
+  return issues;
+}
 
 /**
  * Normal side by account type. Wallets and fee revenue are credit-normal (a credit grows the
@@ -274,7 +360,8 @@ export async function reconcileLedger(input: {
       ...(input.options ? { options: input.options } : {}),
       ...(session ? { session } : {}),
     });
-    const issues = [...projectionIssues, ...transactionIssues];
+    const merchantIssues = await reconcileMerchantJournals(session ? { collections: input.collections, session } : { collections: input.collections });
+    const issues = [...projectionIssues, ...transactionIssues, ...merchantIssues];
     return { ok: issues.length === 0, issues };
   } finally {
     await session?.endSession();

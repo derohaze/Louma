@@ -336,15 +336,17 @@ export function useMiningCycle() {
     setError("");
     pushFeed(translate("mining.cycle.feed.stopRequest"));
     try {
-      await api.post("/api/v1/mining/stop");
+      const stopped = await api.post<ApiMiningState>("/api/v1/mining/stop");
+      await queryClient.cancelQueries({ queryKey: serverStateKeys.mining });
+      queryClient.setQueryData(serverStateKeys.mining, stopped);
+      // Clear the old hold even when the pools page is inactive and cannot refetch yet.
+      await queryClient.resetQueries({ queryKey: serverStateKeys.miningPools, exact: true });
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
-      // A stop releases the room with the cycle, so the pools page must re-read its hold too.
-      await queryClient.invalidateQueries({ queryKey: serverStateKeys.miningPools });
       // A stop pays out whatever accrued, so the balance shown elsewhere has to be re-read.
       await refresh();
       const fresh = await refetch();
-      const next = fresh.data?.session;
-      if (next && next.status !== "active") {
+      const next = fresh.data;
+      if (next && next.status !== "active" && next.poolId === null && next.poolRequired) {
         toast.success(translate("mining.cycle.toasts.stopped"), { position: "top-center" });
         pushFeed(translate("mining.cycle.feed.stopped"));
       } else {
@@ -371,7 +373,7 @@ export function useMiningCycle() {
   // offers the pools instead of a Start that could only be refused.
   const poolRequired = mining.data?.poolRequired === true;
   /** The room's own name, in the language the page is being read in. */
-  const poolId = mining.data?.poolId ?? session?.poolId ?? null;
+  const poolId = mining.data?.poolId ?? null;
   const poolName = poolId
     ? translate(`mining.cycle.pools.${poolId === "medium" ? "medium" : "low"}`)
     : null;
@@ -379,8 +381,8 @@ export function useMiningCycle() {
   const remaining = live?.remainingSeconds ?? session?.remainingSeconds ?? 0;
   const accruedMinor = live?.accruedMinor ?? session?.accruedMinor ?? 0;
   /**
-   * The window's numbers, not the segment's: what this account has mined inside the current 24-hour
-   * window across every segment (and every browser it mined in), how much of the 10 hours is left,
+   * The limiting account/device window's numbers: accumulated consumption across its segments,
+   * including other accounts on the same device, how much of the 10 hours is left,
    * and the bar between them. `remaining` above stays this cycle's own countdown; this is the
    * allowance the server actually enforces, so stopping and reopening — here or in a second browser
    * — continues the same total instead of restarting it.

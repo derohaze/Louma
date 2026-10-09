@@ -48,6 +48,7 @@ import { currency, loadLocalNote, transactionDateText } from "@/shared/lib/walle
 import { EmptyState, Icon } from "@/shared/ui/page";
 import { PageDataLoader } from "@/shared/ui/page-data-loader";
 import { MobileMoreSheet, MobileTabBar, PrimaryRail, SidebarNav } from "@/app/shell/shell-nav";
+import { useDeveloperAccess } from "@/shared/hooks/use-developer-access";
 import {
   buildSearchPages,
   searchPageLimit,
@@ -198,7 +199,11 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
   const query = search.trim().toLowerCase();
   const browsing = query.length === 0;
   const pro = useProAccess();
-  const searchPages = useMemo(() => buildSearchPages(language, pro), [language, pro]);
+  const developer = useDeveloperAccess().data?.eligible === true;
+  const searchPages = useMemo(
+    () => buildSearchPages(language, pro, developer),
+    [language, pro, developer],
+  );
   const matchedPages = searchPages.filter(
     (page) =>
       !query || `${page.title} ${page.subtitle} ${page.terms}`.toLowerCase().includes(query),

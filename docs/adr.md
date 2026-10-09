@@ -121,3 +121,19 @@ Activation is available only through trusted local operator tooling with databas
 credentials. There is no customer activation endpoint, payment gateway or admin
 UI. The operator script shares the same transactional service and activation-key
 replay protection. See `docs/pro-subscriptions.md` for rollout and rollback.
+
+## ADR-011 — local gateway tests on the confirmed Atlas sandbox
+
+For the current development phase, the operator has confirmed that the Atlas
+cluster configured by `back-end/.env.development` is a test environment, and
+that its database name is `louma` even though `back-end/.env.production` also
+uses that name. The local gateway runner and Go `test` configuration may use
+this exact database name, while retaining the test-environment requirement.
+The existing `louma_gateway_test*` names remain supported for isolated tests.
+
+This is a local test-environment exception to the name-based separation check;
+it does not enable `live`, change MongoDB as the financial source of truth, or
+weaken ledger, idempotency, uniqueness, or transaction invariants. Live gateway
+operation still requires its explicit enablement and a separately verified
+compatible deployment database. Revisit this exception when the Atlas sandbox
+or production database assignments change.

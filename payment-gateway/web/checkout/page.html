@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="{{if .Arabic}}ar{{else}}en{{end}}" dir="{{if .Arabic}}rtl{{else}}ltr{{end}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{if .Arabic}}الدفع إلى{{else}}Pay{{end}} {{.Merchant}} · Louma</title>
+<style>
+:root{color-scheme:light dark;--bg:#f7f6fb;--card:#fff;--text:#211d30;--muted:#716b80;--line:#e9e6ef;--primary:#673de6;--soft:#f2edff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{width:min(100%,472px);margin:auto;padding:40px 20px}.brand{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}.identity{display:flex;align-items:center;gap:10px}.identity img{border-radius:50%}.identity strong{font-size:17px;letter-spacing:-.5px}.identity span{display:block;color:var(--muted);font-size:12px;line-height:1.2}
+a{color:var(--primary)}.language{font-size:13px;text-decoration:none;padding:8px;border-radius:8px}.card{background:var(--card);border:1px solid var(--line);border-radius:24px;box-shadow:0 8px 32px #211d3006;overflow:hidden}.summary{padding:32px 28px 24px;text-align:center}.mode{display:inline-block;margin:0 0 20px;padding:3px 10px;background:var(--soft);color:var(--primary);border-radius:6px;font-size:11px;font-weight:600}
+.eyebrow{margin:0;color:var(--muted);font-size:12px}h1{margin:4px 0 0;font-size:21px;line-height:1.4;overflow-wrap:anywhere}.amount{display:flex;justify-content:center;align-items:baseline;gap:8px;margin:20px 0 0;line-height:1.2;font-variant-numeric:tabular-nums}.amount strong{font-size:clamp(27px,8vw,42px);letter-spacing:-1.7px;font-weight:650}.amount span{color:var(--muted);font-size:14px}.description{margin:12px 0 0;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.details{margin:0 28px;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.row{display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:0 0 8px;font-size:13px}.row:last-child{margin:0}dl{margin:0}dt{color:var(--muted)}dd{margin:0;font-variant-numeric:tabular-nums}.fee{margin:12px 0 0;color:var(--muted);font-size:11px}.action{padding:22px 28px 28px}.recurring{padding:14px;background:var(--soft);border-radius:12px;margin-bottom:20px;font-size:13px}.recurring p{margin:5px 0 0;color:var(--muted)}.cta{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:12px;background:#673de6;color:#fff;border-radius:12px;text-decoration:none;font-weight:600;font-size:14px}.cta:hover{filter:brightness(.93)}a:focus-visible{outline:3px solid var(--primary);outline-offset:4px}.hint{margin:12px 0 0;color:var(--muted);font-size:12px;text-align:center}.status{margin:0;font-size:15px;font-weight:600;text-align:center}.notice{margin:8px 0 0;color:var(--muted);font-size:13px;text-align:center}.reference{padding:0 28px 22px;margin:0;color:var(--muted);font-size:10px;text-align:center}.reference code{display:block;margin-top:3px;font:10px/1.6 ui-monospace,monospace;overflow-wrap:anywhere}.footer{display:flex;justify-content:center;align-items:center;gap:6px;margin:20px 0 0;color:var(--muted);font-size:11px}.footer svg{width:13px;height:13px}.success{display:grid;place-items:center;width:40px;height:40px;margin:0 auto 12px;background:var(--soft);color:var(--primary);border-radius:50%}.success svg{width:20px;height:20px}
+@media(prefers-color-scheme:dark){:root{--bg:#101011;--card:#18181a;--text:#f4f2fa;--muted:#aaa5b8;--line:#303031;--soft:#262036;--primary:#b3a0ff}}
+@media(max-width:480px){.wrap{padding:24px 16px}.brand{margin-bottom:24px}.summary{padding:28px 22px 22px}.details{margin-inline:22px}.action{padding:20px 22px 24px}.reference{padding-inline:22px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="brand">
+    <div class="identity"><img src="/assets/louma-logo.png" width="38" height="38" alt=""><div><strong>Louma</strong><span>{{if .Arabic}}المدفوعات{{else}}Payments{{end}}</span></div></div>
+    <a class="language" href="{{.LanguageURL}}" lang="{{if .Arabic}}en{{else}}ar{{end}}">{{if .Arabic}}English{{else}}العربية{{end}}</a>
+  </header>
+  <main class="card" aria-labelledby="pay-title">
+    <section class="summary">
+      {{if .Sandbox}}<p class="mode" role="note">{{if .Arabic}}وضع تجريبي · LMA افتراضية{{else}}TEST MODE · Synthetic LMA{{end}}</p>{{end}}
+      <p class="eyebrow">{{if .Arabic}}الدفع إلى{{else}}Payment to{{end}}</p>
+      <h1 id="pay-title">{{.Merchant}}</h1>
+      <p class="amount" dir="ltr"><strong>{{.Total}}</strong><span>LMA</span></p>
+      {{if .Description}}<p class="description">{{.Description}}</p>{{end}}
+    </section>
+    <div class="details"><dl>
+      <div class="row"><dt>{{if .Arabic}}المجموع الفرعي{{else}}Subtotal{{end}}</dt><dd dir="ltr">{{.Subtotal}} LMA</dd></div>
+      <div class="row"><dt>{{if .Arabic}}ضريبة التاجر{{else}}Merchant tax{{end}}</dt><dd dir="ltr">{{.Tax}} LMA</dd></div>
+      <div class="row"><dt>{{if .Arabic}}الإجمالي{{else}}Total{{end}}</dt><dd dir="ltr">{{.Total}} LMA</dd></div>
+      </dl>
+      <p class="fee">{{if .Arabic}}رسوم المعالجة على التاجر. لن تدفع مبلغًا إضافيًا.{{else}}The merchant pays the processing fee. No extra charge to you.{{end}}</p>
+    </div>
+    <section class="action" aria-live="polite">
+      {{if and .Recurring .Payable}}<div class="recurring"><strong>{{if .Arabic}}دفع متكرر{{else}}Recurring billing{{end}} · {{.IntervalLabel}}</strong><p>{{if .Arabic}}يتجدد بنفس المبلغ. ستراجع التفويض قبل الدفع، ويمكنك إلغاء التجديدات.{{else}}Renews at the same amount. Review and approve the terms before paying. You can cancel future renewals.{{end}}</p></div>{{end}}
+      {{if .Payable}}
+        <a class="cta" href="{{.Continue}}">{{if .Arabic}}المتابعة إلى Louma{{else}}Continue with Louma{{end}} <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="{{if .Arabic}}M19 12H5m7-7-7 7 7 7{{else}}M5 12h14m-7-7 7 7-7 7{{end}}"/></svg></a>
+        <p class="hint">{{if .Arabic}}سجّل دخولك واختر محفظتك لتأكيد الدفع.{{else}}Sign in and review your wallet before confirming payment.{{end}}</p>
+      {{else}}
+        {{if .Succeeded}}<span class="success" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6"/></svg></span>{{end}}
+        <p class="status">{{.StatusLabel}}</p><p class="notice">{{.InactiveNote}}</p>
+      {{end}}
+    </section>
+    <p class="reference">{{if .Arabic}}مرجع الدفع{{else}}Payment reference{{end}}<code dir="ltr">{{.Reference}}</code></p>
+  </main>
+  <footer class="footer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>{{if .Arabic}}الدفع عبر Louma{{else}}Payments by Louma{{end}}</footer>
+</div>
+</body>
+</html>

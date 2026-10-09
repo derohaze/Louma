@@ -66,7 +66,7 @@ export interface LedgerEntryRecord {
 }
 
 export interface ReconciliationIssue {
-  kind: "projection_mismatch" | "negative_balance" | "unbalanced_transaction" | "empty_transaction" | "orphan_entry" | "duplicate_transaction" | "currency_mismatch" | "invalid_reference";
+  kind: "projection_mismatch" | "negative_balance" | "unbalanced_transaction" | "empty_transaction" | "orphan_entry" | "duplicate_transaction" | "currency_mismatch" | "invalid_reference" | "journal_mismatch";
   severity: "error" | "critical";
   detail: string;
   /** Set on `orphan_entry`: the ids the finding is about, so callers can attribute it without parsing `detail`. */
@@ -88,7 +88,21 @@ export interface ReconciliationIssue {
  * a header are orphans it reports. The journal and the ledger are checked against each other —
  * neither is trusted alone.
  */
-export type TransactionRecord = TransferTransactionRecord | MiningTransactionRecord;
+export type TransactionRecord = CustomerTransactionRecord | MiningTransactionRecord;
+export type CustomerTransactionRecord = TransferTransactionRecord | MerchantPaymentTransactionRecord | MerchantRefundTransactionRecord;
+
+/** Gateway journals share customer history fields without borrowing transfer replay identities. */
+export interface MerchantPaymentTransactionRecord extends Omit<TransferTransactionRecord, "transferId" | "type"> {
+  type: "merchant_payment";
+  paymentId: string;
+  operationId: string;
+  merchantId: string;
+}
+
+export interface MerchantRefundTransactionRecord extends Omit<MerchantPaymentTransactionRecord, "type"> {
+  type: "merchant_refund";
+  originalPaymentId: string;
+}
 
 export interface TransferTransactionRecord {
   _id: ObjectId;
@@ -160,6 +174,10 @@ export function isMiningTransaction(record: TransactionRecord): record is Mining
   return record.type === "mining";
 }
 
+export function isCustomerTransaction(record: TransactionRecord): record is CustomerTransactionRecord {
+  return record.type === "transfer" || record.type === "merchant_payment" || record.type === "merchant_refund";
+}
+
 /**
  * Operator controls for the financial surfaces, held as one document so an incident can stop writes
  * without a deploy. Absence of the document means "not paused": a database that has never been told
@@ -196,7 +214,7 @@ export interface PublicTransaction {
   balanceAfter?: string;
   currency: typeof CURRENCY;
   status: "completed";
-  type: "transfer";
+  type: CustomerTransactionRecord["type"];
   note: string;
   correlationId: string;
   createdAt: string;

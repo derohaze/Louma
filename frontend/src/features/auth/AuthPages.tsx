@@ -21,6 +21,7 @@ import {
 } from "@/shared/api";
 import { useIsomorphicLayoutEffect } from "@/shared/hooks";
 import { useT } from "@/shared/i18n";
+import type { CheckoutReturn } from "@/shared/lib/account/checkout-return";
 
 type IconData = Parameters<typeof HugeiconsIcon>[0]["icon"];
 
@@ -53,7 +54,7 @@ function AuthIcon({
  * of the form that is about to be navigated away from, while a first-time visitor gets the form at
  * once — no session can exist for them, so there is nothing to wait for.
  */
-function useRedirectWhenAuthed(): boolean {
+function useRedirectWhenAuthed(returnTo: CheckoutReturn = {}): boolean {
   const navigate = useNavigate();
   const [checking, setChecking] = useState(false);
   useIsomorphicLayoutEffect(() => {
@@ -64,7 +65,12 @@ function useRedirectWhenAuthed(): boolean {
     void api
       .get("/api/v1/me")
       .then(() => {
-        if (active) void navigate({ to: "/" });
+        if (active)
+          void navigate(
+            returnTo.checkout && returnTo.mode
+              ? { to: "/checkout", search: { session: returnTo.checkout, mode: returnTo.mode } }
+              : { to: "/" },
+          );
       })
       .catch((error: unknown) => {
         if (error instanceof ApiError && error.status === 401) {
@@ -78,7 +84,7 @@ function useRedirectWhenAuthed(): boolean {
     return () => {
       active = false;
     };
-  }, [navigate]);
+  }, [navigate, returnTo.checkout, returnTo.mode]);
   return checking;
 }
 
@@ -265,9 +271,9 @@ function SubmitButton({ children, disabled = false }: { children: ReactNode; dis
   );
 }
 
-export function LoginContent() {
+export function LoginContent({ returnTo = {} }: { returnTo?: CheckoutReturn } = {}) {
   const t = useT("auth");
-  const checkingSession = useRedirectWhenAuthed();
+  const checkingSession = useRedirectWhenAuthed(returnTo);
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -284,11 +290,20 @@ export function LoginContent() {
       if (pendingSessionId) {
         await completeTwoFactor({ sessionId: pendingSessionId, code });
         setPendingSessionId(null);
-        await navigate({ to: "/" });
+        await navigate(
+          returnTo.checkout && returnTo.mode
+            ? { to: "/checkout", search: { session: returnTo.checkout, mode: returnTo.mode } }
+            : { to: "/" },
+        );
       } else {
         const response = await login({ email: email.trim(), password });
         if (response.requiresTwoFactor) setPendingSessionId(response.sessionId);
-        else await navigate({ to: "/" });
+        else
+          await navigate(
+            returnTo.checkout && returnTo.mode
+              ? { to: "/checkout", search: { session: returnTo.checkout, mode: returnTo.mode } }
+              : { to: "/" },
+          );
       }
     } catch (cause) {
       setError(messageForError(cause));
@@ -306,7 +321,11 @@ export function LoginContent() {
       footer={
         <>
           {t("login.footerQuestion")}{" "}
-          <Link to="/signup" className="font-bold text-foreground hover:underline">
+          <Link
+            to="/signup"
+            search={returnTo}
+            className="font-bold text-foreground hover:underline"
+          >
             {t("login.footerAction")}
           </Link>
         </>
@@ -366,9 +385,9 @@ export function LoginContent() {
   );
 }
 
-export function SignupContent() {
+export function SignupContent({ returnTo = {} }: { returnTo?: CheckoutReturn } = {}) {
   const t = useT("auth");
-  const checkingSession = useRedirectWhenAuthed();
+  const checkingSession = useRedirectWhenAuthed(returnTo);
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -382,7 +401,11 @@ export function SignupContent() {
     setError("");
     try {
       await register({ email: email.trim(), password, displayName: name.trim() });
-      await navigate({ to: "/" });
+      await navigate(
+        returnTo.checkout && returnTo.mode
+          ? { to: "/checkout", search: { session: returnTo.checkout, mode: returnTo.mode } }
+          : { to: "/" },
+      );
     } catch (cause) {
       setError(messageForError(cause));
     } finally {
@@ -399,7 +422,7 @@ export function SignupContent() {
       footer={
         <>
           {t("signup.footerQuestion")}{" "}
-          <Link to="/login" className="font-bold text-foreground hover:underline">
+          <Link to="/login" search={returnTo} className="font-bold text-foreground hover:underline">
             {t("signup.footerAction")}
           </Link>
         </>

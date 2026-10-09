@@ -6,6 +6,7 @@ import { registerMiningRoutes } from "./routes/mining.js";
 import { registerMiningDeviceRoutes } from "./routes/mining-device.js";
 import { registerSecurityRoutes } from "./routes/security.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerPaymentGatewayRoutes } from "./routes/payment-gateway.js";
 
 /**
  * Customer API route composer.
@@ -22,4 +23,5 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
   await registerMiningDeviceRoutes(app);
   await registerSecurityRoutes(app);
   await registerNotificationRoutes(app);
+  await registerPaymentGatewayRoutes(app);
 }

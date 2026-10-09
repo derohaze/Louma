@@ -12,7 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AnalyticsRouteImport } from './routes/analytics'
 import { Route as BillingRouteRouteImport } from './routes/billing/route'
+import { Route as CheckoutRouteImport } from './routes/checkout'
 import { Route as CustomAddressRouteImport } from './routes/custom-address'
+import { Route as DeveloperRouteRouteImport } from './routes/developer/route'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as HistoryRouteRouteImport } from './routes/history/route'
 import { Route as LoginRouteImport } from './routes/login'
@@ -24,6 +26,10 @@ import { Route as TransferRouteRouteImport } from './routes/transfer/route'
 import { Route as WalletRouteRouteImport } from './routes/wallet/route'
 import { Route as BillingIndexRouteImport } from './routes/billing/index'
 import { Route as BillingBenefitsRouteImport } from './routes/billing/benefits'
+import { Route as DeveloperIndexRouteImport } from './routes/developer/index'
+import { Route as DeveloperExamplesRouteImport } from './routes/developer/examples'
+import { Route as DeveloperKeysRouteImport } from './routes/developer/keys'
+import { Route as DeveloperTestRouteImport } from './routes/developer/test'
 import { Route as HistoryIndexRouteImport } from './routes/history/index'
 import { Route as HistoryTransferIdRouteImport } from './routes/history/$transferId'
 import { Route as MiningIndexRouteImport } from './routes/mining/index'
@@ -57,9 +63,19 @@ const BillingRouteRoute = BillingRouteRouteImport.update({
   path: '/billing',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CheckoutRoute = CheckoutRouteImport.update({
+  id: '/checkout',
+  path: '/checkout',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CustomAddressRoute = CustomAddressRouteImport.update({
   id: '/custom-address',
   path: '/custom-address',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeveloperRouteRoute = DeveloperRouteRouteImport.update({
+  id: '/developer',
+  path: '/developer',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -116,6 +132,26 @@ const BillingBenefitsRoute = BillingBenefitsRouteImport.update({
   id: '/benefits',
   path: '/benefits',
   getParentRoute: () => BillingRouteRoute,
+} as any)
+const DeveloperIndexRoute = DeveloperIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DeveloperRouteRoute,
+} as any)
+const DeveloperExamplesRoute = DeveloperExamplesRouteImport.update({
+  id: '/examples',
+  path: '/examples',
+  getParentRoute: () => DeveloperRouteRoute,
+} as any)
+const DeveloperKeysRoute = DeveloperKeysRouteImport.update({
+  id: '/keys',
+  path: '/keys',
+  getParentRoute: () => DeveloperRouteRoute,
+} as any)
+const DeveloperTestRoute = DeveloperTestRouteImport.update({
+  id: '/test',
+  path: '/test',
+  getParentRoute: () => DeveloperRouteRoute,
 } as any)
 const HistoryIndexRoute = HistoryIndexRouteImport.update({
   id: '/',
@@ -207,18 +243,23 @@ const WalletIndexRoute = WalletIndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/billing': typeof BillingRouteRouteWithChildren
+  '/developer': typeof DeveloperRouteRouteWithChildren
   '/history': typeof HistoryRouteRouteWithChildren
   '/mining': typeof MiningRouteRouteWithChildren
   '/transactions': typeof TransactionsRouteRouteWithChildren
   '/transfer': typeof TransferRouteRouteWithChildren
   '/wallet': typeof WalletRouteRouteWithChildren
   '/analytics': typeof AnalyticsRoute
+  '/checkout': typeof CheckoutRoute
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
   '/billing/benefits': typeof BillingBenefitsRoute
+  '/developer/examples': typeof DeveloperExamplesRoute
+  '/developer/keys': typeof DeveloperKeysRoute
+  '/developer/test': typeof DeveloperTestRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
   '/mining/pools': typeof MiningPoolsRoute
@@ -229,6 +270,7 @@ export interface FileRoutesByFullPath {
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
   '/billing/': typeof BillingIndexRoute
+  '/developer/': typeof DeveloperIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/mining/': typeof MiningIndexRoute
   '/profile/': typeof ProfileIndexRoute
@@ -241,12 +283,16 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/analytics': typeof AnalyticsRoute
+  '/checkout': typeof CheckoutRoute
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
   '/billing/benefits': typeof BillingBenefitsRoute
+  '/developer/examples': typeof DeveloperExamplesRoute
+  '/developer/keys': typeof DeveloperKeysRoute
+  '/developer/test': typeof DeveloperTestRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
   '/mining/pools': typeof MiningPoolsRoute
@@ -257,6 +303,7 @@ export interface FileRoutesByTo {
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
   '/billing': typeof BillingIndexRoute
+  '/developer': typeof DeveloperIndexRoute
   '/history': typeof HistoryIndexRoute
   '/mining': typeof MiningIndexRoute
   '/profile': typeof ProfileIndexRoute
@@ -270,18 +317,23 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/billing': typeof BillingRouteRouteWithChildren
+  '/developer': typeof DeveloperRouteRouteWithChildren
   '/history': typeof HistoryRouteRouteWithChildren
   '/mining': typeof MiningRouteRouteWithChildren
   '/transactions': typeof TransactionsRouteRouteWithChildren
   '/transfer': typeof TransferRouteRouteWithChildren
   '/wallet': typeof WalletRouteRouteWithChildren
   '/analytics': typeof AnalyticsRoute
+  '/checkout': typeof CheckoutRoute
   '/custom-address': typeof CustomAddressRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/notifications': typeof NotificationsRoute
   '/signup': typeof SignupRoute
   '/billing/benefits': typeof BillingBenefitsRoute
+  '/developer/examples': typeof DeveloperExamplesRoute
+  '/developer/keys': typeof DeveloperKeysRoute
+  '/developer/test': typeof DeveloperTestRoute
   '/history/$transferId': typeof HistoryTransferIdRoute
   '/mining/history': typeof MiningHistoryRoute
   '/mining/pools': typeof MiningPoolsRoute
@@ -292,6 +344,7 @@ export interface FileRoutesById {
   '/transactions/$transferId': typeof TransactionsTransferIdRoute
   '/transfer/recipients': typeof TransferRecipientsRoute
   '/billing/': typeof BillingIndexRoute
+  '/developer/': typeof DeveloperIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/mining/': typeof MiningIndexRoute
   '/profile/': typeof ProfileIndexRoute
@@ -306,18 +359,23 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/billing'
+    | '/developer'
     | '/history'
     | '/mining'
     | '/transactions'
     | '/transfer'
     | '/wallet'
     | '/analytics'
+    | '/checkout'
     | '/custom-address'
     | '/forgot-password'
     | '/login'
     | '/notifications'
     | '/signup'
     | '/billing/benefits'
+    | '/developer/examples'
+    | '/developer/keys'
+    | '/developer/test'
     | '/history/$transferId'
     | '/mining/history'
     | '/mining/pools'
@@ -328,6 +386,7 @@ export interface FileRouteTypes {
     | '/transactions/$transferId'
     | '/transfer/recipients'
     | '/billing/'
+    | '/developer/'
     | '/history/'
     | '/mining/'
     | '/profile/'
@@ -340,12 +399,16 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/analytics'
+    | '/checkout'
     | '/custom-address'
     | '/forgot-password'
     | '/login'
     | '/notifications'
     | '/signup'
     | '/billing/benefits'
+    | '/developer/examples'
+    | '/developer/keys'
+    | '/developer/test'
     | '/history/$transferId'
     | '/mining/history'
     | '/mining/pools'
@@ -356,6 +419,7 @@ export interface FileRouteTypes {
     | '/transactions/$transferId'
     | '/transfer/recipients'
     | '/billing'
+    | '/developer'
     | '/history'
     | '/mining'
     | '/profile'
@@ -368,18 +432,23 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/billing'
+    | '/developer'
     | '/history'
     | '/mining'
     | '/transactions'
     | '/transfer'
     | '/wallet'
     | '/analytics'
+    | '/checkout'
     | '/custom-address'
     | '/forgot-password'
     | '/login'
     | '/notifications'
     | '/signup'
     | '/billing/benefits'
+    | '/developer/examples'
+    | '/developer/keys'
+    | '/developer/test'
     | '/history/$transferId'
     | '/mining/history'
     | '/mining/pools'
@@ -390,6 +459,7 @@ export interface FileRouteTypes {
     | '/transactions/$transferId'
     | '/transfer/recipients'
     | '/billing/'
+    | '/developer/'
     | '/history/'
     | '/mining/'
     | '/profile/'
@@ -403,12 +473,14 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BillingRouteRoute: typeof BillingRouteRouteWithChildren
+  DeveloperRouteRoute: typeof DeveloperRouteRouteWithChildren
   HistoryRouteRoute: typeof HistoryRouteRouteWithChildren
   MiningRouteRoute: typeof MiningRouteRouteWithChildren
   TransactionsRouteRoute: typeof TransactionsRouteRouteWithChildren
   TransferRouteRoute: typeof TransferRouteRouteWithChildren
   WalletRouteRoute: typeof WalletRouteRouteWithChildren
   AnalyticsRoute: typeof AnalyticsRoute
+  CheckoutRoute: typeof CheckoutRoute
   CustomAddressRoute: typeof CustomAddressRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
@@ -446,11 +518,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BillingRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/checkout': {
+      id: '/checkout'
+      path: '/checkout'
+      fullPath: '/checkout'
+      preLoaderRoute: typeof CheckoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/custom-address': {
       id: '/custom-address'
       path: '/custom-address'
       fullPath: '/custom-address'
       preLoaderRoute: typeof CustomAddressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/developer': {
+      id: '/developer'
+      path: '/developer'
+      fullPath: '/developer'
+      preLoaderRoute: typeof DeveloperRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/forgot-password': {
@@ -529,6 +615,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/billing/benefits'
       preLoaderRoute: typeof BillingBenefitsRouteImport
       parentRoute: typeof BillingRouteRoute
+    }
+    '/developer/': {
+      id: '/developer/'
+      path: '/'
+      fullPath: '/developer/'
+      preLoaderRoute: typeof DeveloperIndexRouteImport
+      parentRoute: typeof DeveloperRouteRoute
+    }
+    '/developer/examples': {
+      id: '/developer/examples'
+      path: '/examples'
+      fullPath: '/developer/examples'
+      preLoaderRoute: typeof DeveloperExamplesRouteImport
+      parentRoute: typeof DeveloperRouteRoute
+    }
+    '/developer/keys': {
+      id: '/developer/keys'
+      path: '/keys'
+      fullPath: '/developer/keys'
+      preLoaderRoute: typeof DeveloperKeysRouteImport
+      parentRoute: typeof DeveloperRouteRoute
+    }
+    '/developer/test': {
+      id: '/developer/test'
+      path: '/test'
+      fullPath: '/developer/test'
+      preLoaderRoute: typeof DeveloperTestRouteImport
+      parentRoute: typeof DeveloperRouteRoute
     }
     '/history/': {
       id: '/history/'
@@ -666,6 +780,24 @@ const BillingRouteRouteWithChildren = BillingRouteRoute._addFileChildren(
   BillingRouteRouteChildren,
 )
 
+interface DeveloperRouteRouteChildren {
+  DeveloperExamplesRoute: typeof DeveloperExamplesRoute
+  DeveloperKeysRoute: typeof DeveloperKeysRoute
+  DeveloperTestRoute: typeof DeveloperTestRoute
+  DeveloperIndexRoute: typeof DeveloperIndexRoute
+}
+
+const DeveloperRouteRouteChildren: DeveloperRouteRouteChildren = {
+  DeveloperExamplesRoute: DeveloperExamplesRoute,
+  DeveloperKeysRoute: DeveloperKeysRoute,
+  DeveloperTestRoute: DeveloperTestRoute,
+  DeveloperIndexRoute: DeveloperIndexRoute,
+}
+
+const DeveloperRouteRouteWithChildren = DeveloperRouteRoute._addFileChildren(
+  DeveloperRouteRouteChildren,
+)
+
 interface HistoryRouteRouteChildren {
   HistoryTransferIdRoute: typeof HistoryTransferIdRoute
   HistoryIndexRoute: typeof HistoryIndexRoute
@@ -738,12 +870,14 @@ const WalletRouteRouteWithChildren = WalletRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BillingRouteRoute: BillingRouteRouteWithChildren,
+  DeveloperRouteRoute: DeveloperRouteRouteWithChildren,
   HistoryRouteRoute: HistoryRouteRouteWithChildren,
   MiningRouteRoute: MiningRouteRouteWithChildren,
   TransactionsRouteRoute: TransactionsRouteRouteWithChildren,
   TransferRouteRoute: TransferRouteRouteWithChildren,
   WalletRouteRoute: WalletRouteRouteWithChildren,
   AnalyticsRoute: AnalyticsRoute,
+  CheckoutRoute: CheckoutRoute,
   CustomAddressRoute: CustomAddressRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,

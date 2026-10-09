@@ -981,6 +981,31 @@ test("exhausting the 10h quota refuses the next start until the window resets", 
   assert.equal((refused.body["error"] as { code: string }).code, "mining_quota_exhausted");
 });
 
+test("stop immediately releases the pool and a second account inherits the device's remaining eight hours", async () => {
+  const firstAccount = await register("two-hours-first");
+  const secondAccount = await register("two-hours-second");
+  const started = await startMiningOn(firstAccount, firstAccount.machine);
+  await rewindCycle(started.session.id, 2 * HOUR_MS);
+  const stopped = await call("POST", "/api/v1/mining/stop", { token: firstAccount.accessToken });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  const stoppedState = stopped.body as { poolId: string | null; poolRequired: boolean; quota: { consumedSeconds: number; remainingSeconds: number } };
+  assert.equal(stoppedState.poolId, null);
+  assert.equal(stoppedState.poolRequired, true);
+  assert.ok(stoppedState.quota.consumedSeconds >= 7200 && stoppedState.quota.consumedSeconds < 7230);
+  const membership = await collections.miningPoolMembers.findOne({ ownerUserId: firstAccount.userId });
+  assert.equal(membership?.status, "released", "stop commits the pool exit with the settlement");
+  const pools = await call("GET", "/api/v1/mining/pools", { token: firstAccount.accessToken });
+  const poolState = pools.body as { poolId: string | null; pools: { joined: boolean }[] };
+  assert.equal(poolState.poolId, null);
+  assert.ok(poolState.pools.every((pool) => !pool.joined));
+  const resumed = await startMiningOn(secondAccount, firstAccount.machine);
+  assert.equal(resumed.session.durationSeconds, stoppedState.quota.remainingSeconds);
+  const fresh = await call("GET", "/api/v1/mining/state", { token: secondAccount.accessToken });
+  const sharedQuota = (fresh.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
+  assert.ok(sharedQuota.consumedSeconds >= stoppedState.quota.consumedSeconds);
+  assert.ok(sharedQuota.remainingSeconds <= 8 * 3600 && sharedQuota.remainingSeconds > 8 * 3600 - 30);
+});
+
 test("cross-account device quota: A 1h + B 2h on X, then A is capped everywhere", async () => {
   const accountA = await register("quota-a");
   const accountB = await register("quota-b");
@@ -1005,11 +1030,15 @@ test("cross-account device quota: A 1h + B 2h on X, then A is capped everywhere"
   // it, even though B's own account quota is a fresh 10h.
   const bFirst = await startMiningOn(accountB, deviceX);
   assert.equal(bFirst.session.durationSeconds, QUOTA_SECONDS - aQuota.consumedSeconds, "device X has what A left, shared across accounts");
+  const bSharedState = await call("GET", "/api/v1/mining/state", { token: accountB.accessToken });
+  const bSharedQuota = (bSharedState.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
+  assert.ok(bSharedQuota.consumedSeconds >= aQuota.consumedSeconds, "the second account sees the device's existing consumption");
+  assert.ok(bSharedQuota.remainingSeconds <= bFirst.session.durationSeconds, "the displayed quota cannot exceed the device-capped session");
   await rewindCycle(bFirst.session.id, 2 * HOUR_MS);
   const bStopped = await call("POST", "/api/v1/mining/stop", { token: accountB.accessToken });
   assert.equal(bStopped.status, 200, JSON.stringify(bStopped.body));
   const bQuota = (bStopped.body as { quota: { consumedSeconds: number; remainingSeconds: number } }).quota;
-  assert.ok(bQuota.consumedSeconds >= 2 * 3600 && bQuota.consumedSeconds < 2 * 3600 + 30, `two hours of mining are consumed: ${bQuota.consumedSeconds}`);
+  assert.ok(bQuota.consumedSeconds >= aQuota.consumedSeconds + 2 * 3600 && bQuota.consumedSeconds < aQuota.consumedSeconds + 2 * 3600 + 30, `the device reports A's hour plus B's two hours: ${bQuota.consumedSeconds}`);
   assert.equal(bQuota.remainingSeconds, QUOTA_SECONDS - bQuota.consumedSeconds);
 
   // A moves to a FRESH device Y: A's own account quota (what its first hour left) still binds, so

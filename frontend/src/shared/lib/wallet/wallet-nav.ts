@@ -3,13 +3,16 @@ import {
   ArrowUpRight01Icon,
   Award01Icon,
   ChartIncreaseIcon,
+  CodeSimpleIcon,
   CreditCardIcon,
   FavouriteIcon,
   Home04Icon,
+  Key01Icon,
   Notification01Icon,
   PickaxeIcon,
   QrCodeIcon,
   Settings01Icon,
+  TestTube01Icon,
   TransactionHistoryIcon,
   UserCircleIcon,
   UserGroupIcon,
@@ -36,6 +39,10 @@ export type NavHref =
   | "/billing/benefits"
   | "/custom-address"
   | "/profile"
+  | "/developer"
+  | "/developer/keys"
+  | "/developer/examples"
+  | "/developer/test"
   | SecurityHref
   | SettingsHref;
 
@@ -63,6 +70,7 @@ export type NavSection = {
    * out of its section list; the sidebar panel still shows them while one of their pages is open.
    */
   accountLevel?: boolean;
+  developerOnly?: boolean;
 };
 
 /**
@@ -92,6 +100,38 @@ const securitySearchKeys: Record<SecurityHref, TranslationPath> = {
  * pages replaces the panel with their pages instead of the wallet's.
  */
 export const navSections: readonly [NavSection, ...NavSection[]] = [
+  {
+    titleKey: "nav.sections.developer",
+    icon: UserGroupIcon,
+    developerOnly: true,
+    accountLevel: true,
+    items: [
+      {
+        titleKey: "nav.pages.developer.label",
+        href: "/developer",
+        icon: UserGroupIcon,
+        searchKey: "nav.pages.developer.search",
+      },
+      {
+        titleKey: "nav.pages.developerKeys.label",
+        href: "/developer/keys",
+        icon: Key01Icon,
+        searchKey: "nav.pages.developerKeys.search",
+      },
+      {
+        titleKey: "nav.pages.developerExamples.label",
+        href: "/developer/examples",
+        icon: CodeSimpleIcon,
+        searchKey: "nav.pages.developerExamples.search",
+      },
+      {
+        titleKey: "nav.pages.developerTest.label",
+        href: "/developer/test",
+        icon: TestTube01Icon,
+        searchKey: "nav.pages.developerTest.search",
+      },
+    ],
+  },
   {
     titleKey: "nav.sections.home",
     icon: Home04Icon,
