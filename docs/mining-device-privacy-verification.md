@@ -2,6 +2,38 @@
 
 Date: 2026-10-05. Changes are local only; no deployment, commit or production-data repair was performed.
 
+## Follow-up — 2026-10-09 (local, verification incomplete)
+
+Previously enrolled profiles can resolve to distinct records and compare as `ambiguous`. Their
+live-lease checks ran before session insertion, but only `same` matches contributed shared lease
+keys. The new code gives each ambiguous pair one symmetric HMAC token under the existing unique
+active-lease index, committed with the session. Tokens use the `lmdg-ambiguous-lease-v1` HMAC domain
+and the sorted server-owned record IDs; they are conflict keys, never quota identities. A–B and B–C
+have different tokens, so that relationship alone cannot block A beside C. No schema/index changes
+or production-data rewrite are involved. The bounded correlation search retains its existing limits.
+
+The new integration regression pre-enrolls two ambiguous profiles with network residency and holds
+both requests at session insertion before releasing them together. Its required result is one 200,
+one 409, one active session, and no active lease for the loser. Execution is pending local MongoDB
+access; this is not yet a verified database-race fix or a real Mullvad verification.
+
+The workspace-only runner `.temp/verify-mining-local.mjs` starts a separate loopback MongoDB
+replica set with a new data directory and fresh test keys, without loading any environment file.
+It tests the pre-fix admission code in a private source copy, requires the two-session failure,
+then runs the fixed regression, the three mining integration suites, typechecks, unit/date tests,
+and the architecture benchmark. Logs and `results.json` stay in its printed run directory under
+`back-end/.temp/`. It never rewrites the working tree or connects to Atlas. This runner has been
+syntax-checked but has not run: escalation was attempted again after explicit user authorization,
+and the approval-review service again failed with HTTP 404 before executing the command.
+
+Mining dates now explicitly use UTC in the active cycle, activity feed, and history. The countdown
+advances cached `serverNow` from React Query's original `dataUpdatedAt`, rather than resetting the
+clock offset when the page mounts. Regression tests reproduced the reported 05:11/02:11 difference
+and the countdown reset before the changes, then passed afterwards. The five mining/transfer date
+tests and both typechecks pass. Backend unit tests report 148/149 passing; the local HTTP listener
+test is blocked by restricted loopback access. MongoDB integration and the architecture benchmark
+remain unverified. Existing account/device quota records and matcher thresholds are unchanged.
+
 ## Policy correction — 2026-10-07
 
 The current start service requires a non-null machine correlation key, derived from at least four

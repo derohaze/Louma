@@ -113,6 +113,11 @@ export function ipHash(secret: Buffer, ip: string | null): string | null {
   return hmacHex(secret, "lmdg-ip-v1", ip.trim().toLowerCase());
 }
 
+/** A symmetric conflict token for two correlated records; it does not merge their identities. */
+export function ambiguousLeaseKey(secret: Buffer, firstDeviceId: string, secondDeviceId: string): string {
+  return hmacHex(secret, "lmdg-ambiguous-lease-v1", JSON.stringify([firstDeviceId, secondDeviceId].sort()));
+}
+
 // ---------------------------------------------------------------------------
 // Feature model
 // ---------------------------------------------------------------------------

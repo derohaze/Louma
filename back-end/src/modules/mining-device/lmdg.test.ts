@@ -19,6 +19,7 @@ import {
   type NormalizedDeviceSignals,
 } from "./signals.js";
 import {
+  ambiguousLeaseKey,
   buildFeatureMap,
   CORE_MACHINE_FEATURE_SET,
   decideClusterMatch,
@@ -63,6 +64,13 @@ import type { MiningDeviceNetworkTrust } from "../../shared/types.js";
  */
 
 const SECRET = Buffer.alloc(32, 7);
+
+test("ambiguous lease conflicts are symmetric and do not chain through a third device", () => {
+  const ab = ambiguousLeaseKey(SECRET, "device-a", "device-b");
+  assert.equal(ab, ambiguousLeaseKey(SECRET, "device-b", "device-a"));
+  assert.notEqual(ab, ambiguousLeaseKey(SECRET, "device-b", "device-c"));
+  assert.notEqual(ab, ambiguousLeaseKey(Buffer.alloc(32, 8), "device-a", "device-b"));
+});
 
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";

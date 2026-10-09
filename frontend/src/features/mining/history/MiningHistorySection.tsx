@@ -13,7 +13,7 @@ import {
   serverStateKeys,
   type MiningHistoryPage,
 } from "@/shared/lib/platform";
-import { currency, dateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
+import { currency, utcDateText, moneyFromMinorUnits } from "@/shared/lib/wallet";
 import { cn } from "@/shared/lib/platform";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 
@@ -172,7 +172,7 @@ export function MiningHistorySection() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold">{t("cycle", { number: item.cycleNumber })}</p>
                 <p className="text-xs text-muted-foreground">
-                  {t("cycleMeta", { rate: item.rate, date: dateText(item.endsAt) })}
+                  {t("cycleMeta", { rate: item.rate, date: utcDateText(item.endsAt) })}
                 </p>
               </div>
               <div className="text-end">
