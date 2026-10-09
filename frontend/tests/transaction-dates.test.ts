@@ -4,6 +4,34 @@ import { setCurrentLanguage } from "../src/shared/i18n/config";
 import { transactionDateText } from "../src/shared/lib/wallet/wallet-format";
 import { notificationDateText } from "../src/features/notifications/notification-text";
 
+test("sender and recipient see the same 24-hour transfer time across languages and time zones", () => {
+  const previousZone = process.env.TZ;
+  try {
+    for (const hour of ["00", "01", "12", "13", "20", "23"]) {
+      const createdAt = `2026-10-09T${hour}:08:00.000Z`;
+      for (const language of ["en", "ar"] as const) {
+        setCurrentLanguage(language);
+        for (const zone of ["UTC", "Africa/Cairo", "America/Los_Angeles"]) {
+          process.env.TZ = zone;
+          const rendered = [
+            transactionDateText(createdAt),
+            notificationDateText({ kind: "transfer_sent", createdAt }),
+            notificationDateText({ kind: "transfer_received", createdAt }),
+          ];
+          for (const text of rendered) {
+            assert.equal(text.match(/\d{1,2}:\d{2}/)?.[0], `${hour}:08`, `${language} / ${zone}: ${text}`);
+            assert.ok(text.endsWith(" UTC"));
+          }
+        }
+      }
+    }
+  } finally {
+    if (previousZone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousZone;
+    setCurrentLanguage("en");
+  }
+});
+
 for (const language of ["en", "ar"] as const) {
   test(`transfer dates stay identical across device time zones (${language})`, () => {
     const previousZone = process.env.TZ;
