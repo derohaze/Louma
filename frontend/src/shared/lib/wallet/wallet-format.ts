@@ -101,12 +101,13 @@ export const dateText = (date: string) =>
     new Date(date),
   );
 
-/** Shared event times stay identical even when a privacy browser reports a different time zone. */
+/** Shared event times use UTC and a 24-hour clock regardless of browser zone or language. */
 export const utcDateText = (date: string) =>
   `${new Intl.DateTimeFormat(currentLocale(), {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "UTC",
+    hourCycle: "h23",
   }).format(new Date(date))} UTC`;
 
 export const transactionDateText = utcDateText;
