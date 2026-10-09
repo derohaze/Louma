@@ -4,6 +4,15 @@ export default {
   notFoundTitle: "Transaction not found",
   notFoundDetail: "This transfer is not part of this wallet's history, or the link is out of date.",
   allTransactions: "All transactions",
+  merchant: {
+    description:
+      "The merchant pays the snapshotted processing fee; the buyer pays the confirmed total.",
+    refundDescription:
+      "This refund reverses a merchant payment using its recorded settlement amounts.",
+    fee: "Merchant processing fee",
+    feePaidByMerchant: "{amount} — paid by the merchant",
+    operationId: "Payment or refund reference",
+  },
   heading: {
     sent: "Sent {amount}",
     received: "Received {amount}",

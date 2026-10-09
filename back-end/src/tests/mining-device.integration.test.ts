@@ -119,7 +119,7 @@ async function call(
   return { status: response.statusCode, body };
 }
 
-async function register(label: string): Promise<Account> {
+async function register(label: string, poolId: "low" | "medium" = "low"): Promise<Account> {
   const email = `lmdg.${label}.${randomUUID()}@example.test`;
   const response = await call("POST", "/api/v1/auth/register", {
     body: { email, password: PASSWORD, displayName: `Lmdg ${label}`.slice(0, 32) },
@@ -135,7 +135,7 @@ async function register(label: string): Promise<Account> {
   // every start, because a stop or a finished window releases it.
   const joined = await call("POST", "/api/v1/mining/pools/join", {
     token: response.body["accessToken"] as string,
-    body: { poolId: "low" },
+    body: { poolId },
   });
   assert.equal(joined.status, 200, JSON.stringify(joined.body));
   return { userId: user.id, email, accessToken: response.body["accessToken"] as string, walletId: wallet.id, ledgerAccountId: account.publicId };
@@ -1882,4 +1882,62 @@ test("ONBOARD: a first-ever start is admitted, and the machine then belongs to o
     status: "active",
   });
   assert.equal(active, 1, "one machine holds one cycle, whichever account asked for it");
+});
+
+for (const racing of [false, true]) {
+  test(`CROSS-POOL: same device in low and medium (${racing ? "racing" : "sequential"})`, async () => {
+    const a = await register(`cross-pool-a-${racing}`);
+    const b = await register(`cross-pool-b-${racing}`, "medium");
+    const salt = `cross-pool-${racing}`;
+    const start = (account: Account, kind: Parameters<typeof deviceEvidence>[0]) => call("POST", "/api/v1/mining/start", {
+      token: account.accessToken, body: { device: deviceEvidence(kind, salt) },
+    });
+    const results = racing
+      ? await Promise.all([start(a, "laptop-x"), start(b, "laptop-x-second-browser")])
+      : [await start(a, "laptop-x"), await start(b, "laptop-x-second-browser")];
+    assert.deepEqual(results.map((result) => result.status).sort(), [200, 409], JSON.stringify(results));
+    const refused = results.find((result) => result.status === 409)!;
+    assert.equal((refused.body["error"] as { code: string }).code, "mining_device_already_in_use");
+    assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: { $in: [a.userId, b.userId] }, status: "active" }), 1);
+  });
+}
+
+test("CROSS-POOL ANCHOR: enrolled profiles sharing a machine cannot mine in separate pools after traits drift", async () => {
+  const a = await register("cross-anchor-a");
+  const b = await register("cross-anchor-b", "medium");
+  const guard = await import("../modules/mining-device/service.js");
+  const intel = { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null };
+  const evidenceA = deviceEvidence("laptop-x", "cross-anchor-a");
+  const evidenceB = deviceEvidence("laptop-y", "cross-anchor-b");
+  const enroll = (account: Account, evidenceRaw: unknown) => guard.resolveOrCreateDevice({
+    collections, config, ownerUserId: account.userId, correlationId: randomUUID(),
+    evidenceRaw, ip: nextIp(), intel,
+  });
+  const root = await enroll(a, evidenceA);
+  const profile = await enroll(b, evidenceB);
+  assert.notEqual(root.device.publicId, profile.device.publicId);
+  assert.ok(root.device.anchorHash);
+  // Existing server-owned correlation survives subsequent browser-visible trait drift.
+  await collections.miningDevices.updateOne({ publicId: profile.device.publicId }, { $set: { quotaAnchorHash: root.device.anchorHash } });
+  const results = await Promise.all([
+    call("POST", "/api/v1/mining/start", { token: a.accessToken, body: { device: evidenceA } }),
+    call("POST", "/api/v1/mining/start", { token: b.accessToken, body: { device: evidenceB } }),
+  ]);
+  assert.deepEqual(results.map((result) => result.status).sort(), [200, 409], "one server-correlated machine has one active cycle across pools");
+  const refused = results.find((result) => result.status === 409)!;
+  assert.equal((refused.body["error"] as { code: string }).code, "mining_device_already_in_use");
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: { $in: [a.userId, b.userId] }, status: "active" }), 1);
+  const winnerIndex = results[0]!.status === 200 ? 0 : 1;
+  const winner = winnerIndex === 0 ? a : b;
+  const waiting = winnerIndex === 0 ? b : a;
+  createdSessionIds.push((results[winnerIndex]!.body["session"] as { id: string }).id);
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: waiting.userId, status: "active" }), 0);
+  const stopped = await call("POST", "/api/v1/mining/stop", { token: winner.accessToken });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  const resumed = await call("POST", "/api/v1/mining/start", {
+    token: waiting.accessToken, body: { device: winnerIndex === 0 ? evidenceB : evidenceA },
+  });
+  assert.equal(resumed.status, 200, "stopping the winner frees the shared machine for the waiting account");
+  createdSessionIds.push((resumed.body["session"] as { id: string }).id);
+  assert.equal(await collections.miningSessions.countDocuments({ ownerUserId: { $in: [a.userId, b.userId] }, status: "active" }), 1);
 });

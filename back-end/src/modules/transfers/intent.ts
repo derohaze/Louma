@@ -12,6 +12,7 @@ import {
   type TransferAuthorizationRecord,
   type TransferIntent,
   type TransferTransactionRecord,
+  type CustomerTransactionRecord,
 } from "../../shared/types.js";
 
 export const MAX_RECIPIENT_LENGTH = 128;
@@ -137,7 +138,7 @@ export async function findCommittedTransfer(input: {
   };
 }
 
-export function publicTransaction(transaction: TransferTransactionRecord, ownerUserId: string, balanceAfterMinor?: number): PublicTransaction & { balanceAfter?: string } {
+export function publicTransaction(transaction: CustomerTransactionRecord, ownerUserId: string, balanceAfterMinor?: number): PublicTransaction & { balanceAfter?: string } {
   const direction: TransactionDirection = transaction.senderUserId === ownerUserId ? "sent" : "received";
   /**
    * `balanceAfterMinor` is the *sender's* balance at the time of the transfer, which is only ever
@@ -147,7 +148,7 @@ export function publicTransaction(transaction: TransferTransactionRecord, ownerU
   const ownBalanceAfter = direction === "sent" ? balanceAfterMinor ?? transaction.balanceAfterMinor : undefined;
   return {
     id: transaction.publicId,
-    transferId: transaction.transferId,
+    transferId: transaction.type === "transfer" ? transaction.transferId : transaction.operationId,
     direction,
     counterpartyAddress: direction === "sent" ? transaction.receiverAddress : transaction.senderAddress,
     amount: formatMoney(transaction.amountMinor),

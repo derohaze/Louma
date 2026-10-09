@@ -133,11 +133,11 @@ export interface MiningQuotaView {
   dailyQuotaSeconds: number;
   /** Window length (24h). */
   windowSeconds: number;
-  /** Consumed actual-mining seconds in the current account window. */
+  /** Consumption of the limiting account/device allowance in its current window. */
   consumedSeconds: number;
   /** `dailyQuotaSeconds - consumedSeconds`, never negative. */
   remainingSeconds: number;
-  /** End of the current account window (anchor + 24h). Null when never mined. */
+  /** End of the limiting account/device window (anchor + 24h). Null when never mined. */
   windowEndsAt: string | null;
 }
 

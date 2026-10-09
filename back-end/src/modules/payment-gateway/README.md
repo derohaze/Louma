@@ -1,0 +1,19 @@
+# Louma identity and payment BFF
+
+Dashboard requests use the existing browser transport, bearer session, and session CSRF token. Node reads an explicit active `gateway_developers` operator grant for every management request. Registration and Louma Pro never create a grant. The Go service independently scopes applications and resources to the signed owner.
+
+Grant developer access locally with `bun run developer:activate:dev -- user@example.com` from `back-end/`. The grant applies only to an existing active account in the development database. The grant never expires; suspend it by setting its `status` to `suspended`.
+
+Set `PAYMENT_GATEWAY_TEST_URL` and `PAYMENT_GATEWAY_TEST_SERVICE_KEY` together to enable sandbox integration. Set the corresponding `PAYMENT_GATEWAY_LIVE_*` pair separately for live integration. Keys must contain at least 32 UTF-8 bytes. Origins and keys must differ between environments. Production and non-loopback communication require HTTPS. Unconfigured environments fail closed. The service key is separate from customer JWT keys, merchant API keys, webhook secrets, and gateway API-key pepper.
+
+The internal signature binds Unix seconds, a fresh UUID nonce, HTTP method, exact request URI, authenticated owner UUID, and SHA-256 of the original UTF-8 JSON body. Go stores unique nonces in MongoDB. Node uses fixed route/resource allowlists, a 15-second timeout, no redirects, and never forwards a browser Authorization header or cookie to Go.
+
+Checkout is an identity and explicit consent flow on the existing first-party frontend. Go's independent hosted checkout directs the payer to `/checkout?session=<payment UUID>&mode=test|live`. Node retrieves Go's immutable intent. The page displays the actual merchant, subtotal, merchant tax, exact payable total, paying wallet, and recurring terms. Login/signup preserve only a validated checkout UUID and environment, never an arbitrary return URL.
+
+Node confirms that the submitted intent hash matches Go, authenticates the current account/session, and proves the existing transfer-password **or** authenticator/recovery-code policy. Accounts with no configured transfer factor use the existing `none` policy. For live payments, Node settles accrued mining before requesting approval. Go consumes the approval and factor proof only inside the monetary transaction and checks current credential versions, wallet state, and session state. The browser retains its idempotency key across uncertain responses. Existing approvals and committed settlements are read before asking for a new factor proof.
+
+Sandbox financial storage is isolated. Node still verifies the real identity's configured spend factor before sandbox consent, but sends a simulation `none` proof with null credential versions to the sandbox. Live recovery hashes never cross into sandbox, and sandbox checkout never settles live mining. Sandbox wallet IDs and synthetic balances must be provisioned explicitly in its isolated database; test mode cannot use live balances.
+
+The dashboard supports actual application configuration, API key creation/revocation, checkout sessions, links, products/prices, payments, subscriptions/cancellation, invoices, refunds, webhook configuration, delivery retries, and usage. Secrets are displayed in component memory only upon initial creation and are never included in list caches or persisted browser storage. All money inputs remain decimal strings with four-decimal validation; Go owns settlement calculations.
+
+Local integration tests use `PAYMENT_GATEWAY_E2E_MONGO_URI`, `PAYMENT_GATEWAY_E2E_DATABASE`, `PAYMENT_GATEWAY_E2E_URL`, and `PAYMENT_GATEWAY_E2E_SERVICE_KEY` explicitly. They reject remote database hosts and databases outside `louma_gateway_test_*`. The fixture file `back-end/.temp/gateway-browser-fixture.json` contains synthetic test logins for browser testing and is ignored by Git. It must never be used with production services.

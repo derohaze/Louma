@@ -221,7 +221,8 @@ export async function stopMining(input: {
     const membershipHandle = input.membershipCache?.redis ?? input.cache?.redis;
     if (membershipHandle) await invalidate(membershipHandle, poolMembershipKey(membershipHandle, input.ownerUserId));
 
-    return getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
+    // Confirm the committed pool exit from MongoDB, even if a concurrent cache fill was stale.
+    return getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache });
   }
 
   throw serviceUnavailable("mining_stop_failed", "Mining could not stop. Try again.");

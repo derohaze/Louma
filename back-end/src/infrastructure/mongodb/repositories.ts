@@ -2,6 +2,8 @@ import type { ClientSession, Document } from "mongodb";
 import type { Collections } from "./collections.js";
 import { assertBalanced } from "../../modules/ledger/money.js";
 import type {
+  MerchantPaymentTransactionRecord,
+  MerchantRefundTransactionRecord,
   MiningTransactionRecord,
   TransferTransactionRecord,
 } from "../../shared/types.js";
@@ -31,7 +33,7 @@ export interface JournalLine {
 }
 
 export interface JournalWrite {
-  header: Omit<TransferTransactionRecord, "_id"> | Omit<MiningTransactionRecord, "_id">;
+  header: Omit<TransferTransactionRecord, "_id"> | Omit<MiningTransactionRecord, "_id"> | Omit<MerchantPaymentTransactionRecord, "_id"> | Omit<MerchantRefundTransactionRecord, "_id">;
   lines: JournalLine[];
   linePublicIds: string[];
 }
@@ -51,7 +53,8 @@ export async function postBalancedJournal(
   if (write.lines.length !== write.linePublicIds.length) {
     throw new Error("Journal lines and line identifiers must pair one-to-one");
   }
-  await collections.transactions.insertOne(write.header as Document as never, { session });
+  // The driver attaches `_id` to its input; keep an immutable intent reusable across retries.
+  await collections.transactions.insertOne({ ...write.header } as Document as never, { session });
   await collections.ledgerEntries.insertMany(
     write.lines.map((line, index) => ({
       publicId: write.linePublicIds[index],

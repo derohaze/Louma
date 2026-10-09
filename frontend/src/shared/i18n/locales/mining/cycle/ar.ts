@@ -68,7 +68,7 @@ const ar: Strings<typeof en> = {
     earned: "المكتسب في هذه الدورة",
     alreadyCollected: "{amount} محصّلة بالفعل",
     progressAria: "تقدّم دورة التعدين",
-    minedThisWindow: "عدّنت {time} في هذه النافذة",
+    minedThisWindow: "المستهلك من الحصة في هذه النافذة: {time}",
     windowRemaining: "{time} متبقٍ · {max} كحد أقصى",
     currentSession: "الجلسة الحالية: {time}",
     facts: {

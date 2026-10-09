@@ -125,14 +125,18 @@ export function observedFeatures(secret: Buffer, signals: NormalizedDeviceSignal
  * The server-owned cluster id comes first: it is the one value no client controls, so a lease on it
  * cannot be walked away from by reporting different traits. The machine key and every alias the
  * server accepted for this cluster follow, because a *different* record presenting the same machine
- * traits must still collide with the lease (that is the anti-multi-cycle property), and the browser
- * key last, because a lease an earlier build took on it must remain enforceable.
+ * traits must still collide with the lease (that is the anti-multi-cycle property). The immutable
+ * enrollment and shared-quota anchors keep already-correlated profiles on that same lock after
+ * their reported traits drift. The browser key comes last, because a lease an earlier build took
+ * on it must remain enforceable.
  */
 export function recordLeaseKeys(device: MiningDeviceRecord): string[] {
   return [
     ...new Set(
       [
         device.publicId,
+        device.anchorHash,
+        device.quotaAnchorHash,
         device.machineKeyHash,
         ...(device.aliasHashes ?? []),
         device.deviceKeyHash,

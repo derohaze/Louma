@@ -7,9 +7,8 @@ import {
 import { Button } from "@/shared/ui/button";
 import { EmptyState, Icon, PageHeader, revealDelay } from "@/shared/ui/page";
 import { useT } from "@/shared/i18n";
-import { dateText } from "@/shared/lib/wallet";
 import { notificationKindIcons } from "./notification-icons";
-import { notificationText } from "./notification-text";
+import { notificationDateText, notificationText } from "./notification-text";
 import { useNotificationFeed } from "./useNotificationFeed";
 
 /**
@@ -126,7 +125,7 @@ export function NotificationsPage() {
                           {copy.body}
                         </p>
                         <p className="mt-1 text-[12px] text-muted-foreground/80">
-                          {dateText(item.createdAt)}
+                          {notificationDateText(item)}
                         </p>
                       </div>
                     </article>

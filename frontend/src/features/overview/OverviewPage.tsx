@@ -22,6 +22,7 @@ import {
   prefillTransfer,
   shortAddress,
   sumMoney,
+  transactionDateText,
 } from "@/shared/lib/wallet";
 import {
   accountFetchers,
@@ -685,7 +686,7 @@ export function OverviewContent() {
                       <span>
                         {received ? common("direction.received") : common("direction.sent")}
                       </span>
-                      <span>{relativeTime(transaction.createdAt)}</span>
+                      <span>{transactionDateText(transaction.createdAt)}</span>
                     </span>
                   </span>
                   <span className="shrink-0 text-[13px] font-bold tabular-nums">

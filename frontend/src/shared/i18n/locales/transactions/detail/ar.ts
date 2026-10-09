@@ -7,6 +7,13 @@ const ar: Strings<typeof en> = {
   notFoundTitle: "لم يتم العثور على الحركة",
   notFoundDetail: "هذا التحويل ليس ضمن سجل هذه المحفظة، أو أن الرابط قديم.",
   allTransactions: "كل الحركات",
+  merchant: {
+    description: "يتحمل التاجر رسوم المعالجة المثبتة ويدفع المشتري المبلغ الذي وافق عليه.",
+    refundDescription: "يعكس هذا الاسترداد دفعة للتاجر باستخدام مبالغ التسوية المسجلة.",
+    fee: "رسوم معالجة التاجر",
+    feePaidByMerchant: "{amount} — يتحمّلها التاجر",
+    operationId: "مرجع الدفع أو الاسترداد",
+  },
   heading: {
     sent: "أُرسل {amount}",
     received: "استُلم {amount}",

@@ -3,6 +3,7 @@ import type { AppConfig } from "../../config/env.js";
 import { formatMoney } from "../ledger/money.js";
 import { accruedMinorFor, totalAccrualMinor } from "./rate.js";
 import { loadMiningSettings } from "./settings.js";
+import { loadDeviceQuota } from "./quota-store.js";
 import {
   MINING_DAILY_QUOTA_SECONDS,
   MINING_QUOTA_WINDOW_MS,
@@ -258,6 +259,17 @@ export async function getMiningState(input: {
       // request above; letting it surface keeps the state honest instead of inventing one.
       const windowSessions = await loadAccountWindowSessions(input.collections, input.ownerUserId, current.windowStartMs);
       quota = quotaFromSessions(windowSessions, current.windowStartMs, nowMs);
+    }
+  }
+  if (record?.deviceQuotaKey) {
+    const deviceQuota = await loadDeviceQuota(input.collections, record.deviceQuotaKey, nowMs);
+    if (deviceQuota.remainingSeconds < quota.remainingSeconds) {
+      quota = {
+        ...quota,
+        consumedSeconds: deviceQuota.consumedSeconds,
+        remainingSeconds: deviceQuota.remainingSeconds,
+        windowEndsAt: new Date(deviceQuota.windowStartMs + MINING_QUOTA_WINDOW_MS).toISOString(),
+      };
     }
   }
   return stateFromRecord(record, nowMs, live.mining.enabled, live.mining.settlementEnabled, live.mining.cycleDurationSeconds, poolId, poolId === null, quota);

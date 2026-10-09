@@ -1,5 +1,10 @@
 export default {
   title: "Transactions",
+  kinds: {
+    transfer: "Transfer",
+    merchant_payment: "Merchant payment",
+    merchant_refund: "Merchant refund",
+  },
   description: "Search and filter your transactions.",
   exportShown: "Export shown ({count})",
   searchAria: "Search transactions",
@@ -24,7 +29,7 @@ export default {
     loaded: "Loaded transactions",
     sent: "Sent",
     received: "Received",
-    tax: "Network tax paid",
+    tax: "Processing fees paid",
   },
   listHeading: "Transactions · {count} shown",
   empty: {

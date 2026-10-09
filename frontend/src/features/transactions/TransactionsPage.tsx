@@ -39,8 +39,8 @@ export function TransactionsPage() {
   const resetPage = () => setPage(1);
   const minCheck = minAmount.trim() ? parseAmount(minAmount.trim()) : null;
   const maxCheck = maxAmount.trim() ? parseAmount(maxAmount.trim()) : null;
-  const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : NaN;
-  const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : NaN;
+  const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00Z`).getTime() : NaN;
+  const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999Z`).getTime() : NaN;
   const hasAdvanced = Boolean(dateFrom || dateTo || minAmount.trim() || maxAmount.trim());
   const advancedFieldClass = cn(
     "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:transition-none",
@@ -270,7 +270,20 @@ export function TransactionsPage() {
           [t("stats.loaded"), String(transactions.length)],
           [t("stats.sent"), String(sent.length)],
           [t("stats.received"), String(transactions.length - sent.length)],
-          [t("stats.tax"), currency(sumMoney(sent.map((item) => item.fee)))],
+          [
+            t("stats.tax"),
+            currency(
+              sumMoney(
+                transactions
+                  .filter(
+                    (item) =>
+                      (item.type === "transfer" && item.direction === "sent") ||
+                      (item.type === "merchant_payment" && item.direction === "received"),
+                  )
+                  .map((item) => item.fee),
+              ),
+            ),
+          ],
         ].map(([label, value], index) => (
           <div
             key={label}
@@ -319,7 +332,7 @@ export function TransactionsPage() {
                     {transaction.counterpartyAddress}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {transactionDateText(transaction.createdAt)}
+                    {t(`kinds.${transaction.type}`)} · {transactionDateText(transaction.createdAt)}
                     {rowNote ? ` · ${rowNote}` : ""}
                   </p>
                 </Link>

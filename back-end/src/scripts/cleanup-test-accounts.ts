@@ -1,6 +1,6 @@
 import { connectMongo } from "../infrastructure/mongodb/client.js";
 import { getCollections } from "../infrastructure/mongodb/collections.js";
-import { isTransferTransaction, type LedgerAccountRecord } from "../shared/types.js";
+import { isCustomerTransaction, type LedgerAccountRecord } from "../shared/types.js";
 import { TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
 
 /**
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
         .filter((tx) => {
           // Transfer headers name their parties; mining issuance headers carry `ownerUserId`
           // but no sender/receiver, and absent fields must not read as real participants.
-          if (isTransferTransaction(tx)) {
+          if (isCustomerTransaction(tx)) {
             // `participants` is not a required schema field: a transfer written by an older
             // process after this process's backfill has none, and a bare `.some` would throw
             // before any test account could be removed.

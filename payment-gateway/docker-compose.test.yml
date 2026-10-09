@@ -1,0 +1,51 @@
+name: louma-gateway-test
+
+services:
+  mongo:
+    image: mongo:8
+    # enableTestCommands is for this isolated test container only (commit failpoints in
+    # UnknownCommitAcknowledgement tests). Never copy this flag to a shared or production mongod.
+    command: ["--replSet", "rs0", "--bind_ip_all", "--setParameter", "enableTestCommands=1"]
+    ports: ["27018:27017"]
+    volumes: ["gateway-mongo:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo-init:
+    image: mongo:8
+    depends_on:
+      mongo:
+        condition: service_healthy
+    entrypoint: ["mongosh", "--host", "mongo", "--eval", 'try{rs.initiate({_id:"rs0",members:[{_id:0,host:"mongo:27017"}]})}catch(e){print(e.message)}']
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]
+    volumes: ["gateway-redis:/data"]
+
+  api:
+    build: .
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    env_file: [.env.test]
+    ports: ["8090:8090"]
+
+  worker:
+    build: .
+    entrypoint: ["gateway-worker"]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    env_file: [.env.test]
+
+volumes:
+  gateway-mongo:
+  gateway-redis:

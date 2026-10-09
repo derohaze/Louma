@@ -58,6 +58,7 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
     );
   }
   const sent = transaction.direction === "sent";
+  const merchantOperation = transaction.type !== "transfer";
   // The fee and net amount are recorded by the backend; the local rule is only used when the
   // recorded values are missing (a transfer created before the fee column existed).
   const tax = transaction.fee || transferTax(transaction.amount);
@@ -72,7 +73,12 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
   const breakdown: [string, ReactNode][] = sent
     ? [
         [t("breakdown.amountDebited"), currency(transaction.amount)],
-        [t("breakdown.tax"), currency(tax)],
+        [
+          t(merchantOperation ? "merchant.fee" : "breakdown.tax"),
+          merchantOperation
+            ? t("merchant.feePaidByMerchant", { amount: currency(tax) })
+            : currency(tax),
+        ],
         [t("breakdown.recipientReceived"), currency(net)],
         // `balanceAfter` is the sender's own balance, so it only means something on this side.
         [
@@ -82,7 +88,12 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
       ]
     : [
         [t("breakdown.amountCredited"), currency(net)],
-        [t("breakdown.tax"), t("breakdown.taxPaidBySender", { amount: currency(tax) })],
+        [
+          t(merchantOperation ? "merchant.fee" : "breakdown.tax"),
+          t(merchantOperation ? "merchant.feePaidByMerchant" : "breakdown.taxPaidBySender", {
+            amount: currency(tax),
+          }),
+        ],
         [t("breakdown.senderPaid"), currency(transaction.amount)],
       ];
   return (
@@ -95,14 +106,24 @@ export function TransactionDetailContent({ transferId }: { transferId: string })
       />
       <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
         <div className="space-y-4">
-          <Panel delayMs={0} title={t("breakdown.title")} description={t("breakdown.description")}>
+          <Panel
+            delayMs={0}
+            title={t("breakdown.title")}
+            description={t(
+              transaction.type === "merchant_payment"
+                ? "merchant.description"
+                : transaction.type === "merchant_refund"
+                  ? "merchant.refundDescription"
+                  : "breakdown.description",
+            )}
+          >
             <FactList
               items={[
                 ...breakdown,
                 [t("breakdown.status"), common("state.completed")],
                 [t("breakdown.note"), transaction.note || common("state.none")],
                 [
-                  t("breakdown.transferId"),
+                  t(merchantOperation ? "merchant.operationId" : "breakdown.transferId"),
                   <code key="id" className="break-all">
                     {transaction.transferId}
                   </code>,

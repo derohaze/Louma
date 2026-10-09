@@ -23,27 +23,33 @@ export type SearchPage = SearchEntry & { category: string; terms: string };
  * dialog matches on both come from the navigation's own translation keys, so someone typing Arabic
  * finds a page by its Arabic name.
  */
-export function buildSearchPages(language: LanguageCode, isPro: boolean): SearchPage[] {
-  return navSections.flatMap((section) => {
-    const sectionTitle = translateIn(language, section.titleKey);
-    return section.items
-      .filter((item) => isPro || item.href !== "/custom-address")
-      .map((item) => {
-        const title = translateIn(language, item.titleKey);
-        return {
-          id: `page:${item.href}`,
-          title,
-          subtitle:
-            title === sectionTitle
-              ? translateIn(language, "nav.chrome.pageInSection", { section: sectionTitle })
-              : sectionTitle,
-          icon: item.icon,
-          href: item.href,
-          category: sectionTitle,
-          terms: translateIn(language, item.searchKey),
-        };
-      });
-  });
+export function buildSearchPages(
+  language: LanguageCode,
+  isPro: boolean,
+  developer = false,
+): SearchPage[] {
+  return navSections
+    .filter((section) => !section.developerOnly || developer)
+    .flatMap((section) => {
+      const sectionTitle = translateIn(language, section.titleKey);
+      return section.items
+        .filter((item) => isPro || item.href !== "/custom-address")
+        .map((item) => {
+          const title = translateIn(language, item.titleKey);
+          return {
+            id: `page:${item.href}`,
+            title,
+            subtitle:
+              title === sectionTitle
+                ? translateIn(language, "nav.chrome.pageInSection", { section: sectionTitle })
+                : sectionTitle,
+            icon: item.icon,
+            href: item.href,
+            category: sectionTitle,
+            terms: translateIn(language, item.searchKey),
+          };
+        });
+    });
 }
 
 /** Order of the dialog's default list, so it opens on the pages an owner reaches for most. */

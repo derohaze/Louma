@@ -3,6 +3,11 @@ import type { Strings } from "@/shared/i18n/types";
 
 const ar: Strings<typeof en> = {
   title: "الحركات",
+  kinds: {
+    transfer: "تحويل",
+    merchant_payment: "دفع للتاجر",
+    merchant_refund: "استرداد من التاجر",
+  },
   description: "ابحث في حركاتك وصفّها.",
   exportShown: "تصدير المعروض ({count})",
   searchAria: "بحث في الحركات",
@@ -27,7 +32,7 @@ const ar: Strings<typeof en> = {
     loaded: "الحركات المحمّلة",
     sent: "صادر",
     received: "وارد",
-    tax: "ضريبة الشبكة المدفوعة",
+    tax: "رسوم المعالجة المدفوعة",
   },
   listHeading: "الحركات · {count} معروضة",
   empty: {

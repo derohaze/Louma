@@ -17,8 +17,27 @@ export default {
     profile: "Profile",
     security: "Security",
     settings: "Settings",
+    developer: "Developers",
   },
   pages: {
+    developer: {
+      label: "Developer payments",
+      search:
+        "developer merchant payments gateway integrations API credentials checkout webhooks subscriptions refunds",
+    },
+    developerKeys: {
+      label: "API keys",
+      search: "developer API key secret credentials token scopes revoke rotate",
+    },
+    developerExamples: {
+      label: "Integration examples",
+      search:
+        "developer examples languages javascript python php ruby go java csharp curl code checkout sample",
+    },
+    developerTest: {
+      label: "Test checkout",
+      search: "developer test sandbox checkout preview payment page gateway try simulate",
+    },
     overview: {
       label: "Overview",
       search: "balance dashboard home overview",

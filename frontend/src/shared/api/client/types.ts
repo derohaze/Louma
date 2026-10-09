@@ -66,9 +66,9 @@ export interface ApiMiningSession {
 }
 
 /**
- * The account's allowance inside its current 24-hour window, summed on the server over every segment
- * the account has mined — the segments it mined in another browser or on another device included,
- * and the part of a running segment that has already elapsed.
+ * The remaining allowance is the lesser of the account's and its last mining device's quota.
+ * Consumption and window end describe that limiting allowance, including usage by other accounts
+ * on the same device and the part of a running segment that has already elapsed.
  *
  * Window membership is by the stored anchor, so these numbers only ever reset when the 24-hour window
  * itself rolls over: stopping, closing the tab, or reopening the page in a second browser continues
@@ -135,7 +135,7 @@ export interface ApiTransaction {
   balanceAfter?: string;
   currency: "LMA";
   status: "completed";
-  type: "transfer";
+  type: "transfer" | "merchant_payment" | "merchant_refund";
   note: string;
   correlationId: string;
   createdAt: string;

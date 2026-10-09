@@ -6,6 +6,7 @@ import { translate, useT } from "@/shared/i18n";
 import { cn } from "@/shared/lib/platform";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/ui/dialog";
 import { findActiveSection, navSections, type NavSection } from "@/shared/lib/wallet";
+import { useDeveloperAccess } from "@/shared/hooks/use-developer-access";
 
 /**
  * Compact rail item: the rail lists sections, and the panel below shows the pages of the one
@@ -42,20 +43,24 @@ export function RailLink({ section, current }: { section: NavSection; current: b
 }
 
 const railSections = navSections.filter(
-  (section) => !section.accountLevel && section.titleKey !== "nav.sections.billing",
+  (section) =>
+    (!section.accountLevel || section.developerOnly) && section.titleKey !== "nav.sections.billing",
 );
 
 /** Renders the section links with an immediate active state. */
 export function PrimaryRail({ activeSection }: { activeSection: NavSection | undefined }) {
+  const developer = useDeveloperAccess().data?.eligible === true;
   return (
     <div className="flex h-full flex-col">
-      {railSections.map((section) => (
-        <RailLink
-          key={section.titleKey}
-          section={section}
-          current={section.titleKey === activeSection?.titleKey}
-        />
-      ))}
+      {railSections
+        .filter((section) => !section.developerOnly || developer)
+        .map((section) => (
+          <RailLink
+            key={section.titleKey}
+            section={section}
+            current={section.titleKey === activeSection?.titleKey}
+          />
+        ))}
     </div>
   );
 }
@@ -80,8 +85,11 @@ export function SidebarNav({
 }) {
   const t = useT("nav");
   const pro = useProAccess();
+  const developer = useDeveloperAccess().data?.eligible === true;
   const activeSection = findActiveSection(pathname);
-  const sections = scope === "all" || !activeSection ? navSections : [activeSection];
+  const sections = (scope === "all" || !activeSection ? navSections : [activeSection]).filter(
+    (section) => !section.developerOnly || developer,
+  );
   return (
     <aside
       className={cn(

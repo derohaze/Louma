@@ -11,7 +11,7 @@ import { getCollections, type Collections } from "../infrastructure/mongodb/coll
 import { disabledRedis } from "../infrastructure/redis/client.js";
 import { parseMoneyToMinorUnits } from "../modules/ledger/money.js";
 import { reconcileLedger, TEST_FUNDING_CORRELATION_PREFIXES } from "../modules/ledger/reconciliation.js";
-import { createTransfer, previewTransfer } from "../modules/transfers/service.js";
+import { createTransfer, getTransaction, listTransactions, previewTransfer } from "../modules/transfers/service.js";
 import { encryptSecret } from "../modules/security/crypto.js";
 import { isTransferTransaction } from "../shared/types.js";
 import { resetFinancialControlsCache, setFinancialControls } from "../modules/financial-controls/service.js";
@@ -411,6 +411,28 @@ test("a direct call cannot move money without a server-issued approval", async (
     payload: { authorizationId: randomUUID(), recipientAddress: receiver.address, amount: TRANSFER },
   });
   assert.equal(withField.statusCode, 401, "with the approval present the same request is refused for authentication");
+});
+
+test("transfer timestamp is identical for sender, receiver, history, replay and notifications", async () => {
+  const sender = await createAccount("timestamp-sender", true);
+  const receiver = await createAccount("timestamp-receiver");
+  const approval = await approve(sender, receiver.address, TRANSFER);
+  const key = randomUUID();
+  const input = { sender, authorizationId: approval.id, address: receiver.address, amount: TRANSFER, key };
+  const posted = await send(input);
+  const replayed = await send(input);
+  assert.equal(replayed.createdAt, posted.createdAt);
+  for (const ownerUserId of [sender.userId, receiver.userId]) {
+    const detail = await getTransaction({ collections, ownerUserId, transactionId: posted.transferId });
+    const history = await listTransactions({ collections, ownerUserId, cursor: undefined, limit: 20, direction: "all" });
+    assert.equal(detail.createdAt, posted.createdAt);
+    assert.equal(detail.completedAt, posted.completedAt);
+    assert.equal(history.transactions.find((row) => row.id === posted.id)?.createdAt, posted.createdAt);
+    const notice = await collections.notifications.findOne({ ownerUserId, kind: ownerUserId === sender.userId ? "transfer_sent" : "transfer_received" });
+    assert.equal(notice?.createdAt.toISOString(), posted.createdAt);
+  }
+  assert.match(posted.createdAt, /Z$/);
+  await assertFullReconciliation();
 });
 
 test("one approval is executed at most once, even under simultaneous requests", async () => {

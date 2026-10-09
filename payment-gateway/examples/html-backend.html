@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Louma checkout — plain HTML</title>
+<!--
+  The browser never holds the secret key. This form posts to YOUR backend,
+  which calls POST /v1/checkouts with its secret key and returns the
+  checkout_url. Your backend grants access only after GET /v1/payments/{id}
+  reports succeeded — never on success_url redirect.
+-->
+<form method="post" action="/api/merchant/checkout">
+  <input type="hidden" name="csrf" value="{{csrf}}">
+  <h1>Example order #42 — 100.0000 LMA</h1>
+  <button type="submit">Pay with Louma</button>
+</form>
+<p><a href="/status">Check the payment status</a> after returning from Louma.</p>
