@@ -71,6 +71,7 @@ export interface MiningPoolsConfig {
 export type LmdgRiskMode = "monitor" | "challenge" | "enforce";
 
 export interface LmdgConfig {
+  identityMode: "browser" | "strict" | "legacy-test";
   enabled: boolean;
   leaseEnabled: boolean;
   highConfidenceThreshold: number;
@@ -468,6 +469,14 @@ function loadMiningPoolsConfig(values: NodeJS.ProcessEnv): MiningPoolsConfig {
 }
 
 function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
+  const identityMode = values["LMDG_IDENTITY_MODE"] ?? "browser";
+  if (identityMode !== "browser" && identityMode !== "strict") throw new Error("LMDG_IDENTITY_MODE must be browser or strict");
+  const legacyTest = booleanFlag("LMDG_TEST_LEGACY_IDENTITY", values["LMDG_TEST_LEGACY_IDENTITY"], false);
+  if (legacyTest && (values["NODE_ENV"] !== "test" ||
+      !/^mongodb:\/\/127\.0\.0\.1:\d+\/\?replicaSet=louma_audit$/.test(values["MONGODB_URI"] ?? "") ||
+      !/^louma_(?:mining_)?audit_[a-f0-9]{32}$/.test(values["MONGODB_DATABASE"] ?? ""))) {
+    throw new Error("LMDG_TEST_LEGACY_IDENTITY is restricted to the isolated loopback audit runner");
+  }
   const enabled = booleanFlag("LMDG_ENABLED", values["LMDG_ENABLED"], true);
   const leaseEnabled = booleanFlag("LMDG_DEVICE_LEASE_ENABLED", values["LMDG_DEVICE_LEASE_ENABLED"], true);
   const high = Number(values["LMDG_HIGH_CONFIDENCE_MATCH_THRESHOLD"] ?? "78");
@@ -543,6 +552,7 @@ function loadLmdgConfig(values: NodeJS.ProcessEnv): LmdgConfig {
     );
   }
   return {
+    identityMode: legacyTest ? "legacy-test" : identityMode,
     enabled,
     leaseEnabled,
     highConfidenceThreshold: high,

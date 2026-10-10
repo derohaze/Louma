@@ -127,7 +127,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       redact: {
         // `transferPassword` travels with every transfer body: it is a spend credential and must
         // never survive into a request log line.
-        paths: ["req.headers.authorization", "req.headers.cookie", "req.headers['set-cookie']", "req.headers['x-louma-signature']", "req.body.password", "req.body.currentPassword", "req.body.newPassword", "req.body.code", "req.body.twoFactorCode", "req.body.refreshToken", "req.body.transferPassword"],
+        paths: ["req.headers.authorization", "req.headers.cookie", "req.headers['set-cookie']", "req.headers['x-louma-signature']", "req.body.password", "req.body.currentPassword", "req.body.newPassword", "req.body.code", "req.body.twoFactorCode", "req.body.refreshToken", "req.body.transferPassword", "req.body.verification", "req.body.proofNonce"],
         censor: "[Redacted]",
       },
       // Production keeps pino's JSON lines for the log collector; everywhere else a terminal gets

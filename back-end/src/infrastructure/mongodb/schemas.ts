@@ -1,6 +1,7 @@
 import { type Document } from "mongodb";
 import { LEDGER_AMOUNT_MAX_MINOR, LEDGER_BALANCE_MAX_MINOR } from "../../shared/types.js";
 import { MAX_CLUSTER_ALIASES, MAX_NETWORK_TRUSTS } from "../../modules/mining-device/policy.js";
+import { MAX_EVIDENCE_TOKENS } from "../../modules/mining-device/candidate-evidence.js";
 
 /**
  * Collection validators expressed as MongoDB `$jsonSchema` documents.
@@ -78,6 +79,7 @@ export const schemas: Record<string, Document> = {
       bsonType: "object",
       required: ["publicId", "email", "passwordHash", "profile", "status", "emailVerifiedAt", "createdAt", "updatedAt"],
       properties: {
+        miningAdmissionFence: { bsonType: "bool" },
         publicId: { bsonType: "string" },
         email: { bsonType: "string" },
         passwordHash: { bsonType: "string" },
@@ -307,7 +309,7 @@ export const schemas: Record<string, Document> = {
       required: ["ownerUserId", "purpose", "timeStep", "intentHash", "correlationId", "createdAt", "retainUntil"],
       properties: {
         ownerUserId: { bsonType: "string" },
-        purpose: { enum: ["transfer"] },
+        purpose: { enum: ["transfer", "mining"] },
         timeStep: { bsonType: "int", minimum: 0 },
         intentHash: { bsonType: "string" },
         correlationId: { bsonType: "string" },
@@ -341,6 +343,7 @@ export const schemas: Record<string, Document> = {
   },
   mining_sessions: {
     $jsonSchema: {
+      dependencies: { admissionPolicy: ["browserAdmission"], browserAdmission: ["admissionPolicy", "deviceId", "deviceQuotaKey"] },
       bsonType: "object",
       required: ["publicId", "ownerUserId", "walletId", "ledgerAccountId", "status", "cycleNumber", "startedAt", "endsAt", "durationSeconds", "rateUnits", "rateScale", "rateDecimals", "rate", "rateUnit", "settledMinor", "settlementSequence", "lastSettledAt", "createdAt", "updatedAt"],
       properties: {
@@ -357,6 +360,19 @@ export const schemas: Record<string, Document> = {
         deviceQuotaKey: { bsonType: ["string", "null"] },
         deviceWindowStart: { bsonType: ["date", "null"] },
         deviceId: { bsonType: ["string", "null"] },
+        admissionPolicy: { enum: ["browser-v1"] },
+        browserAdmission: {
+          bsonType: "object", additionalProperties: false,
+          required: ["keyHash", "intentHash", "proofId", "verifiedAt", "accountVerified", "riskReasons", "rateUnits", "rateScale", "endsAt"],
+          properties: {
+            keyHash: { bsonType: "string", minLength: 64, maxLength: 64 },
+            intentHash: { bsonType: "string", minLength: 64, maxLength: 64 },
+            proofId: { bsonType: "string", maxLength: 64 }, verifiedAt: { bsonType: "date" },
+            accountVerified: { bsonType: "bool" },
+            riskReasons: { bsonType: "array", maxItems: 8, items: { enum: ["history_uncertain", "account_key_change", "reported_automation_or_contradiction", "sparse_evidence", "correlated_history", "coordinated_drift"] } },
+            rateUnits: { bsonType: "number", minimum: 1 }, rateScale: { bsonType: "number", minimum: 1 }, endsAt: { bsonType: "date" },
+          },
+        },
         rateUnits: { bsonType: "number", minimum: 1 },
         rateScale: { bsonType: "number", minimum: 1 },
         rateDecimals: { bsonType: "int", minimum: 0 },
@@ -375,7 +391,9 @@ export const schemas: Record<string, Document> = {
     $jsonSchema: {
       bsonType: "object",
       required: ["publicId", "deviceKeyHash", "firstSeenAt", "lastSeenAt", "status", "createdAt", "updatedAt"],
+      dependencies: { admissionEvidenceVersion: ["admissionEvidenceTokens"], admissionEvidenceTokens: ["admissionEvidenceVersion"] },
       properties: {
+        identityKind: { enum: ["browser"] },
         publicId: { bsonType: "string" },
         deviceKeyHash: { bsonType: "string" },
         browserKeyPublicKey: { bsonType: ["string", "null"] },
@@ -420,6 +438,8 @@ export const schemas: Record<string, Document> = {
         },
         // Latest normalized observation snapshot: one value per known signal key, same vocabulary.
         featureSnapshot: { bsonType: ["object", "null"], maxProperties: 64 },
+        admissionEvidenceVersion: { enum: [1] },
+        admissionEvidenceTokens: { bsonType: "array", maxItems: MAX_EVIDENCE_TOKENS, items: { bsonType: "string", maxLength: 160 } },
         enrollmentUserId: { bsonType: ["string", "null"] },
         admissionCount: { bsonType: "int", minimum: 0 },
         admissionFence: { bsonType: "bool" },
@@ -504,6 +524,10 @@ export const schemas: Record<string, Document> = {
       bsonType: "object",
       required: ["publicId", "ownerUserId", "nonce", "issuedAt", "expiresAt", "consumedAt"],
       properties: {
+        purpose: { enum: ["browser-start-v1"] },
+        intentHash: { bsonType: "string", minLength: 64, maxLength: 64 },
+        origin: { bsonType: ["string", "null"], maxLength: 2048 },
+        startUsedAt: { bsonType: ["date", "null"] },
         publicId: { bsonType: "string" },
         ownerUserId: { bsonType: "string" },
         nonce: { bsonType: "string" },

@@ -1,5 +1,12 @@
 export default {
   ready: {
+    accountVerificationTitle: "Confirm your account",
+    accountVerificationBody: "This browser needs an additional account check before mining can start. Enter your password and, if enabled, your authenticator or recovery code. If you cannot verify, recover your account from the sign-in page.",
+    accountPassword: "Account password",
+    accountCode: "Authenticator or recovery code (if enabled)",
+    verifyAndStart: "Verify and start mining",
+    verificationTitle: "Mining enrollment unavailable",
+    verificationBody: "Mining requires an independently verified device. Enrollment is currently unavailable. Your account, wallet and existing rewards remain accessible.",
     poolTitle: "Join a mining pool first",
     poolBody:
       "Mining is only possible from inside a pool, and a pool is held only while you mine in it: a stop or a finished cycle releases it, so take one again to keep mining. Pick Low for steadier rewards or Medium for higher variance — both pay the same on average.",

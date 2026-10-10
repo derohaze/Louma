@@ -16,6 +16,18 @@ export type MiningEffectiveStatus = "idle" | "active" | "completed" | "settled";
  * record alone and no random seed is kept in memory.
  */
 export interface MiningSessionRecord {
+  admissionPolicy?: "browser-v1";
+  browserAdmission?: {
+    keyHash: string;
+    intentHash: string;
+    proofId: string;
+    verifiedAt: Date;
+    accountVerified: boolean;
+    riskReasons: string[];
+    rateUnits: number;
+    rateScale: number;
+    endsAt: Date;
+  };
   _id: ObjectId;
   publicId: string;
   ownerUserId: string;
@@ -146,6 +158,7 @@ export interface PublicMiningState {
   serverNow: string;
   enabled: boolean;
   canStart: boolean;
+  startRestriction?: { code: string; message: string };
   cycleDurationSeconds: number;
   session: PublicMiningSession | null;
   /** Pool the account mines in; null until it joins one (start is refused then). */

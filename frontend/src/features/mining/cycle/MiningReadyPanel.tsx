@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 import {
   ChartIncreaseIcon,
   PauseIcon,
@@ -23,7 +24,14 @@ export function MiningReadyPanel({ cycle }: { cycle: MiningCycle }) {
         style={revealDelay(0)}
         className="card-enter overflow-hidden rounded-[22px] border bg-card p-5 shadow-sm sm:col-span-2"
       >
-        {poolRequired ? (
+        {cycle.mining.data?.startRestriction ? (
+          <div>
+            <h2 className="font-display font-semibold">{t("ready.verificationTitle")}</h2>
+            <p className="mt-2 text-sm text-muted-foreground">{t("ready.verificationBody")}</p>
+          </div>
+        ) : cycle.verificationRequired ? (
+          <MiningAccountVerification cycle={cycle} />
+        ) : poolRequired ? (
           <div className="grid items-center gap-6 md:grid-cols-[1fr_auto]">
             <div>
               <h2 className="font-display font-semibold">{t("ready.poolTitle")}</h2>
@@ -98,6 +106,29 @@ export function MiningReadyPanel({ cycle }: { cycle: MiningCycle }) {
       </div>
     </div>
   );
+}
+
+function MiningAccountVerification({ cycle }: { cycle: MiningCycle }) {
+  const t = useT("mining.cycle");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  return <form className="grid gap-3" onSubmit={event => {
+    event.preventDefault();
+    if (cycle.busy) return;
+    const verification = { password, ...(code.trim() ? { twoFactorCode: code.trim() } : {}) };
+    setPassword(""); setCode("");
+    void cycle.start(verification);
+  }}>
+    <h2 className="font-display font-semibold">{t("ready.accountVerificationTitle")}</h2>
+    <p className="text-sm text-muted-foreground">{t("ready.accountVerificationBody")}</p>
+    <label className="grid gap-1 text-sm">{t("ready.accountPassword")}
+      <input className="rounded-md border bg-background px-3 py-2" type="password" autoComplete="current-password" maxLength={128} required value={password} onChange={event => setPassword(event.target.value)} />
+    </label>
+    <label className="grid gap-1 text-sm">{t("ready.accountCode")}
+      <input className="rounded-md border bg-background px-3 py-2" autoComplete="one-time-code" maxLength={64} value={code} onChange={event => setCode(event.target.value)} />
+    </label>
+    <Button type="submit" disabled={cycle.busy !== null || !password}>{t("ready.verifyAndStart")}</Button>
+  </form>;
 }
 
 export function MiningInfoCard({ delayMs }: { delayMs?: number } = {}) {

@@ -12,6 +12,8 @@ import { decideClusterMatch, ipHash, learnFeatureProfile, matchDeviceFeatures } 
 import { observedFeatures, resolveOrCreateDevice } from "../modules/mining-device/resolution.js";
 import { normalizeSignals, sanitizeEvidence } from "../modules/mining-device/signals.js";
 import { backfillMiningAdmissionWindows, beginMiningAdmission, endMiningAdmission, iterateMiningAdmissionCandidates, miningAdmissionCandidateFilter } from "../infrastructure/mongodb/mining-admission.js";
+import { admissionEvidence } from "../modules/mining-device/candidate-evidence.js";
+import { backfillMiningEvidence, evidenceCandidateFilter, planAdmissionEvidence, verifyMiningEvidence, EVIDENCE_INDEX } from "../infrastructure/mongodb/mining-evidence.js";
 
 // Deliberately ignores application .env files. Only the isolated runner supplies this URI;
 // every test creates and drops its own randomly named database, never an existing database.
@@ -26,15 +28,17 @@ let csrf: string;
 let ipSequence = 0;
 interface Account { id: string; token: string; csrf: string }
 
-beforeEach(async () => {
+beforeEach(async (context) => {
   database = `louma_mining_audit_${randomUUID().replaceAll("-", "")}`;
   config = loadConfig({
     NODE_ENV: "test", MONGODB_URI: uri, MONGODB_DATABASE: database,
     ACCESS_TOKEN_SECRET: randomBytes(32).toString("base64"),
     APP_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
     LMDG_RISK_MODE: "enforce", LMDG_NETWORK_LEASE_LOCK: "true",
+    LMDG_IDENTITY_MODE: "strict",
+    LMDG_TEST_LEGACY_IDENTITY: context.name.startsWith("STRICT:") ? "false" : "true",
   });
-  client = new MongoClient(uri);
+  client = new MongoClient(uri, { monitorCommands: true });
   await client.connect();
   const hello = await client.db("admin").command({ hello: 1 });
   assert.ok(hello["setName"], "real MongoDB replica set is required for transactions");
@@ -117,6 +121,8 @@ async function seedIdleDevices(template: Awaited<ReturnType<typeof enroll>>["dev
         deviceKeyHash: `idle-key-${id}`, machineKeyHash: `idle-machine-${id}`, anchorHash: `idle-machine-${id}`,
         aliasHashes: [], quotaAnchorHash: null, browserKeyPublicKey: null, normalizedSignalHash: `idle-vector-${id}`,
         featureProfile: learnFeatureProfile(null, observed.digests), featureSnapshot: observed.digests,
+        ...admissionEvidence({ featureProfile: learnFeatureProfile(null, observed.digests), featureSnapshot: observed.digests,
+          browserKeyPublicKey: null, machineKeyHash: `idle-machine-${id}` }, config.encryptionKey),
         machineFeatureProfile: null, lastSeenAt: new Date(Date.now() + 60_000),
       };
     }));
@@ -325,7 +331,8 @@ test("HISTORY: an idle learned peer cannot escape previously correlated ownershi
   const observed = observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence(profiles[0])));
   // Seed valid bounded history, not a claim that this setup measures a history-poisoning attack.
   const history = learnFeatureProfile(records[1]!.device.featureProfile, observed.digests);
-  await collections.miningDevices.updateOne({ publicId: records[1]!.device.publicId }, { $set: { featureProfile: history } });
+  await collections.miningDevices.updateOne({ publicId: records[1]!.device.publicId }, { $set: { featureProfile: history,
+    ...admissionEvidence({ ...records[1]!.device, featureProfile: history }, config.encryptionKey) } });
   assert.equal((await start(owners[0]!, profiles[0]!)).status, 200);
   assert.equal((await start(owners[1]!, profiles[1]!)).status, 409);
   assert.equal(await running(), 1);
@@ -498,6 +505,8 @@ test("RACE: recency churn cannot erase a pair already compared by both admission
           machineKeyHash: `churn-machine-${index}`, anchorHash: `churn-machine-${index}`, aliasHashes: [],
           quotaAnchorHash: null, normalizedSignalHash: `churn-vector-${index}`, browserKeyPublicKey: null,
           featureProfile: null, featureSnapshot: null, machineFeatureProfile: null,
+          ...admissionEvidence({ featureProfile: null, featureSnapshot: null, browserKeyPublicKey: null,
+            machineKeyHash: `churn-machine-${index}` }, config.encryptionKey),
           lastSeenAt: new Date(Date.now() + 1000),
         })));
         ready.release();
@@ -736,6 +745,8 @@ test("SATURATION: newer live devices cannot hide an edited identity; unrelated d
       deviceKeyHash: keys[2]!, machineKeyHash: keys[1]!, anchorHash: keys[1]!, quotaAnchorHash: null,
       aliasHashes: [], browserKeyPublicKey: null, normalizedSignalHash: `filler-vector-${id}`,
       featureProfile: learnFeatureProfile(null, observed.digests), featureSnapshot: observed.digests,
+      ...admissionEvidence({ featureProfile: learnFeatureProfile(null, observed.digests), featureSnapshot: observed.digests,
+        browserKeyPublicKey: null, machineKeyHash: keys[1]! }, config.encryptionKey),
       machineFeatureProfile: null, lastSeenAt: recent,
     });
     await collections.miningSessions.insertOne({
@@ -793,7 +804,7 @@ test("SCALE: 5000 unrelated historical devices preserve admission and a hidden l
   await collections.miningDevices.updateOne({ publicId: original.device.publicId }, { $set: {
     status: "blocked", featureProfile: null,
     featureSnapshot: observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence(evidence()))).raw,
-  } });
+  }, $unset: { admissionEvidenceVersion: "", admissionEvidenceTokens: "" } });
   const denied = await start(contender, editedEvidence(2));
   assert.equal(denied.status, 409, JSON.stringify(denied.body));
   assert.equal(await running(), 1);
@@ -820,11 +831,8 @@ test("INDEXED SCALE: transaction discovery is bounded beside 50000 idle profiles
   const began = performance.now();
   const result = await start(owner, evidence());
   const ms = performance.now() - began;
-  assert.ok(result.status === 200 || result.status === 503, JSON.stringify(result.body));
-  if (result.status === 503) {
-    assert.equal(result.body.error.code, "mining_start_busy");
-    assert.equal(await running(), 0, "resource exhaustion does not create a partial cycle");
-  }
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.ok(ms < 2000, `legitimate 50000-profile admission exceeded budget: ${ms.toFixed(1)}ms`);
   compared = 0;
   await beginMiningAdmission(collections, original.device.publicId);
   const session = client.startSession();
@@ -980,3 +988,329 @@ test("RETRY BOUND: an exhausted contender reports the committed foreign owner in
   assert.equal(await running(), 1);
   assert.equal(await collections.miningDeviceLeases.countDocuments({ ownerUserId: contender.id, status: "active" }), 0);
 });
+
+test("STRICT: forged fingerprints, fresh keys, identical models and shared NAT cannot authorize mining or merge devices", async () => {
+  const owners = [await account(), await account("medium")];
+  const { generateKeyPairSync } = await import("node:crypto");
+  const keys = owners.map(() => JSON.stringify(generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" })));
+  const attempts = [
+    evidence({ browserKeyPublicKey: keys[0] }),
+    evidence({ browserKeyPublicKey: keys[1] }),
+    { ...editedEvidence(3), browserKeyPublicKey: keys[1], attestation: { verified: true, tpm: true, deviceId: "forged" } },
+    evidence({ browserKeyPublicKey: keys[0], userAgent: "Firefox", platform: "Linux" }),
+  ];
+  const secondApi = await buildApp({ config, collections, mongoClient: client, redis: disabledRedis(), logger: false });
+  try {
+    const results = await Promise.all(attempts.map((device, index) => start(owners[index % 2]!, device,
+      index < 2 ? "10.65.0.1" : "10.65.0.2", index % 2 ? secondApi : app)));
+    for (const result of results) {
+      assert.equal(result.status, 403, JSON.stringify(result.body));
+      assert.equal(result.body.error.code, "mining_verified_device_required");
+    }
+    assert.equal(await running(), 0);
+    assert.equal(await collections.miningDevices.countDocuments(), 0, "unverified evidence cannot create or merge identities");
+    assert.equal(await collections.miningDeviceLeases.countDocuments(), 0);
+    assert.equal(await collections.miningDeviceQuotas.countDocuments(), 0);
+    assert.equal(await collections.miningDeviceNonces.countDocuments(), 0);
+    assert.equal(await collections.miningDeviceAttempts.countDocuments(), 0, "unsupported enrollment does not spend an attempt budget");
+  } finally { await secondApi.close(); }
+});
+
+test("STRICT: disabling heuristic controls and claiming native attestation cannot bypass the service guard", async () => {
+  const owner = await account();
+  config.lmdg.enabled = false;
+  config.lmdg.leaseEnabled = false;
+  config.lmdg.riskMode = "monitor";
+  const result = await start(owner, { ...evidence(), verified: true, enrollmentId: "forged", tpmCertificate: "self-signed" });
+  assert.equal(result.status, 403, JSON.stringify(result.body));
+  assert.equal(result.body.error.code, "mining_verified_device_required");
+  const { startMining } = await import("../modules/mining/start.js");
+  await assert.rejects(startMining({ collections, mongoClient: client, config, ownerUserId: owner.id,
+    correlationId: randomUUID(), device: { evidenceRaw: evidence(), ip: "10.66.0.1" } }),
+    { code: "mining_verified_device_required" });
+  assert.equal(await running(), 0);
+});
+
+test("STRICT: browser proof issuance and replay never grant enrollment trust", async () => {
+  const owner = await account();
+  const challenge = await post("/api/v1/mining/device/challenge", { device: evidence() }, owner);
+  assert.equal(challenge.status, 403, JSON.stringify(challenge.body));
+  assert.equal(challenge.body.error.code, "mining_verified_device_required");
+  const { generateKeyPairSync, sign } = await import("node:crypto");
+  const pair = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const payload = { nonce: "old-nonce-0123456789", signature: sign("sha256", Buffer.from("forged attestation"), pair.privateKey).toString("base64url"),
+    publicKeyJwk: pair.publicKey.export({ format: "jwk" }), device: evidence() };
+  for (let index = 0; index < 2; index++) {
+    const proof = await post("/api/v1/mining/device/prove", payload, owner);
+    assert.equal(proof.status, 403, JSON.stringify(proof.body));
+    assert.equal(proof.body.error.code, "mining_verified_device_required");
+  }
+  assert.equal(await collections.miningDeviceNonces.countDocuments(), 0);
+  assert.equal(await collections.miningDevices.countDocuments(), 0);
+  assert.equal(await running(), 0);
+});
+
+test("EVIDENCE: slow probes share one deadline and cancel outstanding reads", async (t) => {
+  const find = collections.miningDevices.find.bind(collections.miningDevices);
+  let completed = 0, cancelled = 0;
+  t.mock.method(collections.miningDevices, "find", (...args: Parameters<typeof find>) => {
+    if (args[1]?.hint !== EVIDENCE_INDEX) return find(...args);
+    const signal = args[1].signal;
+    assert.ok(signal, "every probe must be cancellable");
+    return { limit() { return this; }, toArray: () => new Promise((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); cancelled++; reject(signal.reason); };
+      const timer = setTimeout(() => { signal.removeEventListener("abort", abort); completed++; resolve([]); }, 175);
+      if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
+    }) };
+  });
+  const observed = observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence(evidence())));
+  const started = performance.now();
+  await assert.rejects(planAdmissionEvidence({ collections, observed, secret: config.encryptionKey,
+    machineKey: null, browserKey: null, ambiguousThreshold: 55, deadline: started + 250 }), { code: "mining_start_busy" });
+  assert.ok(performance.now() - started < 750, "a slow sequence must not acquire a new budget per query");
+  assert.ok(completed <= 4, "only the first probe batch may finish");
+  assert.ok(cancelled > 0, "outstanding probes were cancelled");
+});
+
+test("EVIDENCE: selectivity probe timeout refuses cleanly without granting a cycle", async (t) => {
+  const owner = await account();
+  const find = collections.miningDevices.find.bind(collections.miningDevices);
+  let injected = 0;
+  t.mock.method(collections.miningDevices, "find", (...args: Parameters<typeof find>) => {
+    if (args[1]?.hint === EVIDENCE_INDEX) {
+      injected++;
+      throw new MongoServerError({ code: 50, errmsg: "injected probe time limit" });
+    }
+    return find(...args);
+  });
+  const result = await start(owner, evidence());
+  assert.ok(injected > 0);
+  assert.equal(result.status, 503, JSON.stringify(result.body));
+  assert.equal(result.body.error.code, "mining_start_busy");
+  assert.equal(await running(), 0);
+  assert.equal(await collections.miningDeviceLeases.countDocuments(), 0);
+  assert.equal(await collections.miningDevices.countDocuments({ admissionPending: { $gt: 0 } }), 0);
+});
+
+test("EVIDENCE: interrupted backfill fails closed, resumes and preserves all historical records", async (t) => {
+  const owner = await account();
+  const original = await enroll(owner, evidence());
+  await seedIdleDevices(original.device, 410, unrelatedEvidence());
+  await collections.miningDevices.updateMany({ publicId: { $ne: original.device.publicId } },
+    { $unset: { admissionEvidenceVersion: "", admissionEvidenceTokens: "" } });
+  const idsBefore = (await collections.miningDevices.find({}, { projection: { publicId: 1 } }).toArray()).map(row => row.publicId).sort();
+  assert.equal((await start(owner, evidence())).status, 503, "unindexed evidence must not disappear");
+  assert.equal(await running(), 0);
+  assert.equal(await collections.miningDeviceLeases.countDocuments(), 0);
+  // The second batch fails after the first 200 rows committed. Retry must skip only completed rows.
+  const { Collection } = await import("mongodb");
+  const bulk = Collection.prototype.bulkWrite;
+  let batches = 0;
+  const fault = t.mock.method(Collection.prototype, "bulkWrite", async function (this: InstanceType<typeof Collection>, ...args: Parameters<typeof bulk>) {
+    if (this.collectionName === "mining_devices" && ++batches === 2) throw new Error("injected migration interruption");
+    return bulk.apply(this, args);
+  });
+  await assert.rejects(backfillMiningEvidence(client.db(database), config.encryptionKey), /injected migration interruption/);
+  fault.mock.restore();
+  assert.equal(await collections.miningDevices.countDocuments({ admissionEvidenceVersion: { $exists: false } }), 210);
+  assert.equal(await backfillMiningEvidence(client.db(database), config.encryptionKey), 210);
+  assert.equal(await backfillMiningEvidence(client.db(database), config.encryptionKey), 0);
+  const idsAfter = (await collections.miningDevices.find({}, { projection: { publicId: 1 } }).toArray()).map(row => row.publicId).sort();
+  assert.deepEqual(idsAfter, idsBefore);
+  assert.equal((await start(owner, evidence())).status, 200);
+  assert.equal(await running(), 1);
+  assert.equal(await collections.miningDevices.countDocuments({ admissionPending: { $gt: 0 } }), 0);
+});
+
+test("EVIDENCE: a stale partial observation cannot corrupt a newer machine token or learned history", async () => {
+  const owner = await account();
+  const original = await enroll(owner, evidence());
+  const newer = { ...original.device, machineKeyHash: "newer-machine" };
+  await collections.miningDevices.updateOne({ _id: original.device._id },
+    { $set: { machineKeyHash: newer.machineKeyHash, ...admissionEvidence(newer, config.encryptionKey) } });
+  const { recordDeviceSeen } = await import("../modules/mining-device/observation.js");
+  await recordDeviceSeen(collections, config.encryptionKey, original.device, {
+    ip: null, correlationId: randomUUID(), findings: [],
+    intel: { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null },
+  }, { raw: {}, digests: {}, machine: {} });
+  const stored = await collections.miningDevices.findOne({ _id: original.device._id });
+  assert.ok(stored);
+  assert.equal(stored.machineKeyHash, newer.machineKeyHash);
+  assert.deepEqual(stored.featureProfile, newer.featureProfile);
+  assert.equal((await verifyMiningEvidence(client.db(database), config.encryptionKey)).mismatched, 0);
+});
+
+test("EVIDENCE: maintenance verification detects and repairs stale versioned tokens without changing identities", async () => {
+  const owner = await account();
+  const original = await enroll(owner, evidence());
+  const clean = await verifyMiningEvidence(client.db(database), config.encryptionKey);
+  assert.equal(clean.mismatched, 0);
+  await collections.miningDevices.updateOne({ _id: original.device._id }, { $set: { admissionEvidenceTokens: [] } });
+  const stale = await verifyMiningEvidence(client.db(database), config.encryptionKey);
+  assert.equal(stale.mismatched, 1);
+  assert.deepEqual((await collections.miningDevices.findOne({ _id: original.device._id }))?.admissionEvidenceTokens, [], "preflight is read-only");
+  const repair = await verifyMiningEvidence(client.db(database), config.encryptionKey, true);
+  assert.equal(repair.repaired, 1);
+  assert.equal(repair.concurrentChanges, 0);
+  assert.deepEqual(await verifyMiningEvidence(client.db(database), config.encryptionKey), clean);
+  assert.equal(await collections.transactions.countDocuments(), 0);
+  assert.equal(await collections.miningDeviceLeases.countDocuments(), 0);
+});
+
+test("EVIDENCE: indexed retrieval includes directional learned, drift and legacy witnesses", async () => {
+  const owner = await account();
+  const source = await enroll(owner, editedEvidence(3));
+  const observed = observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence(evidence())));
+  const history = learnFeatureProfile(source.device.featureProfile, observed.digests);
+  const docs = [
+    { ...source.device, featureProfile: history },
+    { ...source.device, featureProfile: null, featureSnapshot: observed.raw },
+    { ...source.device, featureProfile: Object.fromEntries(Object.entries(history).map(([key, entry]) =>
+      [key, { ...entry, drift: [observed.digests[key]!].filter(Boolean) }])) },
+  ].map((row, index) => ({ ...row, _id: new ObjectId(), publicId: randomUUID(), deviceKeyHash: `witness-${index}`,
+    machineKeyHash: null, anchorHash: null, browserKeyPublicKey: null }));
+  for (const row of docs) await collections.miningDevices.insertOne({ ...row, ...admissionEvidence(row, config.encryptionKey) });
+  const tokens = await planAdmissionEvidence({ collections, observed, secret: config.encryptionKey,
+    machineKey: null, browserKey: null, ambiguousThreshold: config.lmdg.ambiguousThreshold });
+  const retrieved = await collections.miningDevices.find(evidenceCandidateFilter(tokens)).toArray();
+  for (const row of docs) {
+    assert.notEqual(decideClusterMatch(matchDeviceFeatures(row, observed, config.encryptionKey), 78, 55), "different");
+    assert.ok(retrieved.some(candidate => candidate.publicId === row.publicId));
+  }
+  const stats = (await collections.miningDevices.find(evidenceCandidateFilter(tokens)).explain("executionStats"))["executionStats"];
+  assert.ok(stats.totalDocsExamined <= 4);
+  const probe = (await collections.miningDevices.find({ admissionEvidenceTokens: tokens[0]! },
+    { projection: { _id: 0, publicId: 1 }, hint: EVIDENCE_INDEX }).limit(201).explain("executionStats"))["executionStats"];
+  assert.equal(probe.totalDocsExamined, 0, "selectivity probes must be covered index reads");
+});
+
+test("STRICT: an established network resident cannot bypass verified-device policy in either order", async () => {
+  const owners = [await account(), await account("medium")];
+  const ip = "10.67.0.1";
+  // Preserve a legacy resident as migration input; this does not claim independently verified identity.
+  const legacy = { ...config, lmdg: { ...config.lmdg, identityMode: "legacy-test" as const } };
+  const resident = await resolveOrCreateDevice({ collections, config: legacy, ownerUserId: owners[0]!.id,
+    correlationId: randomUUID(), evidenceRaw: evidence(), ip,
+    intel: { asn: null, country: null, vpn: false, proxy: false, tor: false, hosting: false, anonymous: false, providerRisk: null } });
+  await collections.miningDevices.updateOne({ publicId: resident.device.publicId }, { $set: {
+    trustState: "established", admissionCount: 10,
+    networkTrusts: [{ ipHash: ipHash(config.encryptionKey, ip)!, admissions: 10, proofs: 0, firstAt: new Date(), lastAt: new Date() }],
+  } });
+  for (const order of [[1, 0], [0, 1]]) {
+    for (const index of order) {
+      const result = await start(owners[index]!, index === 0 ? evidence() : editedEvidence(3), ip);
+      assert.equal(result.status, 403);
+      assert.equal(result.body.error.code, "mining_verified_device_required");
+    }
+  }
+  assert.equal(await running(), 0);
+  assert.equal(await collections.miningDevices.countDocuments(), 1, "resident history is retained; forged newcomer not enrolled");
+});
+
+test("STRICT: existing cycles can still stop and settle while new starts and unverified recovery remain unavailable", async () => {
+  const owner = await account();
+  const legacyConfig = { ...config, lmdg: { ...config.lmdg, identityMode: "legacy-test" as const } };
+  const legacyApp = await buildApp({ config: legacyConfig, collections, mongoClient: client, redis: disabledRedis(), logger: false });
+  try { assert.equal((await start(owner, evidence(), "10.68.0.1", legacyApp)).status, 200); }
+  finally { await legacyApp.close(); }
+  const before = await collections.miningSessions.findOne({ ownerUserId: owner.id, status: "active" });
+  assert.ok(before);
+  const stopped = await post("/api/v1/mining/stop", {}, owner);
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  assert.equal(await running(), 0);
+  assert.equal(await collections.miningDeviceLeases.countDocuments({ status: "active" }), 0);
+  const state = await app.inject({ method: "GET", url: "/api/v1/mining/state", headers: { authorization: `Bearer ${owner.token}` } });
+  assert.equal(state.statusCode, 200);
+  assert.equal(state.json().canStart, false);
+  assert.equal(state.json().startRestriction.code, "mining_verified_device_required");
+  const requirements = await app.inject({ method: "GET", url: "/api/v1/mining/device/requirements", headers: { authorization: `Bearer ${owner.token}` } });
+  assert.equal(requirements.json().enrollmentAvailable, false);
+  assert.equal(requirements.json().browserMiningAllowed, false);
+  assert.equal((await start(owner, evidence({ reinstall: true, recovery: true, rotateKey: true }))).status, 403);
+  assert.equal(await collections.miningSessions.countDocuments({ publicId: before.publicId }), 1, "historical cycle retained");
+});
+
+const scalePopulations = (process.env["MINING_SCALE_PROFILES"] ?? "").split(",").filter(Boolean).map(Number);
+for (const population of scalePopulations) {
+  assert.ok([1000, 5000, 50_000, 100_000].includes(population), "unsupported scale fixture size");
+  test(`EVIDENCE SCALE: ${population} historical profiles with indexed complete admission`, async (t) => {
+    const owner = await account();
+    const original = await enroll(owner, evidence());
+    const seedBegan = performance.now();
+    await seedIdleDevices(original.device, population, unrelatedEvidence());
+    // Historical raw snapshots, already indexed by the migration, remain match-equivalent.
+    const legacyIds = (await collections.miningDevices.find({ publicId: { $ne: original.device.publicId } },
+      { projection: { publicId: 1 } }).limit(100).toArray()).map(row => row.publicId);
+    const legacyRaw = observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence(unrelatedEvidence()))).raw;
+    await collections.miningDevices.updateMany({ publicId: { $in: legacyIds } }, {
+      $set: { featureProfile: null, featureSnapshot: legacyRaw, admissionLeaseEndsAt: new Date(Date.now() + 86_400_000) },
+      $unset: { admissionEvidenceVersion: "", admissionEvidenceTokens: "" },
+    });
+    assert.equal(await backfillMiningEvidence(client.db(database), config.encryptionKey), 100);
+    const seedMs = performance.now() - seedBegan;
+    let measuring = false;
+    const operations: Record<string, number> = {};
+    const commands = (event: { commandName: string }) => {
+      if (measuring) operations[event.commandName] = (operations[event.commandName] ?? 0) + 1;
+    };
+    client.on("commandStarted", commands);
+    const find = collections.miningDevices.find.bind(collections.miningDevices);
+    const filters: Parameters<typeof find>[0][] = [];
+    t.mock.method(collections.miningDevices, "find", (...args: Parameters<typeof find>) => {
+      if (measuring && args[1]?.projection?.["featureProfile"] === 1) filters.push(args[0]);
+      return find(...args);
+    });
+    const samples: { status: number; code: string | null; ms: number }[] = [];
+    let cpuUserMicros = 0;
+    let cpuSystemMicros = 0;
+    let peakRssBytes = process.memoryUsage().rss;
+    const memorySampler = setInterval(() => { peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss); }, 10);
+    try {
+      for (let sample = 0; sample < 8; sample++) {
+        const cpu = process.cpuUsage();
+        const began = performance.now();
+        measuring = true;
+        const result = await start(owner, evidence(), "10.69.0.1");
+        measuring = false;
+        const elapsed = performance.now() - began;
+        const used = process.cpuUsage(cpu);
+        cpuUserMicros += used.user;
+        cpuSystemMicros += used.system;
+        samples.push({ status: result.status, code: result.body.error?.code ?? null, ms: elapsed });
+        if (result.status === 200) {
+          assert.equal(await running(), 1);
+          const leases = await collections.miningDeviceLeases.find({ status: "active" }).toArray();
+          assert.equal(new Set(leases.map(row => row.deviceClusterId)).size, leases.length);
+          assert.ok(leases.every(row => row.ownerUserId === owner.id));
+          assert.equal((await post("/api/v1/mining/stop", {}, owner)).status, 200);
+          assert.equal((await post("/api/v1/mining/pools/join", { poolId: "low" }, owner)).status, 200);
+        }
+      }
+    } finally { clearInterval(memorySampler); client.off("commandStarted", commands); measuring = false; }
+    const explained = [];
+    for (const filter of filters.slice(0, 2)) {
+      const plan = await find(filter).limit(201).explain("executionStats");
+      const stats = plan["executionStats"];
+      explained.push({ keys: stats.totalKeysExamined, documents: stats.totalDocsExamined,
+        executionMs: stats.executionTimeMillis, indexed: JSON.stringify(plan["queryPlanner"].winningPlan).includes(EVIDENCE_INDEX) });
+    }
+    const sorted = samples.map(row => row.ms).sort((a, b) => a - b);
+    const percentile = (p: number) => sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)];
+    const report = { population, mode: "isolated legacy matcher diagnostic; no physical-device guarantee", seedMs,
+      samples, successful: samples.filter(row => row.status === 200).length,
+      rejected: samples.filter(row => row.status !== 200).length,
+      p50: percentile(0.5), p95: percentile(0.95), p99: percentile(0.99),
+      cpuUserMicros, cpuSystemMicros, peakRssBytes, mongoResidentMiB: (await client.db("admin").command({ serverStatus: 1 }))["mem"]?.resident,
+      operations, explained, pending: await collections.miningDevices.countDocuments({ admissionPending: { $gt: 0 } }),
+      activeLeasesAfterStop: await collections.miningDeviceLeases.countDocuments({ status: "active" }),
+    };
+    const output = process.env["MINING_SCALE_OUT"];
+    if (output) (await import("node:fs")).appendFileSync(output, `${JSON.stringify(report)}\n`);
+    t.diagnostic(JSON.stringify(report));
+    assert.equal(report.successful, 8, "every refusal is counted; failed starts do not establish capacity");
+    assert.ok(samples[0]!.ms < 2000, "first start must meet the unchanged budget");
+    assert.ok(explained.length === 2 && explained.every(row => row.indexed && row.documents <= 5));
+    assert.equal(report.pending, 0);
+    assert.equal(report.activeLeasesAfterStop, 0);
+  });
+}

@@ -43,6 +43,7 @@ export interface MiningDeviceFeatureProfile {
 export type MiningDeviceTrustState = "provisional" | "established" | "suspicious" | "blocked";
 
 export interface MiningDeviceRecord {
+  identityKind?: "browser";
   _id: ObjectId;
   publicId: string;
   /**
@@ -76,6 +77,8 @@ export interface MiningDeviceRecord {
   featureSnapshot: Record<string, string> | null;
   /** Learned digest history per feature; the correlation primitive. Null on records from before it existed. */
   featureProfile: MiningDeviceFeatureProfile | null;
+  admissionEvidenceVersion?: number;
+  admissionEvidenceTokens?: string[];
   /** The same history, restricted to the machine traits that form `machineKeyHash`. */
   machineFeatureProfile: MiningDeviceFeatureProfile | null;
   firstSeenAt: Date;
@@ -215,6 +218,10 @@ export interface MiningDeviceLeaseRecord {
 }
 
 export interface MiningDeviceNonceRecord {
+  purpose?: "browser-start-v1";
+  intentHash?: string;
+  origin?: string | null;
+  startUsedAt?: Date | null;
   _id: ObjectId;
   publicId: string;
   ownerUserId: string;

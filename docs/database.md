@@ -1,5 +1,45 @@
 # Database (MongoDB — the source of truth)
 
+## Browser admission contract (ADR-018)
+
+`users.miningAdmissionFence` is an optional boolean written inside admission to
+serialize one account's history across independent browser keys. `mining_devices`
+adds `identityKind: "browser"`; these records use canonical key HMACs as their
+unique key and quota subject, never coarse machine fingerprints.
+
+Browser nonces add bounded intent/purpose/origin and a separate `startUsedAt`.
+The existing unique nonce index serves proof consumption. `mining_sessions` adds
+`admissionPolicy` and `browserAdmission`, with at most eight enumerated risk
+reasons and admitted rate/window bounds. Session and receipt are written together
+with enrollment, proof consumption and leases. Session/lease history, not expiring
+nonces, is the reward entitlement source. `two_factor_uses.purpose` additionally
+accepts `mining`; existing unique/TTL indexes are preserved.
+
+Exact legacy key and rendering-history lookups use `mining_devices_evidence`.
+Legacy exact identities are capped at 200 with explicit busy refusal on overflow;
+heuristic history overflow requires account verification and never creates an
+identity conflict. Missing evidence versions prevent admission until migration
+finishes. No new collection/index or financial document migration is required.
+
+## Current mining evidence contract (ADR-017)
+
+Initial and transactional mining candidate discovery now query all historical
+states through `mining_devices_evidence` (`admissionEvidenceTokens`, `publicId`)
+and `mining_devices_evidence_version` (`admissionEvidenceVersion`). The older
+ADR-014/016 descriptions below record prior designs and are superseded here.
+The version-1 token array is validator-bounded to `DEVICE_FEATURES.length * 11 + 2`
+strings of at most 160 characters. Version and tokens must be present together.
+Missing-version rows remain query candidates. Source fields and derived tokens
+change atomically; migration compares source fields before writing. No unique/TTL
+index or historical evidence is removed. More than 200 candidates fails closed;
+selectivity probes and initial iteration share the existing 2,000 ms budget.
+
+Tokens are private HMAC-derived matching aids and absence markers, not credentials
+or verified hardware identity. Do not log/export them or put them in Redis.
+All new production mining is refused until independently trusted enrollment
+exists. See [ADR-017](adr.md) for completeness and compatibility and
+[migration operations](migrations.md#mining-evidence-v1-adr-017).
+
 ## Collections (including subscription and address archives)
 
 Core: users, wallets, ledger_accounts, ledger_entries, transactions.

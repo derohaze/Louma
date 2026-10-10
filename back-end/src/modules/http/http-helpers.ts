@@ -14,6 +14,7 @@ import {
   preauthCsrfToken,
 } from "../security/csrf.js";
 import { badRequest, unauthorized } from "../../shared/errors.js";
+import type { AppConfig } from "../../config/env.js";
 
 export function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
@@ -114,6 +115,12 @@ async function requireAuth(request: FastifyRequest) {
 }
 
 export const authenticated = { preHandler: requireAuth } satisfies RouteShorthandOptions;
+
+/** Route limiter appended after requireAuth; only a verified account can choose its bucket. */
+export function miningRateLimit(config: Pick<AppConfig, "lmdg">, max: number, timeWindow: number) {
+  if (config.lmdg.identityMode !== "browser") return { max, timeWindow };
+  return { max, timeWindow, hook: "preHandler" as const, keyGenerator: (request: FastifyRequest) => getAuth(request).userId };
+}
 
 /**
  * Guards the endpoints that start or rotate a session with the pre-session CSRF token.

@@ -151,13 +151,15 @@ test("concurrent activation and claims converge through unique constraints", asy
 test("archive failure rolls back the alias and its subscription authorization write", async () => {
   const account = await makeAccount();
   await grant(account);
+  const before = await collections.subscriptions.findOne({ ownerUserId: account.user.id, status: "active" });
+  assert.ok(before);
   const insert = collections.walletAddressHistory.insertOne;
   collections.walletAddressHistory.insertOne = async () => { throw new Error("Injected archive failure"); };
   try { await assert.rejects(() => setAddress(account, "Archive123"), /Injected archive failure/); }
   finally { collections.walletAddressHistory.insertOne = insert; }
   assert.equal((await collections.wallets.findOne({ publicId: account.wallet.id }))?.customAddress, null);
   assert.equal(await collections.walletAddressHistory.countDocuments({ ownerUserId: account.user.id }), 0);
-  assert.equal((await collections.subscriptions.findOne({ ownerUserId: account.user.id, status: "active" }))?.version, 1);
+  assert.equal((await collections.subscriptions.findOne({ ownerUserId: account.user.id, status: "active" }))?.version, before.version);
   assert.equal((await setAddress(account, "Archive123")).customAddress, "archive123", "failed change spent no cooldown");
 });
 

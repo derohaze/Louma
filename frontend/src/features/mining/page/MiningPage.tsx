@@ -91,7 +91,7 @@ export function MiningPage() {
           icon={PickaxeIcon}
           busy={busy === "start"}
           onAction={start}
-          disabled={busy !== null || loading}
+          disabled={busy !== null || loading || !mining.data.canStart}
           busyLabel={t("actions.startBusy")}
         />
       )
@@ -156,6 +156,12 @@ export function MiningPage() {
   return (
     <>
       <PageHeader title={t("title")} subtitle={t("description")} action={headerAction} />
+
+      {mining.data?.startRestriction && (
+        <div className="mb-4">
+          <FormMessage tone="error">{mining.data.startRestriction.message}</FormMessage>
+        </div>
+      )}
 
       {error && !isDeviceBlocked && (
         <div className="mb-4">

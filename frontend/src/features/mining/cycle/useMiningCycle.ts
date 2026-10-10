@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useWallet } from "@/shared/hooks";
-import { api, messageForError, type ApiMiningState } from "@/shared/api";
+import { api, ApiError, messageForError, type ApiMiningState } from "@/shared/api";
 import {
   DEVICE_IN_USE_MESSAGE,
   messageForMiningError,
@@ -49,6 +49,7 @@ export function useMiningCycle() {
   const [tick, setTick] = useState(() => Date.now());
   const [busy, setBusy] = useState<"start" | "settle" | "stop" | null>(null);
   const [error, setError] = useState("");
+  const [verificationRequired, setVerificationRequired] = useState(false);
   /** Cycles whose completion the page has already asked to settle, so it asks exactly once each. */
   const settleRequested = useRef<Set<string>>(new Set());
   /** When `canSettle` was last re-read per cycle, so a stale flag can be refreshed without busy-looping. */
@@ -266,16 +267,18 @@ export function useMiningCycle() {
 
   // LMDG: submits multi-signal device evidence with the start; the server alone decides
   // eligibility. A rejection names no account, IP, or detection detail — just the device rule.
-  const start = async () => {
+  const start = async (verification?: { password: string; twoFactorCode?: string }) => {
     setBusy("start");
     setError("");
     pushFeed(translate("mining.cycle.feed.startRequest"));
     await nextPaint();
     try {
-      await startMiningWithGuard();
+      await startMiningWithGuard(verification);
+      setVerificationRequired(false);
       await queryClient.invalidateQueries({ queryKey: serverStateKeys.mining });
       await refresh();
     } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "mining_account_verification_required") setVerificationRequired(true);
       setError(messageForMiningError(cause, messageForError));
       pushFeed(translate("mining.cycle.feed.startRefused"));
     } finally {
@@ -415,6 +418,7 @@ export function useMiningCycle() {
     cycleComplete,
     actionsEnabled,
     start,
+    verificationRequired,
     collect,
     stop,
   };

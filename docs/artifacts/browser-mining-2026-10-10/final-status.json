@@ -1,0 +1,22 @@
+[
+  {
+    "name": "backend-typecheck",
+    "code": 0,
+    "finishedAt": "2026-10-10T19:48:02.667Z"
+  },
+  {
+    "name": "frontend-typecheck",
+    "code": 0,
+    "finishedAt": "2026-10-10T19:48:09.949Z"
+  },
+  {
+    "name": "unit",
+    "code": 0,
+    "finishedAt": "2026-10-10T19:48:16.172Z"
+  },
+  {
+    "name": "browser-load-telemetry",
+    "code": 0,
+    "finishedAt": "2026-10-10T19:48:51.760Z"
+  }
+]

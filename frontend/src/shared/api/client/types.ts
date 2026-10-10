@@ -87,6 +87,7 @@ export interface ApiMiningState {
   serverNow: string;
   enabled: boolean;
   canStart: boolean;
+  startRestriction?: { code: string; message: string };
   cycleDurationSeconds: number;
   session: ApiMiningSession | null;
   /** The window allowance behind the progress bar: accumulated, never scoped to one segment. */

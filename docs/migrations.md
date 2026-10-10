@@ -1,5 +1,83 @@
 # Migrations
 
+## Browser admission cutover (ADR-018)
+
+No production cutover was run. Drain every old admission writer and in-flight
+request before deploying browser writers. Finish the evidence-v1 backfill and
+read-only full verifier below. Preserve counts, IDs, balances and ledger totals.
+Allow the final legacy quota windows to expire (24 hours after their anchors)
+before enabling browser admission; old coarse quota subjects cannot be silently
+reinterpreted as independent keys. Accrued legacy rewards remain settleable.
+
+Bootstrap additive validators first (account fence, browser device kind, nonce
+intent/use, bounded session receipt, mining 2FA purpose). Current default is
+`LMDG_IDENTITY_MODE=browser`; maintenance rollback sets it to `strict` while
+retaining the upgraded settlement/stop code and all additive records. Do not
+deploy an older financial writer that ignores browser entitlement. Never mix
+legacy and browser admission versions. Pilot on real devices before rollout.
+
+## Mining evidence v1 (ADR-017)
+
+This migration adds derived tokens to historical device documents without changing
+their IDs, evidence history, owners, quotas, leases, balances or journal records.
+No production migration was performed during implementation.
+
+Deployment procedure, for a separately authorized maintenance window:
+
+1. Preserve a backup and record device IDs/counts, active cycles/leases, quota
+   counts, journal/entry counts and ledger reconciliation/totals. Keep the existing
+   encryption key. Drain every old mining API writer and all in-flight requests.
+   Block start/challenge/prove traffic until all instances run the strict guard.
+2. Build the new application. Startup installs the bounded validator and two
+   ordinary evidence indexes, then backfills missing-version rows in batches of
+   200 before serving. It compares source fields on each majority write. Do not
+   run an older binary beside it. Existing strict starts remain unavailable.
+3. Run the full evidence verifier with trusted configuration already supplied by
+   the operator. It does not load an environment file itself:
+
+   ```powershell
+   node --import tsx src/scripts/migrate-mining-evidence.ts
+   ```
+
+   Default is read-only. Exit 0 means no mismatch; 1 means mismatches or changed
+   IDs/counts; 2 means configuration/storage failure. Reports contain counts and
+   an ID digest, never evidence values, hardware IDs or connection credentials.
+4. To repair missing OR stale versioned tokens, after verifying writers are
+   drained and explicitly checking the configured database name:
+
+   ```powershell
+   node --import tsx src/scripts/migrate-mining-evidence.ts --execute --writers-drained --confirm-database=<exact-name>
+   ```
+
+   The flag asserts operator action; it cannot itself drain another process.
+   The full repair streams 200-row cursor batches, writes one guarded document
+   at a time and changes only derived fields. It may be interrupted/repeated.
+   Require `after.mismatched=0`, `concurrentChanges=0`, unchanged counts/ID digest
+   and exit 0. A concurrent source update is not overwritten; rerun only after
+   identifying/draining the writer. Never ignore a nonzero result.
+5. Verify named-index execution plans on representative distributions, no duplicate
+   active leases, no new pending references, unchanged quota/history/financial
+   totals and clean ledger reconciliation. Run strict route smoke tests: valid
+   authenticated start/challenge/prove must refuse with the documented 403, while
+   existing-cycle stop/settlement and wallet access remain functional.
+6. Restore ordinary web traffic only after every instance has the strict guard.
+   This deployment does not restore new mining availability. The hardware trust
+   boundary in `mining-device-security.md` needs a separately validated release.
+
+Rollback preserves all fields, indexes and history. Keep start/challenge/prove
+blocked at ingress and retain the strict service guard even if reverting the
+retrieval optimization. A plain rollback to a pre-guard binary reopens the known
+spoofing bypass and is not a safe security rollback. Do not delete token fields
+or reset pending references while a request can still commit. If old writers
+ever ran again, perform full verification/rebuild before reusing indexed
+discovery; missing-version bootstrap alone cannot repair stale versioned rows.
+Encryption-key rotation cannot be achieved by token rebuild alone, because
+stored source digests also use that key.
+
+Isolated verification covers interruption after 200 of 410 rows, resumed counts
+and IDs, partial migration refusal, stale versioned rows, read-only preflight,
+repair idempotency and a stale observation racing a newer machine value.
+
 ## Policy
 
 Never destructive-first: plan, backup/export, preflight counts, transform,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertBrowserRewardEntitlement, BrowserRewardSnapshotChanged } from "../../infrastructure/mongodb/browser-mining.js";
 import { type ClientSession, type MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { AppConfig } from "../../config/env.js";
@@ -85,6 +86,12 @@ export async function settleSession(input: MiningSettlementInput): Promise<{ pos
     const expired = nowMs >= window.endsAtMs;
 
     if (accrued <= current.settledMinor) {
+      try { await assertBrowserRewardEntitlement(collections, current); }
+      catch (error) {
+        if (!(error instanceof BrowserRewardSnapshotChanged)) throw error;
+        current = await collections.miningSessions.findOne({ _id: current._id }) ?? current;
+        continue;
+      }
       // Nothing new to post. If the window closed, still close the cycle so a fresh one can start.
       if (expired && current.status !== "settled") {
         const closed = await collections.miningSessions.updateOne(
@@ -132,6 +139,7 @@ export async function settleSession(input: MiningSettlementInput): Promise<{ pos
     try {
       await mongoSession.withTransaction(
         async () => {
+          await assertBrowserRewardEntitlement(collections, current, mongoSession);
           // The compare-and-set: identical concurrent attempts cannot both see this succeed.
           const cas = await collections.miningSessions.updateOne(
             { _id: current._id, ownerUserId: current.ownerUserId, status: "active", settledMinor: current.settledMinor },
@@ -211,7 +219,7 @@ export async function settleSession(input: MiningSettlementInput): Promise<{ pos
       // A lost race, a transient fault, or an ambiguous commit all mean the same thing here: re-read
       // the cycle and decide again. The compare-and-set makes re-deciding safe — a reward already
       // posted is never posted twice.
-      if (error instanceof ConcurrentSettlementError || isDuplicateKeyError(error) || isTransientTransactionError(error)) {
+      if (error instanceof BrowserRewardSnapshotChanged || error instanceof ConcurrentSettlementError || isDuplicateKeyError(error) || isTransientTransactionError(error)) {
         const reloaded = await collections.miningSessions.findOne({ _id: current._id });
         if (!reloaded) return { postedMinor: 0, session: current, confirmed: false };
         current = reloaded;
