@@ -2,7 +2,7 @@
 # Multi-stage: build TypeScript in a full toolchain image, ship only
 # dist/ + production node_modules in a slim runtime image.
 
-FROM node:20-bookworm-slim AS builder
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 WORKDIR /app
 
 # argon2 compiles a native binding when no prebuild matches, so the
@@ -20,10 +20,11 @@ RUN npm ci --include=dev
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+COPY payment-gateway ./payment-gateway
 RUN npm run build \
   && npm prune --omit=dev
 
-FROM node:20-bookworm-slim AS runner
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
   HOST=0.0.0.0 \
@@ -40,12 +41,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 
 EXPOSE 8000
 
-# No curl/wget in the slim image: plain node fetch against /health.
-# Coolify maps its own check to this endpoint as well.
+# Readiness checks MongoDB, the gateway contract and its configured Redis limiter.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.LOUMA_API_PORT||process.env.PORT||8000)+'/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.LOUMA_API_PORT||8000)+'/ready',{signal:AbortSignal.timeout(4000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
-# Coolify injects the environment itself and the image ships no `.env.production`
-# file; `--env-file-if-exists` only exists on Node 22.9+, so on this Node 20
-# runner the flag exits before the API can serve. Read the ambient environment.
-CMD ["node", "dist/server.js"]
+# Coolify injects runtime settings; the image contains no environment files.
+CMD ["node", "dist/src/server.js"]

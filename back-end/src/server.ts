@@ -6,17 +6,24 @@ import { getCollections } from "./infrastructure/mongodb/collections.js";
 import { RedisHandle } from "./infrastructure/redis/client.js";
 
 import { sweepSubscriptions } from "./modules/subscriptions/service.js";
+import { GatewayStore } from "../payment-gateway/infrastructure/store.js";
+import { migrate, compatible } from "../payment-gateway/infrastructure/migrations.js";
+import { startWorker } from "../payment-gateway/worker.js";
 
 const config = loadConfig();
 const { client, db } = await connectMongo(config);
-// Redis is optional infrastructure: construct-and-connect never rejects, and a dead Redis only
-// degrades the process to MongoDB-only. It is closed before MongoDB on shutdown so in-flight
-// requests finish their fallback reads first.
+// Redis connect does not reject; readiness and gateway rate limits fail closed when configured
+// Redis is unavailable. Close it after requests and workers drain, then close MongoDB.
 const redis = new RedisHandle(config.redis);
 await redis.connect();
 
 try {
   await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled, observationTtlSeconds: config.lmdg.observationTtlSeconds });
+  if (config.embeddedGateway) {
+    const gateway = new GatewayStore(client, db, config.embeddedGateway);
+    await migrate(gateway);
+    await compatible(gateway);
+  }
   const walletsNeedingAddressMigration = await db.collection("wallets").countDocuments({ addressVersion: 0 });
   if (walletsNeedingAddressMigration > 0) {
     throw new Error(
@@ -25,6 +32,7 @@ try {
     );
   }
   const app = await buildApp({ config, collections: getCollections(db), mongoClient: client, redis });
+  if (app.gateway) app.addHook("onClose", startWorker(app.gateway, app.log));
   let afterAddress: string | null = null;
   let sweep: Promise<void> | null = null;
   const timer = setInterval(() => {
@@ -59,6 +67,7 @@ try {
 
   await app.listen({ host: config.host, port: config.port });
 } catch (error) {
+  await redis.close();
   await client.close();
   throw error;
 }

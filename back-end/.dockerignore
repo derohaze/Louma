@@ -8,3 +8,10 @@ Dockerfile
 .dockerignore
 .git
 .gitignore
+.temp
+**/__pycache__
+payment-gateway/tests
+payment-gateway/docs
+payment-gateway/sdk
+payment-gateway/examples
+payment-gateway/api
