@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -135,6 +135,103 @@ test(
         );
       };
       await suite.test(
+        "Go-created numeric metadata replays from MongoDB without a second checkout",
+        async () => {
+          const key = randomUUID();
+          const body = {
+            subtotal: "50.0000",
+            currency: "LMA",
+            metadata: { "9": "nine", "10": "ten" },
+          };
+          const existing = await checkout(store, principal, body, key);
+          const goJSON =
+            '{"subtotal":"50.0000","tax":"0","currency":"LMA","description":"","success_url":"","cancel_url":"","price_id":"","metadata":{"10":"ten","9":"nine"}}';
+          await db
+            .collection("gateway_payments")
+            .updateOne(
+              { publicId: existing.publicId },
+              {
+                $set: {
+                  requestFingerprint: createHash("sha256")
+                    .update(goJSON)
+                    .digest("hex"),
+                },
+              },
+            );
+          assert.equal(
+            (await checkout(store, principal, body, key)).publicId,
+            existing.publicId,
+          );
+          assert.equal(
+            await db
+              .collection("gateway_payments")
+              .countDocuments({
+                applicationId: app.publicId,
+                idempotencyKey: key,
+              }),
+            1,
+          );
+          await assert.rejects(
+            checkout(store, principal, { ...body, subtotal: "100.0000" }, key),
+            { code: "idempotency_key_reused" },
+          );
+        },
+      );
+      await suite.test(
+        "insufficient funds leave balances, approval and journal unchanged",
+        async () => {
+          const before = await db
+            .collection("ledger_accounts")
+            .find({
+              walletId: {
+                $in: [identities.payer.walletId, identities.merchant.walletId],
+              },
+            })
+            .sort({ publicId: 1 })
+            .toArray();
+          const p = await make("1000.0000"),
+            a = await authorize(p);
+          await assert.rejects(
+            confirm(
+              store,
+              identities.payer.userId,
+              p.publicId,
+              a.publicId,
+              p.intentHash,
+            ),
+            { code: "insufficient_funds" },
+          );
+          const after = await db
+            .collection("ledger_accounts")
+            .find({
+              walletId: {
+                $in: [identities.payer.walletId, identities.merchant.walletId],
+              },
+            })
+            .sort({ publicId: 1 })
+            .toArray();
+          assert.deepEqual(after, before);
+          assert.equal(
+            (
+              await db
+                .collection("gateway_approvals")
+                .findOne({ publicId: a.publicId })
+            )?.["consumed"],
+            false,
+          );
+          assert.equal(
+            await db
+              .collection("transactions")
+              .countDocuments({ paymentId: p.publicId }),
+            0,
+          );
+          assert.equal(
+            (await payment(store, "", p.publicId)).status,
+            "requires_action",
+          );
+        },
+      );
+      await suite.test(
         "simultaneous confirmations, replay and partial refunds never duplicate a journal",
         async () => {
           const p = await make("10.0000"),
@@ -160,12 +257,10 @@ test(
           );
           assert.equal(paid.status, "succeeded");
           assert.equal(
-            await db
-              .collection("transactions")
-              .countDocuments({
-                type: "merchant_payment",
-                paymentId: p.publicId,
-              }),
+            await db.collection("transactions").countDocuments({
+              type: "merchant_payment",
+              paymentId: p.publicId,
+            }),
             1,
           );
           const key = randomUUID();
@@ -185,12 +280,10 @@ test(
           );
           assert.equal(r.status, "succeeded");
           assert.equal(
-            await db
-              .collection("transactions")
-              .countDocuments({
-                type: "merchant_refund",
-                operationId: r.publicId,
-              }),
+            await db.collection("transactions").countDocuments({
+              type: "merchant_refund",
+              operationId: r.publicId,
+            }),
             1,
           );
           assert.equal(
@@ -306,13 +399,11 @@ test(
               { publicId: a.sessionId },
               { $set: { status: "active" } },
             );
-          await db
-            .collection("transfer_password_credentials")
-            .insertOne({
-              ownerUserId: a.ownerUserId,
-              passwordHash: "fixture",
-              changedAt: new Date(),
-            });
+          await db.collection("transfer_password_credentials").insertOne({
+            ownerUserId: a.ownerUserId,
+            passwordHash: "fixture",
+            changedAt: new Date(),
+          });
           await assert.rejects(
             () =>
               confirm(
@@ -374,12 +465,10 @@ test(
             schedule(store, new Date()),
           ]);
           assert.equal(
-            await db
-              .collection("gateway_invoices")
-              .countDocuments({
-                subscriptionId: paid.subscriptionId,
-                cycle: 1,
-              }),
+            await db.collection("gateway_invoices").countDocuments({
+              subscriptionId: paid.subscriptionId,
+              cycle: 1,
+            }),
             1,
           );
           const first = await claimInvoice(store, new Date());
@@ -425,12 +514,10 @@ test(
             );
           await schedule(store, new Date());
           assert.equal(
-            await db
-              .collection("gateway_invoices")
-              .countDocuments({
-                subscriptionId: paid.subscriptionId,
-                cycle: 2,
-              }),
+            await db.collection("gateway_invoices").countDocuments({
+              subscriptionId: paid.subscriptionId,
+              cycle: 2,
+            }),
             0,
           );
         },

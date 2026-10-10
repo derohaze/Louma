@@ -28,6 +28,7 @@ import {
   hmacHex,
   isMachineIdentityMatch,
   isNearCloneMatch,
+  isParallelMiningRisk,
   isPresentationFeature,
   isRenderingFeature,
   learnFeatureProfile,
@@ -711,6 +712,94 @@ test("a CPU class contradiction keeps a near match outside the shared quota band
   assert.deepEqual(match.classDrifted, ["hardwareConcurrency"]);
   assert.equal(isNearCloneMatch(match), false);
   assert.notEqual(decideClusterMatch(match, 78, 55), "same", "quota sharing does not merge device records");
+});
+
+test("a three-slot hardware edit that verdicts different is parallel-mining telemetry, not a block", () => {
+  // The residual attack shape: the same computer with three of the six engine-stable identity
+  // slots edited (audio device, display gamut, HDR) behind a second engine's rendering stack.
+  // The verdict must stay "different" — blocking it would bind unrelated same-model machines
+  // onto one allowance — while the telemetry predicate flags it for the ops report.
+  const base = evidence({ audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 });
+  const known = profileOf(base);
+  const edited = observedOf({
+    ...base,
+    audioSampleRate: 48000,
+    audioChannels: 1,
+    colorGamut: "p3",
+    hdr: true,
+    // A second engine's corroborators move too (no deviceMemory in Firefox, no media stack
+    // yet, its own screen/timezone/rendering): that dilution is what drops the overall score
+    // below the ambiguous line while the machine traits still agree at the ambiguous level.
+    deviceMemory: null,
+    mediaAudioInputs: null,
+    mediaVideoInputs: null,
+    screenWidth: 2560,
+    screenHeight: 1440,
+    timezone: "Europe/Berlin",
+    timezoneOffsetMinutes: -120,
+    browserKeyPublicKey: "key-second-engine",
+    webglHash: "webgl-second",
+    canvasHash: "canvas-second",
+    audioHash: "audio-second",
+    fontsHash: "fonts-second",
+  });
+  assert.notEqual(
+    machineKeyHash(SECRET, edited.features.raw),
+    machineKeyHash(SECRET, known.features.raw),
+    "the edit forks the machine key, so the lease cannot collide",
+  );
+  const match = matchDeviceFeatures(
+    { featureProfile: known.profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null },
+    edited.features,
+    SECRET,
+  );
+  assert.deepEqual(match.classDrifted, [], `no class trait was contradicted, got ${match.classDrifted.join(",")}`);
+  assert.equal(
+    match.drifted.filter((key) => CORE_MACHINE_FEATURE_SET.has(key)).length,
+    3,
+    `three identity slots moved, got ${match.drifted.join(",")}`,
+  );
+  assert.equal(decideClusterMatch(match, 78, 55), "different", `verdict stays different, got score=${match.score} machineScore=${match.machineScore}`);
+  assert.equal(isParallelMiningRisk(match, 78, 55), true, `the near miss is telemetry, got score=${match.score} machineScore=${match.machineScore}`);
+});
+
+test("handled pairs are never parallel-mining telemetry", () => {
+  const base = evidence({ audioSampleRate: 44100, audioChannels: 2, hdr: false, screenColorDepth: 24 });
+  const known = profileOf(base);
+  const candidate = { featureProfile: known.profile, featureSnapshot: null, browserKeyPublicKey: null, fingerprintVisitorIdHash: null };
+  // Two edited slots land in the near-clone band: refused by the lease while the machine mines.
+  const twoSlot = matchDeviceFeatures(candidate, observedOf({ ...base, colorGamut: "p3", hdr: true }).features, SECRET);
+  assert.equal(decideClusterMatch(twoSlot, 78, 55), "ambiguous");
+  assert.equal(isParallelMiningRisk(twoSlot, 78, 55), false);
+  // A class contradiction is a difference of machine, never a near miss.
+  const otherClass = matchDeviceFeatures(candidate, observedOf({ ...base, hardwareConcurrency: 32 }).features, SECRET);
+  assert.ok(otherClass.classDrifted.length > 0);
+  assert.equal(isParallelMiningRisk(otherClass, 78, 55), false);
+  // A genuinely different laptop shares no hardware story.
+  const stranger = matchDeviceFeatures(
+    candidate,
+    observedOf(evidence({
+      platform: "MacIntel",
+      screenWidth: 2560,
+      screenHeight: 1600,
+      hardwareConcurrency: 16,
+      deviceMemory: 16,
+      maxTouchPoints: 5,
+      screenColorDepth: 30,
+      colorGamut: "p3",
+      hdr: true,
+      audioSampleRate: 96000,
+      audioChannels: 6,
+      browserKeyPublicKey: "key-stranger",
+      webglHash: "webgl-stranger",
+      canvasHash: "canvas-stranger",
+      audioHash: "audio-stranger",
+      fontsHash: "fonts-stranger",
+    })).features,
+    SECRET,
+  );
+  assert.equal(decideClusterMatch(stranger, 78, 55), "different");
+  assert.equal(isParallelMiningRisk(stranger, 78, 55), false);
 });
 
 test("presentation and rendering features are classified for tamper detection", () => {

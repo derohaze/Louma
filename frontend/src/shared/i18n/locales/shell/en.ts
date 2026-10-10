@@ -22,6 +22,7 @@ export default {
     profile: "Profile",
     security: "Security",
     settings: "Settings",
+    developer: "Developer",
     darkMode: "Dark mode",
     logOut: "Log out",
     language: "Language",

@@ -31,6 +31,10 @@ import {
 import { normalizeSignals, sanitizeEvidence } from "../mining-device/signals.js";
 import { isNetworkResident } from "../mining-device/enrollment.js";
 import { networkLockKeyFor } from "../mining-device/lease.js";
+import { revalidateMiningLease } from "../mining-device/admission.js";
+import { enforceMiningAttempt } from "../mining-device/attempts.js";
+import type { DeviceResolution } from "../mining-device/resolution.js";
+import { beginMiningAdmission, endMiningAdmission, retainMiningAdmission, findRunningMiningAccount, prepareMiningNetworkFence } from "../../infrastructure/mongodb/mining-admission.js";
 import {
   assessMiningStart,
   creditGrantedStart,
@@ -81,6 +85,8 @@ export async function startMining(input: {
   if (!mining.enabled) {
     throw serviceUnavailable("mining_disabled", "Mining is temporarily unavailable.");
   }
+
+  if (config.lmdg.enabled) await enforceMiningAttempt(collections, input.ownerUserId, "start");
 
   const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
 
@@ -192,6 +198,8 @@ export async function startMining(input: {
   // duplicates). A racing start cannot take a duplicate row and open a second cycle on one machine.
   let leaseKeys: string[] = [];
   let leaseDeviceId: string | null = null;
+  let leaseResolution: DeviceResolution | null = null;
+  let comparedDeviceIds: string[] = [];
   // The reserved per-network lease key this start takes to serialize the network admission decision
   // (null when it takes none: no leases, a resident of the network, or an unobserved peer address).
   let networkLockKey: string | null = null;
@@ -217,6 +225,8 @@ export async function startMining(input: {
   // The resolved cluster id, stored on the segment as `deviceId`. Null when no cluster was resolved
   // (guard off, or no evidence supplied): the quota can still bind by machine identity alone.
   let resolvedDevicePublicId: string | null = null;
+  let pendingAdmissionDeviceId: string | null = null;
+  try {
   if (deviceLeaseEnabled && input.device) {
     // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
     // traits and no browser key, so the lease would fall back to a network-dependent identity that a
@@ -263,6 +273,8 @@ export async function startMining(input: {
       correlationId: input.correlationId,
     });
     resolvedDevicePublicId = resolution.device.publicId;
+    await beginMiningAdmission(collections, resolvedDevicePublicId);
+    pendingAdmissionDeviceId = resolvedDevicePublicId;
     // The quota subject is the cluster's anchor — the server-owned machine digest written once at
     // enrollment and never rewritten — falling back to the record's current machine key for rows
     // written before the anchor existed, then to the cluster id for a browser-only identity.
@@ -356,14 +368,16 @@ export async function startMining(input: {
       }
       leaseKeys = eligibility.equivalentLeaseKeys;
       leaseDeviceId = eligibility.device.publicId;
+      leaseResolution = resolution;
+      comparedDeviceIds = eligibility.comparedDeviceIds ?? [];
       // Serialize the network admission decision: a non-resident start leases the reserved network
       // token, so a second fresh identity racing on this network collides on the unique active-lease
       // index instead of passing the pre-transaction check before the winner commits. Residents are
       // exempt here exactly as they are exempt from the rule itself (see ENROLL-C).
       if (config.lmdg.networkLeaseLock && leaseKeys.length > 0 && input.device?.ip) {
         const networkHash = ipHash(config.encryptionKey, input.device.ip);
+        startNetworkHash = networkHash;
         if (networkHash && !isNetworkResident(eligibility.device, networkHash, config.lmdg, Date.now())) {
-          startNetworkHash = networkHash;
           networkLockKey = networkLockKeyFor(networkHash);
         }
       }
@@ -508,11 +522,28 @@ export async function startMining(input: {
     // unique index on active leases is the concurrency lock — two accounts racing on one device
     // cannot both insert; the loser maps to the dedicated rejection code below. The network token is
     // part of the same insert, so it serializes racing starts on one network the same way.
-    const transactionLeaseKeys = networkLockKey === null ? leaseKeys : [...leaseKeys, networkLockKey];
+    const assessedLeaseKeys = leaseKeys;
+    if (startNetworkHash) await prepareMiningNetworkFence(collections, startNetworkHash);
     const mongoSession: ClientSession = input.mongoClient.startSession();
+    let attempts = 0;
     try {
-      await mongoSession.withTransaction(
+      const created = await mongoSession.withTransaction(
         async () => {
+          if (++attempts > 5) throw serviceUnavailable("mining_start_busy", "Mining admission is busy. Try again.");
+          // Re-check convergence before every retry. A competing request from this account may
+          // already have committed; it must not spend retries on fences or credit another start.
+          if (await findRunningMiningAccount(collections, input.ownerUserId, mongoSession)) return false;
+          // The driver retries aborted transactions with a new snapshot. Never reuse the earlier
+          // admission's candidate set: a concurrent first enrollment may have been invisible then.
+          if (leaseResolution) {
+            const refreshed = await revalidateMiningLease({
+              collections, config, ownerUserId: input.ownerUserId, resolution: leaseResolution, mongoSession,
+              assessedLeaseKeys, comparedDeviceIds, networkHash: startNetworkHash, leaseEndsAt: session.endsAt,
+            });
+            leaseKeys = refreshed.leaseKeys;
+            networkLockKey = refreshed.networkLockKey;
+          }
+          const transactionLeaseKeys = networkLockKey === null ? leaseKeys : [...leaseKeys, networkLockKey];
           await releaseInactiveLeases(collections, transactionLeaseKeys, Date.now(), mongoSession);
           await collections.miningSessions.insertOne({ _id: new ObjectId(), ...session } as MiningSessionRecord, { session: mongoSession });
           await insertLeaseInSession({
@@ -528,10 +559,24 @@ export async function startMining(input: {
             leaseEndsAt: session.endsAt,
             mongoSession,
           });
+          return true;
         },
-        { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } },
+        // Driver 7.6 CSOT adds maxTimeMS to ordinary getMore commands, which MongoDB 8.0 rejects.
+        // Bound callback attempts above and commit time here without breaking paged cursor reads.
+        { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" }, maxCommitTimeMS: 5_000 },
       );
+      if (!created) return getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
     } catch (error) {
+      if (attempts > 5) {
+        // The retry budget includes failed first reads. Converge outside the aborted transaction
+        // if this account's other request committed while those attempts were contending.
+        const converged = await getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
+        if (converged.status === "active") return converged;
+        // Another account may have won the same identities. Report the committed conflict
+        // after aborting, rather than asking this caller to retry an already occupied device.
+        const foreign = (await findLiveLeases(collections, leaseKeys, Date.now())).find((entry) => entry.ownerUserId !== input.ownerUserId);
+        if (foreign) throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
+      }
       if (isDuplicateKeyError(error)) {
         // Distinguish the loser's cause: a lease conflict means another account holds this
         // device; otherwise it was this account's own concurrent start converging.
@@ -574,6 +619,8 @@ export async function startMining(input: {
     }
   } else {
     try {
+      // Monitor-only starts have no lease transaction; publish conservatively before the insert.
+      if (pendingAdmissionDeviceId) await retainMiningAdmission(collections, pendingAdmissionDeviceId, session.endsAt);
       await collections.miningSessions.insertOne({ _id: new ObjectId(), ...session } as MiningSessionRecord);
     } catch (error) {
       // A concurrent start won the one-active index. That is the API working as designed: converge on
@@ -663,4 +710,11 @@ export async function startMining(input: {
   });
 
   return getMiningState({ collections, config, ownerUserId: input.ownerUserId, cache: input.cache, membershipCache: input.membershipCache });
+  } finally {
+    if (pendingAdmissionDeviceId) {
+      // A failed release leaves extra comparisons, never invisible live work or a false success.
+      await endMiningAdmission(collections, pendingAdmissionDeviceId)
+        .catch(() => console.error("[lmdg] admission reference retained after cleanup failure"));
+    }
+  }
 }

@@ -114,6 +114,12 @@ export interface MiningDeviceRecord {
   enrollmentUserId?: string | null;
   /** Allowed admissions folded into this cluster (a start that passed admission, not a rejected try). */
   admissionCount?: number;
+  /** Transaction fence; toggled on each admission, never a trust or identity signal. */
+  admissionFence?: boolean;
+  /** Outstanding starts; released only after their transaction completes, never by a timeout. */
+  admissionPending?: number;
+  /** Conservative upper bound for cycles opened on this record; missing means legacy/unknown. */
+  admissionLeaseEndsAt?: Date;
   /** Verified single-use proof-of-possession handshakes bound to this cluster. */
   proofCount?: number;
   /** When the cluster became `established`; null while provisional. */

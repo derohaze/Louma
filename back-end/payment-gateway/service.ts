@@ -82,11 +82,28 @@ export const checkoutSchema = z
   .strict();
 /** Go encoding/json escapes these characters; field order is supplied by the original struct contract. */
 export function fingerprint(value: unknown): string {
+  return hash(goJSON(value));
+}
+function goJSON(value: unknown): string {
+  return JSON.stringify(value).replace(
+    /[<>&\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+function checkoutFingerprint(input: CheckoutInput): string {
+  // Keep struct fields in declaration order, and map keys in Go's UTF-8 order.
+  // Rebuilding an object would make JSON.stringify reorder integer-like keys.
+  const metadata = Object.entries(input.metadata)
+    .sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
+    .map(([key, value]) => `${goJSON(key)}:${goJSON(value)}`)
+    .join(",");
   return hash(
-    JSON.stringify(value).replace(
-      /[<>&\u2028\u2029]/g,
-      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
-    ),
+    `{${Object.entries(input)
+      .map(
+        ([key, value]) =>
+          `${goJSON(key)}:${key === "metadata" ? `{${metadata}}` : goJSON(value)}`,
+      )
+      .join(",")}}`,
   );
 }
 export function validateDomains(domains: string[], test: boolean): void {
@@ -120,6 +137,7 @@ export async function prepareCheckout(
 ): Promise<Payment> {
   if (store.config.creationPaused || store.config.merchantPaused)
     reject("payment_creation_paused", 503);
+  if (p.app.status !== "active") reject("payments_disabled", 403);
   if (!KEY.test(key)) reject("invalid_checkout");
   const selected = input.price_id
     ? await price(store, p.app.publicId, input.price_id)
@@ -132,11 +150,7 @@ export async function prepareCheckout(
     success_url: input.success_url,
     cancel_url: input.cancel_url,
     price_id: input.price_id,
-    metadata: Object.fromEntries(
-      Object.entries(input.metadata).sort(([a], [b]) =>
-        Buffer.compare(Buffer.from(a), Buffer.from(b)),
-      ),
-    ),
+    metadata: input.metadata,
   };
   const subtotal = parseMoney(normalized.subtotal),
     tax = parseMoney(normalized.tax);
@@ -169,7 +183,7 @@ export async function prepareCheckout(
     description: input.description,
     status: "requires_action",
     idempotencyKey: key,
-    requestFingerprint: fingerprint(normalized),
+    requestFingerprint: checkoutFingerprint(normalized),
     intentHash: "",
     payerUserId: "",
     payerWalletId: "",

@@ -75,8 +75,8 @@ const WRITE_METHODS = new Set([
 
 /**
  * Wrap one collection so every read and write the start path performs is attributed by name and its
- * materialised document count is summed. Cursors are wrapped at `toArray`, which is how this codebase
- * drains them — that is the number the "no unbounded candidate scan" claim has to be checked against.
+ * materialised document count is summed for both array and streaming reads. `docsScanned` counts
+ * documents delivered to the application, not server documentsExamined (use explain for that).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function wrapCollection(name: string, collection: any): any {
@@ -89,13 +89,11 @@ function wrapCollection(name: string, collection: any): any {
         return (...args: unknown[]) => {
           bump(counts.reads, `${name}.${method}`);
           const result = value.apply(target, args);
-          if (result && typeof result.toArray === "function") {
-            const original = result.toArray.bind(result);
-            result.toArray = async () => {
-              const docs = await original();
-              counts.docsScanned += Array.isArray(docs) ? docs.length : 0;
-              return docs;
-            };
+          if (result && typeof result.map === "function") {
+            result.map((doc: unknown) => {
+              counts.docsScanned += 1;
+              return doc;
+            });
             return result;
           }
           if (method === "findOne" && result && typeof result.then === "function") {

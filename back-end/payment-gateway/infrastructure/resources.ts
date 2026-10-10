@@ -2,7 +2,7 @@ import type { Document } from "mongodb";
 import type { Application, Link, Payment } from "../domain/models.js";
 import { reject } from "../domain/money.js";
 import { paymentView, publicView } from "../domain/views.js";
-import { application, guardApplication } from "./merchants.js";
+import { application, guardManagement } from "./merchants.js";
 import { event, guardReceiver } from "./settlement.js";
 import { changed, moneyDocument, type GatewayStore } from "./store.js";
 const resources: Record<string, [string, string]> = {
@@ -148,9 +148,10 @@ export async function updateApplication(
   name: string,
   wallet: string,
   domains: string[],
+  imageUrl?: string,
 ): Promise<Application> {
   await store.transaction(async (session) => {
-    await guardApplication(
+    await guardManagement(
       store,
       { app, credential: { publicId: "" }, internal: true },
       session,
@@ -160,16 +161,20 @@ export async function updateApplication(
       .c("gateway_applications")
       .updateOne(
         { publicId: app.publicId, ownerUserId: app.ownerUserId },
-        { $set: { name, walletId: wallet, domains }, $inc: { version: 1 } },
+        {
+          $set: { name, walletId: wallet, domains, imageUrl: imageUrl ?? "" },
+          $inc: { version: 1 },
+        },
         { session },
       );
   });
   return application(store, app.ownerUserId, app.publicId);
 }
-export async function suspend(
+export async function setApplicationStatus(
   store: GatewayStore,
   owner: string,
   id: string,
+  status: "active" | "disabled" | "suspended",
 ): Promise<void> {
   if (
     (
@@ -177,11 +182,19 @@ export async function suspend(
         .c("gateway_applications")
         .updateOne(
           { publicId: id, ownerUserId: owner },
-          { $set: { status: "suspended" }, $inc: { version: 1 } },
+          { $set: { status }, $inc: { version: 1 } },
         )
     ).matchedCount !== 1
   )
     reject("not_found", 404);
+}
+/** Kept for existing callers that fully suspend an application. */
+export async function suspend(
+  store: GatewayStore,
+  owner: string,
+  id: string,
+): Promise<void> {
+  return setApplicationStatus(store, owner, id, "suspended");
 }
 export async function recordUsage(
   store: GatewayStore,

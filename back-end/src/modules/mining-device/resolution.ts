@@ -429,6 +429,8 @@ async function createDevice(
     trustState: "provisional",
     enrollmentUserId: input.ownerUserId,
     admissionCount: 0,
+    admissionPending: 0,
+    admissionLeaseEndsAt: new Date(0),
     proofCount: 0,
     establishedAt: null,
     findingCount: 0,

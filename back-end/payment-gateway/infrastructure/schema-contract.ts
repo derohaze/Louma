@@ -40,7 +40,11 @@ export const gatewaySchemas = {
         },
       },
       status: {
-        enum: ["active", "suspended"],
+        enum: ["active", "disabled", "suspended"],
+      },
+      imageUrl: {
+        bsonType: "string",
+        maxLength: 2048,
       },
       version: {
         bsonType: "int",

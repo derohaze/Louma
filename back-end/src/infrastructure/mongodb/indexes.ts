@@ -10,6 +10,7 @@ import {
 import { createIndexMigratingOptions, dropIndexIfExists, ensureCoreIndexes } from "./definitions.js";
 import { ensureSubscriptionStorage } from "./subscription-storage.js";
 import { schemas } from "./schemas.js";
+import { backfillMiningAdmissionWindows } from "./mining-admission.js";
 
 /**
  * How long each append-only log is kept.
@@ -63,6 +64,14 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
   await dropIndexIfExists(db, "mining_device_leases", "mining_device_leases_session_unique");
 
   await ensureCoreIndexes(db);
+  // Candidate discovery: pending requests, future cycle bounds and missing legacy bounds.
+  await db.collection("mining_devices").createIndex({ admissionPending: 1 }, { name: "mining_devices_admission_pending" });
+  await db.collection("mining_devices").createIndex({ admissionLeaseEndsAt: 1 }, { name: "mining_devices_admission_window" });
+  await backfillMiningAdmissionWindows(db);
+  // Only the built-in _id index is queried. TTL removes idle coordination rows, never leases or money.
+  await db.collection("mining_admission_networks").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_admission_networks_ttl" });
+  // Attempt windows use only _id; TTL removes idle counters, never financial state or leases.
+  await db.collection("mining_device_attempts").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "mining_device_attempts_ttl" });
   await ensureSubscriptionStorage(db);
 
   // Settlement → journal migration (see ADR-003). Runs after the validators and the new journal

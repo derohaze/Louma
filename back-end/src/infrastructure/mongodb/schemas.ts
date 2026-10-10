@@ -11,6 +11,16 @@ import { MAX_CLUSTER_ALIASES, MAX_NETWORK_TRUSTS } from "../../modules/mining-de
  * against a shape the database already forbids.
  */
 export const schemas: Record<string, Document> = {
+  mining_device_attempts: {
+    $jsonSchema: {
+      bsonType: "object", additionalProperties: false, required: ["_id", "attempts", "expiresAt"],
+      properties: {
+        _id: { bsonType: "string", maxLength: 80 },
+        attempts: { bsonType: "array", maxItems: 30, items: { bsonType: "date" } },
+        expiresAt: { bsonType: "date" },
+      },
+    },
+  },
   subscriptions: {
     $and: [
       { $jsonSchema: {
@@ -412,6 +422,9 @@ export const schemas: Record<string, Document> = {
         featureSnapshot: { bsonType: ["object", "null"], maxProperties: 64 },
         enrollmentUserId: { bsonType: ["string", "null"] },
         admissionCount: { bsonType: "int", minimum: 0 },
+        admissionFence: { bsonType: "bool" },
+        admissionPending: { bsonType: "int", minimum: 0, maximum: 2147483647 },
+        admissionLeaseEndsAt: { bsonType: "date" },
         proofCount: { bsonType: "int", minimum: 0 },
         establishedAt: { bsonType: ["date", "null"] },
         findingCount: { bsonType: "int", minimum: 0 },
@@ -437,6 +450,12 @@ export const schemas: Record<string, Document> = {
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
       },
+    },
+  },
+  mining_admission_networks: {
+    $jsonSchema: {
+      bsonType: "object", required: ["_id", "fence", "expiresAt"], additionalProperties: false,
+      properties: { _id: { bsonType: "string" }, fence: { bsonType: "bool" }, expiresAt: { bsonType: "date" } },
     },
   },
   mining_device_quotas: {

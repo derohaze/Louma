@@ -1,11 +1,16 @@
 import type { AppConfig } from "../../config/env.js";
+import type { ClientSession } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import { fenceMiningAdmissions, fenceMiningNetwork, iterateMiningAdmissionCandidates, loadMiningAdmissionDevice } from "../../infrastructure/mongodb/mining-admission.js";
+import { conflict, forbidden, serviceUnavailable } from "../../shared/errors.js";
 import type { MiningDeviceRecord } from "../../shared/types.js";
 import { recordSecurityEvent } from "../security/audit.js";
 import {
   ambiguousLeaseKey,
+  canonicalBrowserKey,
   decideClusterMatch,
   ipHash,
+  isParallelMiningRisk,
   isPresentationFeature,
   isRenderingFeature,
   matchDeviceFeatures,
@@ -15,21 +20,23 @@ import {
 import { detectImpossibleUaPlatform } from "./signals.js";
 import { evaluateMiningDeviceTrust, type RiskDecision } from "./risk.js";
 import {
+  ADMISSION_CORRELATED_LIMIT,
   DEVICE_NETWORK_IN_USE_CODE,
-  LIVE_LEASE_BACKSTOP_LIMIT,
+  DEVICE_NETWORK_IN_USE_MESSAGE,
+  DEVICE_IN_USE_CODE,
+  DEVICE_IN_USE_MESSAGE,
   LMDG_EVENT_TYPES,
-  NETWORK_LOCK_KEY_PATTERN,
 } from "./policy.js";
 import { isNetworkResident, recentClusterChurn } from "./enrollment.js";
 import { detectEvidenceContradictions, detectSimultaneousTraitReplacement, isEnvironmentFeatureKey } from "./consistency.js";
 import {
   findLiveLeases,
   findLiveLeasesOnNetwork,
-  listClusterCandidates,
 } from "./repository.js";
 import { recordLeaseKeys, toCandidate, type DeviceResolution } from "./resolution.js";
 import { recordDeviceObservation, recordDeviceSeen } from "./observation.js";
 import { p256KeyFingerprint } from "./proof.js";
+import { networkLockKeyFor } from "./lease.js";
 import type { IpIntel } from "./ip-intel.js";
 
 export interface StartEligibility {
@@ -43,6 +50,69 @@ export interface StartEligibility {
    * session, so correlated profiles cannot both pass admission before either cycle commits.
    */
   equivalentLeaseKeys: string[];  conflictingLeaseOwner: string | null;
+  /** Preserve directly compared records even if recency churn evicts them before commit. */
+  comparedDeviceIds?: string[];
+}
+
+/**
+ * Rebuild the comparison in the transaction snapshot, then fence every directly correlated
+ * record, including our own. A request whose earlier scan missed a concurrent enrollment must
+ * not reuse that stale plan after a write conflict. No thresholds or trust decisions change.
+ */
+export async function revalidateMiningLease(input: {
+  collections: Collections;
+  config: Pick<AppConfig, "encryptionKey" | "lmdg">;
+  ownerUserId: string;
+  resolution: DeviceResolution;
+  mongoSession: ClientSession;
+  assessedLeaseKeys: string[];
+  comparedDeviceIds: string[];
+  networkHash: string | null;
+  leaseEndsAt: Date;
+}): Promise<{ leaseKeys: string[]; networkLockKey: string | null }> {
+  const { collections, config, resolution, mongoSession } = input;
+  const nowMs = Date.now();
+  if (input.networkHash && !(await fenceMiningNetwork(collections, input.networkHash, mongoSession))) {
+    throw serviceUnavailable("mining_start_busy", "Mining admission is busy. Try again.");
+  }
+  const device = await loadMiningAdmissionDevice(collections, resolution.device.publicId, mongoSession);
+  if (!device) throw serviceUnavailable("mining_start_failed", "Device enrollment changed. Try again.");
+  if (device.status === "blocked") throw forbidden("mining_device_rejected", "Mining is unavailable on this device.");
+  const leaseKeys = new Set([...input.assessedLeaseKeys, ...resolution.equivalentLeaseKeys, ...recordLeaseKeys(device)]);
+  const conflictKeys = new Set(leaseKeys);
+  const fenceIds = new Set([device.publicId, ...input.comparedDeviceIds]);
+  const browserKey = canonicalBrowserKey(resolution.evidence.browserKeyPublicKey);
+  for await (const candidate of iterateMiningAdmissionCandidates(collections, mongoSession)) {
+    if (candidate.publicId === device.publicId) continue;
+    const match = matchDeviceFeatures(toCandidate(candidate), resolution.observed, config.encryptionKey);
+    const keyMatch = browserKey !== null && canonicalBrowserKey(candidate.browserKeyPublicKey) === browserKey;
+    const verdict = keyMatch || (resolution.machineKey !== null && candidate.machineKeyHash === resolution.machineKey)
+      ? "same" : decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+    if (verdict === "different") continue;
+    fenceIds.add(candidate.publicId);
+    if (fenceIds.size > ADMISSION_CORRELATED_LIMIT) throw serviceUnavailable("mining_start_busy", "Mining admission is busy. Try again.");
+    for (const key of recordLeaseKeys(candidate)) {
+      conflictKeys.add(key);
+      if (verdict === "same") leaseKeys.add(key);
+    }
+    if (verdict === "ambiguous") leaseKeys.add(ambiguousLeaseKey(config.encryptionKey, device.publicId, candidate.publicId));
+  }
+  if (!(await fenceMiningAdmissions(collections, [...fenceIds], mongoSession, input.leaseEndsAt))) {
+    throw serviceUnavailable("mining_start_failed", "Device enrollment changed. Try again.");
+  }
+  const live = await findLiveLeases(collections, [...conflictKeys], nowMs, mongoSession);
+  if (live.some(lease => lease.ownerUserId !== input.ownerUserId)) {
+    throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
+  }
+  let networkLockKey: string | null = null;
+  if (input.networkHash && !isNetworkResident(device, input.networkHash, config.lmdg, nowMs)) {
+    const networkLeases = await findLiveLeasesOnNetwork(collections, input.networkHash, nowMs, mongoSession);
+    if (networkLeases.some(lease => lease.ownerUserId !== input.ownerUserId && !leaseKeys.has(lease.deviceClusterId) && lease.deviceId !== device.publicId)) {
+      throw conflict(DEVICE_NETWORK_IN_USE_CODE, DEVICE_NETWORK_IN_USE_MESSAGE);
+    }
+    networkLockKey = networkLockKeyFor(input.networkHash);
+  }
+  return { leaseKeys: [...leaseKeys], networkLockKey };
 }
 
 export async function assessMiningStart(input: {
@@ -95,61 +165,22 @@ export async function assessMiningStart(input: {
     return { decision: "deny", reasonCode: "device_lease_active", confidence: 0.95, riskScore: 70, device, equivalentLeaseKeys: ownLeaseKeys, conflictingLeaseOwner: direct.ownerUserId };
   }
 
-  // Cross-browser / cross-profile check over the recent device population.
+  // Cross-browser / cross-profile check over the complete device population.
   //
   // A candidate carrying the same machine key is the same machine outright — that verdict is
   // identity, not similarity, so no client-side string editing moves it. The weighted match stays as
   // the fallback for a machine whose *browser* traits drifted (a privacy browser randomizes the
   // rendering stack) and for records written before the machine key existed. Network traits carry no
   // weight in the feature model, so a different machine on the same Wi-Fi scores low and passes.
-  const sweep = await listClusterCandidates(collections, {});
-  // Live-lease backstop: the fuzzy sweep compares only the most recently seen records, so a
-  // still-mining device that fell behind newer records — and whose machine traits and browser key
-  // have since changed — would drop out of the comparison and its active lease would be missed.
-  // The newest live leases are therefore pulled in explicitly, and they are resolved by both the
-  // lease's identity key and its device record id, so a machine whose newly reported traits changed
-  // its direct key still has its old lease compared instead of silently mining twice.
-  //
-  // This is a bounded, best-effort *similarity* backstop, capped rather than proportional to the
-  // whole active mining population (see `LIVE_LEASE_BACKSTOP_LIMIT`): the exact guarantees are the
-  // identity checks above (a lease on any identity this observation produces, or that its record is
-  // known by) and the per-network lease query below, both of which are indexed and complete.
-  const liveLeaseFilter = {
-    status: "active",
-    leaseEndsAt: { $gt: new Date(nowMs) },
-    // The reserved network token is not a device lease: counting it in the bounded page could flag
-    // the backstop as truncated with no device behind it, and it correlates with no record.
-    deviceClusterId: { $not: { $regex: NETWORK_LOCK_KEY_PATTERN } },
-  } as const;
-  // One row past the cap answers "was the comparison complete?" without a second query: the newest
-  // `LIVE_LEASE_BACKSTOP_LIMIT` leases are compared, and a row beyond them flags the residual gap
-  // (see `leaseBackstopTruncated` in the risk input).
-  const liveLeases = await collections.miningDeviceLeases
-    .find(liveLeaseFilter, { projection: { deviceClusterId: 1, deviceId: 1 } })
-    .sort({ leasedAt: -1 })
-    .limit(LIVE_LEASE_BACKSTOP_LIMIT + 1)
-    .toArray();
-  const leaseBackstopTruncated = liveLeases.length > LIVE_LEASE_BACKSTOP_LIMIT;
-  const comparedLeases = liveLeases.slice(0, LIVE_LEASE_BACKSTOP_LIMIT);
-  const liveLeaseKeys = [...new Set(comparedLeases.map((lease) => lease.deviceClusterId))].filter(Boolean);
-  const liveDeviceIds = [...new Set(comparedLeases.map((lease) => lease.deviceId))].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
-  );
-  const knownIds = new Set(sweep.map((entry) => entry.publicId));
-  const leasedRecords = liveLeaseKeys.length === 0 && liveDeviceIds.length === 0
-    ? []
-    : await collections.miningDevices
-        .find({ $or: [{ publicId: { $in: liveDeviceIds } }, { machineKeyHash: { $in: liveLeaseKeys } }, { deviceKeyHash: { $in: liveLeaseKeys } }] })
-        .toArray();
-  for (const entry of leasedRecords) {
-    if (!knownIds.has(entry.publicId)) {
-      sweep.push(entry);
-      knownIds.add(entry.publicId);
-    }
-  }
   const sameClusterKeys: string[] = [];
   const ambiguousClusterKeys: string[] = [];
   const ambiguousPairKeys: string[] = [];
+  const comparedDeviceIds: string[] = [];
+  // Near-miss telemetry set (detection only): candidates the verdict calls "different" whose
+  // machine traits still agree at the ambiguous level — the edited-identity shape that can hold a
+  // second live cycle beside this start. Never leased, never a decision input; the allow path
+  // below audits a live foreign lease on these keys instead of refusing anyone.
+  const nearMissKeys: string[] = [];
   let bestScore = input.resolution.match.score;
   // "A trait this machine used to report is now hidden" is only meaningful against a machine we
   // actually matched, never against an unrelated candidate that happens to own a WebGL digest.
@@ -159,14 +190,22 @@ export async function assessMiningStart(input: {
   let knownMachine: ClusterMatch | null = null;
   let knownMachineIsIdentity = false;
   let knownMachineScore = -1;
-  for (const candidate of sweep) {
+  const browserKey = canonicalBrowserKey(evidence.browserKeyPublicKey);
+  for await (const candidate of iterateMiningAdmissionCandidates(collections)) {
     if (candidate.publicId === device.publicId) continue;
     const match = matchDeviceFeatures(toCandidate(candidate), input.resolution.observed, config.encryptionKey);
-    const identityMatch = machineKey !== null && candidate.machineKeyHash === machineKey;
+    // Existing records may store any JWK serialization. Equal public material must share leases
+    // even when all reported hardware changed; the transaction repeats this same comparison.
+    const identityMatch = (browserKey !== null && canonicalBrowserKey(candidate.browserKeyPublicKey) === browserKey) ||
+      (machineKey !== null && candidate.machineKeyHash === machineKey);
     const score = identityMatch ? 100 : match.score;
     if (score > bestScore) bestScore = score;
     const keys = recordLeaseKeys(candidate);
     const verdict = identityMatch ? "same" : decideClusterMatch(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold);
+    if (verdict !== "different") {
+      comparedDeviceIds.push(candidate.publicId);
+      if (comparedDeviceIds.length >= ADMISSION_CORRELATED_LIMIT) throw serviceUnavailable("mining_start_busy", "Mining admission is busy. Try again.");
+    }
     // Similar generic traits on an unrelated computer do not establish a tampered known machine.
     // Only a positive correlation may attribute its presentation/rendering drift to this caller.
     if (verdict === "same" && score > knownMachineScore) {
@@ -180,6 +219,8 @@ export async function assessMiningStart(input: {
     } else if (verdict === "ambiguous") {
       ambiguousClusterKeys.push(...keys);
       ambiguousPairKeys.push(ambiguousLeaseKey(config.encryptionKey, device.publicId, candidate.publicId));
+    } else if (nearMissKeys.length < ADMISSION_CORRELATED_LIMIT && isParallelMiningRisk(match, config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold)) {
+      nearMissKeys.push(...keys);
     }
   }
   // Every identity this machine is known by must be leased together, so a start that raced ours (or
@@ -370,7 +411,7 @@ export async function assessMiningStart(input: {
     identityChurn,
     consistencyFindings: findings.length,
     networkLeaseConflict: foreignNetworkLease !== null,
-    leaseBackstopTruncated,
+    leaseBackstopTruncated: false,
     unverifiedBrowserKey: browserKeyUnverified,
     anonymity: { vpn: input.intel.vpn, proxy: input.intel.proxy, tor: input.intel.tor, hosting: input.intel.hosting, anonymous: input.intel.anonymous },
     history: {
@@ -498,6 +539,22 @@ export async function assessMiningStart(input: {
   // The start was allowed: fold the observation into the record now that the decision is made. A
   // rejected attempt never reaches this line, so it can no longer re-tag the identity or history.
   if (finalDecision === "allow") {
+    // Near-miss parallel-mining telemetry. An allow whose hardware near-miss currently holds a
+    // live foreign cycle is the exact shape of two accounts mining one computer with an edited
+    // identity on a second network — a shape the lease cannot refuse without also refusing
+    // unrelated machines of one model. It is audited for the ops report, never refused: the
+    // decision above stands, and a failed audit write never fails the admitted start.
+    if (nearMissKeys.length > 0) {
+      const nearMissForeign = (await findLiveLeases(collections, [...new Set(nearMissKeys)], nowMs).catch(() => []))
+        .find((lease) => lease.ownerUserId !== input.ownerUserId) ?? null;
+      if (nearMissForeign) {
+        await recordSecurityEvent({
+          collections, ownerUserId: input.ownerUserId, sessionId: null,
+          eventType: LMDG_EVENT_TYPES.suspicious, outcome: "success", correlationId: input.correlationId,
+          metadata: { deviceId: device.publicId, reason: "possible_parallel_same_hardware" },
+        }).catch(() => undefined);
+      }
+    }
     await recordDeviceSeen(
       collections,
       config.encryptionKey,
@@ -515,5 +572,5 @@ export async function assessMiningStart(input: {
     );
   }
 
-  return { decision: finalDecision, reasonCode: finalReasonCode, confidence: finalConfidence, riskScore: result.riskScore, device, equivalentLeaseKeys, conflictingLeaseOwner: null };
+  return { decision: finalDecision, reasonCode: finalReasonCode, confidence: finalConfidence, riskScore: result.riskScore, device, equivalentLeaseKeys, conflictingLeaseOwner: null, comparedDeviceIds };
 }

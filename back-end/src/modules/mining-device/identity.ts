@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, createPublicKey } from "node:crypto";
 import type { MiningDeviceFeatureProfile } from "../../shared/types.js";
 import type { NormalizedDeviceSignals } from "./signals.js";
 
@@ -101,6 +101,21 @@ export function normalizedDeviceSignature(secret: Buffer, vector: string): strin
 export function deviceKeyHash(secret: Buffer, browserKeyPublicKey: string | null, signature: string): string {
   if (browserKeyPublicKey) return hmacHex(secret, "lmdg-key-v1", browserKeyPublicKey.slice(0, 2048));
   return hmacHex(secret, "lmdg-sigkey-v1", signature);
+}
+
+/** Compare public key material, not JSON ordering, metadata or base64 padding. No hardware claim. */
+export function canonicalBrowserKey(text: string | null): string | null {
+  if (!text || text.length > 2048) return null;
+  try {
+    const jwk = JSON.parse(text) as Record<string, unknown>;
+    if (jwk?.["kty"] !== "EC" || jwk["crv"] !== "P-256" || typeof jwk["x"] !== "string" || typeof jwk["y"] !== "string") return null;
+    if (jwk["x"].length > 128 || jwk["y"].length > 128) return null;
+    const key = createPublicKey({ key: { kty: "EC", crv: "P-256", x: jwk["x"], y: jwk["y"] }, format: "jwk" });
+    const canonical = key.export({ format: "jwk" });
+    return `${canonical.x}|${canonical.y}`;
+  } catch {
+    return null;
+  }
 }
 
 export function visitorIdHash(secret: Buffer, visitorId: string | null): string | null {
@@ -818,4 +833,22 @@ export function decideClusterMatch(match: ClusterMatch, highThreshold: number, a
   if (isMachineIdentityMatch(match, ambiguousThreshold)) return "ambiguous";
   if (match.score >= ambiguousThreshold) return "ambiguous";
   return "different";
+}
+
+/**
+ * Near-miss parallel-mining telemetry predicate — detection only, never a verdict.
+ *
+ * True only when `decideClusterMatch` says "different" yet the machine traits alone agree at the
+ * ambiguous level with no class contradiction: the edited-identity shape (three or more of the six
+ * engine-stable slots moved) that mints a second machine record — and therefore a second mining
+ * allowance — for one computer. Blocking it would bind unrelated machines of one model onto a
+ * single allowance (measured: hundreds of distinct fixture pairs), so admission only audits it:
+ * an allow beside a live foreign lease on these keys emits `mining_device_suspicious` for the ops
+ * report instead of refusing an honest user.
+ */
+export function isParallelMiningRisk(match: ClusterMatch, highThreshold: number, ambiguousThreshold: number): boolean {
+  if (decideClusterMatch(match, highThreshold, ambiguousThreshold) !== "different") return false;
+  if (match.classDrifted.length > 0) return false;
+  if (match.classCompared.length < MIN_MACHINE_CLASS_FEATURES) return false;
+  return match.machineScore >= ambiguousThreshold;
 }

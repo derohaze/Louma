@@ -155,3 +155,209 @@ explicit live enablement, and the existing compatible-schema checks. Redis
 continues to hold ephemeral throttling counters only; all authorization,
 idempotency, balances and ledger events remain in MongoDB. Proxy-derived client
 IPs are accepted only through explicitly trusted proxy CIDRs.
+
+## ADR-013 — transaction revalidation for mining admission
+
+The 2026-10-10 isolated MongoDB audit reproduced two stale admission plans:
+near-clone enrollments that resolve before either record exists, and a new
+network identity assessed before a resident commits. Both open two cycles when
+the old `start.ts` is restored in a temporary copy. Existing unique leases
+cannot collide when the earlier assessments produced disjoint keys.
+
+Rebuild the candidate/lease decision inside the snapshot transaction and write
+a boolean `admissionFence` on the caller's device and directly correlated
+devices. Every start writes its own record, so even a one-sided comparison
+conflicts with a competing start. Retain previously compared device IDs and
+lease keys across revalidation: recency churn must not erase an earlier pair.
+The existing matcher and pair tokens retain their meaning; no transitive
+similarity merges or broader fingerprint thresholds are introduced.
+
+For the existing network policy, both residents and newcomers also write one
+network fence before checking live leases. `mining_admission_networks` is a
+separate, strict three-field collection (`_id`, `fence`, `expiresAt`). An exact
+indexed upsert prepares its row outside the transaction, with expiry 24 hours
+ahead. The transaction requires the row, toggles it, and rechecks the existing
+resident exemption. Residents share coordination, not a persistent exclusive
+lease. Two unrelated residents can still run together. A missing row fails
+closed and can be recreated by a later request; TTL never releases a cycle.
+The only added index is the expiry TTL; exact reads use built-in `_id_`
+(verified: one key and one document examined).
+
+The mining cycle, its device leases, and admission fences commit or roll back
+together under snapshot reads and majority writes. Preparation alone grants
+nothing. No Redis authorization, external network calls within transactions,
+financial collection changes, history deletion, or unbounded stored arrays.
+Callback execution stops after five attempts and commit attempts have a
+5-second server limit. Driver commit recovery retains its own bounded behavior.
+
+A global mutex was rejected because it would serialize unrelated devices and
+still could not authenticate browser-supplied hardware. More permissive retry
+budgets were rejected in favor of retryable busy responses. The bounded fuzzy
+candidate search remains incomplete under saturation; client-forged evidence
+and the newcomer-first/resident-later exemption also remain limitations. See
+[the consolidated audit](mining-security-report.md) for evidence, costs, stronger
+identity options, and rollout prerequisites. The new guarantee applies only
+after all mining-serving instances use this admission path; mixed old/new
+instances do not all participate in its fences. Rollback leaves the optional
+field and coordination collection in place and reopens the fixed races.
+
+## ADR-014 — complete, resource-bounded mining admission comparisons
+
+The browser-only follow-up on 2026-10-10 reproduced a second failure of the
+ADR-013 recency window. Seventy newer running devices hide an older victim
+before assessment; seventy newer idle records can also hide both contenders
+through concurrent assessments and transaction revalidation. In an isolated
+copy with the earlier candidate loader/admission restored, the same new tests
+admit both accounts. Retaining previously compared IDs cannot discover these
+missing records.
+
+Admission now streams every stored device in batches of 64, using only the
+fields needed for matching and lease keys. It includes idle contenders and
+blocked devices because a status change does not itself release a live cycle.
+Both assessment and transaction revalidation use the existing matcher, including
+learned rings, drift and legacy snapshots. The immutable exact identities,
+pairwise leases, write fences, and snapshot/majority transaction remain intact.
+The resolution lookup's recent-candidate heuristic is no longer an admission
+authorization boundary. This change does not claim complete historical quota
+discovery or authenticate browser hardware.
+
+Each scan has a 2000 ms server execution budget and checks elapsed application
+time while iterating. Admission retains at most 200 correlated records,
+including its own. Exhaustion returns retryable `503 mining_start_busy`; a
+partial scan must never grant a cycle. This is a resource refusal, not an
+account or device ban. Monitoring-only near-miss keys remain a bounded sample.
+MongoDB cursor errors propagate and transaction failure rolls back the fences,
+session and leases. No new collections, persisted arrays, indexes or migrations.
+
+This deliberately trades bounded recency work for **O(N) comparison work** with
+bounded memory. It closes the measured omission attacks, but increases latency
+and may refuse starts at populations/load that exceed the budget. The isolated
+5000-profile completion check measured 947.0 ms for a start and 412.9 ms
+inside its transaction callback on MongoDB 8.0.0; these are workstation samples, not capacity
+guarantees. Existing per-account/network enrollment limits still bound cheap
+identity creation, but are not a global denial-of-service proof.
+
+A larger fixed page or a truncated-success fallback reopens the bug. A global
+mutex does not authenticate identities. An indexed replacement remains a
+possible optimization, but must cover all matcher paths, absent fields, raw
+legacy snapshots and both value rings; a CPU/model-only bucket would miss
+currently correlated cases. Adding a generic wildcard index before a selective
+query is demonstrated is not justified. The current complete scan is the
+correctness reference for any such replacement.
+
+All mining-serving instances must adopt this path before claiming complete
+comparison coverage. Before deployment, exercise the expected historical
+population and concurrency and inspect latency/busy rates; do not interpret
+resource refusals as fraud. Rollback preserves data and reopens both omission
+attacks. See [the consolidated browser-only report](mining-security-report.md)
+for causal tests, measurements, external research references and remaining limits.
+The completion check also reproduces the newcomer-first/resident-later ordering
+as two accepted starts on one network; the residency exemption cannot establish
+physical-device uniqueness when the browser identities were forged.
+
+## ADR-015 — self-hosted mining attempt budgets and public-key continuity
+
+The isolated follow-up reproduced two concurrent cycles from edited browser
+evidence carrying the same P-256 public key in different JSON serializations.
+Admission compares canonical key material as exact continuity, in both its
+initial complete scan and transaction revalidation. This also covers existing
+records without rewriting their stored key strings or changing lease indexes.
+Key metadata, property order and equivalent base64 encodings are not identity.
+Independent keys remain independent; this does not attest to physical hardware.
+
+With Redis disabled, 24 concurrent start attempts from one account across two
+API instances and rotating peer addresses all reached device validation.
+Introduce `mining_device_attempts`, separate from enrollment quotas and audit
+history: a strict document with `_id` (account plus action), `attempts` (at most
+30 dates), and `expiresAt`. The built-in unique `_id` serves exact writes;
+the sole added index is expiry TTL. No IP, fingerprint or key material is stored.
+
+A server-owned sliding window allows 12 starts/minute, 20 challenge requests/hour,
+and 30 proof attempts/hour per account. MongoDB time determines expiry. A
+conditional update prunes expired timestamps and appends one attempt atomically,
+with majority write concern. Preparation grants nothing; failure to consume
+does not proceed. The counter stays spent when a subsequent operation fails:
+it measures attempts, not accepted mining. Expired nonce deletion and audit-write
+failures cannot reset it. TTL cleans idle counters; logical expiry never waits
+for the TTL sweep. Redis throttles remain a cheaper outer layer.
+
+Exhaustion returns temporary `429 rate_limited`; storage errors fail with retryable
+503. Honest users can complete the normal start/challenge/prove/retry sequence.
+Repeated rapid clicks can hit the same limit; other accounts on the same Wi-Fi
+do not share this budget. There is no fingerprint-similarity or network ban added.
+Many authenticated accounts can still multiply the budget, and patient attackers
+can stay below it. No claim of bot-proof or AI-proof identity follows.
+
+Bootstrap validators and the TTL index before serving; all API instances must
+use the new admission path and budgets. Mixed versions retain bypass paths.
+Rollback can leave these expiring documents intact, but loses the protections.
+No historical data migration or financial collection/index change is required.
+
+## ADR-016 — indexed transaction revalidation, complete historical assessment
+
+The ADR-014 full historical scan returns `503 mining_start_busy` with 50,000
+idle profiles. A prototype filtering both admission scans improved that case
+but regressed learned-history enforcement: an idle peer can match the first
+caller through its learned ring while the reverse comparison is `different`.
+The prototype admits both callers; a complete first assessment prevents it.
+Keep the complete first assessment and optimize only transaction revalidation.
+This reduces work inside transactions, not the overall O(N) admission bound.
+
+Add optional `mining_devices.admissionPending` (integer, 0..2147483647) and
+`admissionLeaseEndsAt` (date). Starts increment pending with majority write
+concern before assessment and release their own reference in `finally`, after
+transaction completion/abort. Pending references have no TTL: elapsed time
+cannot hide a request that might still commit. Failed releases or crashes
+leave extra comparisons. They do not grant a lease. Normal completion must
+leave no outstanding references, checked by the load benchmark.
+
+The existing transaction fence also publishes the maximum cycle end on every
+directly correlated record it writes, not only on the resolved record. This
+keeps a peer discoverable when another cycle leases its identities after the
+peer's request finishes. Publication, fences, cycle and leases commit/abort
+together under snapshot reads and majority writes. Monitor-only starts retain
+their own window before their standalone session insertion. An early stop
+does not shorten a window; retaining a stale candidate is safe.
+
+Transaction revalidation selects the union of positive pending counts, future
+cycle windows and missing legacy windows, retaining the complete assessment's
+compared IDs and lease keys. Two ordinary ascending indexes serve that
+exact query: `mining_devices_admission_pending` and
+`mining_devices_admission_window`. Missing windows are never interpreted as
+idle. The 50,000-idle probe requires at most 10 documents delivered by
+transaction discovery and at most 10 documents examined by MongoDB. Its full
+start is allowed to return busy and reports that result explicitly. The 2000 ms scan
+budget, 200-correlated-record cap, matcher thresholds and unique lease indexes
+remain. Exhaustion aborts; a partial comparison never grants mining.
+
+Full-history initial matching, risk inputs, historical identity resolution and
+quota lookups remain. The retained assessment keys prevent skipping an idle
+learned peer from undoing an earlier comparison. The `HISTORY` regression and
+its temporary-copy counterfactual pin this boundary. Independently forged
+identities still bypass the matcher. No claim of full historical quota
+discovery or physical-device authentication follows.
+
+Bootstrap builds indexes, then initializes missing windows in batches of 200
+to the latest existing active session/lease end. The deliberately global upper
+bound keeps all legacy profiles visible until old work has ended. It never
+resets pending counts or overwrites an already published window. A conditional
+update protects concurrent new-version starts; no history is deleted.
+
+Deployment requires draining **all older mining-start writers and their
+in-flight requests before bootstrap/serving this version**. Older writers do
+not publish windows, so mixed versions are unsafe. Build validators/indexes and
+complete bootstrap before accepting starts. A rollback to full historical
+scans may leave these fields/indexes intact. After running old writers again,
+re-enabling the indexed query requires a drained maintenance migration that
+extends *all* existing windows through the latest active session/lease end;
+missing-only bootstrap is insufficient for previously initialized records.
+
+Transaction-discovery cost is proportional to pending, conservatively retained
+and uninitialized records. Initial assessment still scans historical enrollments;
+large idle or active populations can therefore still exhaust the budget.
+Cleanup of crashed references
+requires draining every mining-start process and verifying no transaction can
+still commit; never reset references on a timer while writers are running.
+No collection, financial contract, unique/TTL index removal or external
+dependency is introduced. See the [current mining report](mining-security-report.md)
+for before/after evidence, larger-load measurements and remaining limitations.

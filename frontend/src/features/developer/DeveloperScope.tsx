@@ -7,6 +7,7 @@ import { useDeveloperAccess } from "@/shared/hooks/use-developer-access";
 import { useT } from "@/shared/i18n";
 import { PageHeader } from "@/shared/ui/page";
 import { Panel } from "@/shared/ui/panels";
+import { PaymentSetup } from "./PaymentSetup";
 
 /** The scopes a key can carry. The gateway refuses a scope it does not know. */
 export const developerScopes = [
@@ -99,7 +100,7 @@ export function DeveloperScopeGate({
   return (
     <div className="space-y-5">
       <PageHeader title={title} subtitle={description} />
-      {scope.selected && (
+      {scope.selected && (applications.data?.data.length ?? 0) > 1 && (
         <label className="block max-w-sm space-y-1.5 text-sm">
           <span className="block font-medium">{t("application")}</span>
           <select
@@ -124,7 +125,7 @@ export function DeveloperScopeGate({
           {messageForError(applications.error)}
         </p>
       ) : !scope.selected ? (
-        <p>{t("noApplications")}</p>
+        <PaymentSetup scope={scope} />
       ) : (
         children({ mode: scope.mode, application: scope.selected, wallet: scope.wallet })
       )}

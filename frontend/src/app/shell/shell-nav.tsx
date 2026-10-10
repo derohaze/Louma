@@ -42,25 +42,25 @@ export function RailLink({ section, current }: { section: NavSection; current: b
   );
 }
 
+/**
+ * The rail lists the wallet's own sections only. Account-level sections (Profile, Security,
+ * Settings, Developer) live in the account menu instead, so they get no rail entry.
+ */
 const railSections = navSections.filter(
-  (section) =>
-    (!section.accountLevel || section.developerOnly) && section.titleKey !== "nav.sections.billing",
+  (section) => !section.accountLevel && section.titleKey !== "nav.sections.billing",
 );
 
 /** Renders the section links with an immediate active state. */
 export function PrimaryRail({ activeSection }: { activeSection: NavSection | undefined }) {
-  const developer = useDeveloperAccess().data?.eligible === true;
   return (
     <div className="flex h-full flex-col">
-      {railSections
-        .filter((section) => !section.developerOnly || developer)
-        .map((section) => (
-          <RailLink
-            key={section.titleKey}
-            section={section}
-            current={section.titleKey === activeSection?.titleKey}
-          />
-        ))}
+      {railSections.map((section) => (
+        <RailLink
+          key={section.titleKey}
+          section={section}
+          current={section.titleKey === activeSection?.titleKey}
+        />
+      ))}
     </div>
   );
 }
@@ -87,8 +87,11 @@ export function SidebarNav({
   const pro = useProAccess();
   const developer = useDeveloperAccess().data?.eligible === true;
   const activeSection = findActiveSection(pathname);
+  // The developer section is entered from the account menu on every viewport, so the full
+  // list (the mobile More sheet) leaves it out. The panel still shows its pages while a
+  // developer page is open, so the section's sub-pages stay one tap away.
   const sections = (scope === "all" || !activeSection ? navSections : [activeSection]).filter(
-    (section) => !section.developerOnly || developer,
+    (section) => !section.developerOnly || (scope !== "all" && developer),
   );
   return (
     <aside
