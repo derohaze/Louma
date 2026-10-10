@@ -1,0 +1,101 @@
+# Coolify: base directory /payment-gateway, compose location /docker-compose.production.yml.
+# Assign https://checkout.loumapay.com:8090 to api only. No host ports are published.
+x-gateway-environment: &gateway-environment
+  GATEWAY_ENVIRONMENT: live
+  GATEWAY_ADDRESS: 0.0.0.0:8090
+  GATEWAY_MONGODB_URI: ${GATEWAY_MONGODB_URI:?Set the production MongoDB replica set URI}
+  GATEWAY_DATABASE: ${GATEWAY_DATABASE:?Set the same database as the production Node backend}
+  GATEWAY_REDIS_URL: ${GATEWAY_REDIS_URL:?Set the authenticated Redis URL}
+  GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-https://checkout.loumapay.com}
+  GATEWAY_DASHBOARD_URL: ${GATEWAY_DASHBOARD_URL:-https://app.loumapay.com}
+  GATEWAY_SERVICE_KEY: ${GATEWAY_SERVICE_KEY:?Set a separate random service key}
+  GATEWAY_API_KEY_PEPPER: ${GATEWAY_API_KEY_PEPPER:?Set a separate random pepper}
+  GATEWAY_ENCRYPTION_KEY: ${GATEWAY_ENCRYPTION_KEY:?Set 32 random bytes as 64 hex characters}
+  GATEWAY_FEE_VERSION: ${GATEWAY_FEE_VERSION:-2026-10-08}
+  GATEWAY_FEE_BASIS_POINTS: ${GATEWAY_FEE_BASIS_POINTS:-100}
+  GATEWAY_LIVE_ENABLED: ${GATEWAY_LIVE_ENABLED:-false}
+  GATEWAY_CREATION_PAUSED: ${GATEWAY_CREATION_PAUSED:-false}
+  GATEWAY_SETTLEMENT_PAUSED: ${GATEWAY_SETTLEMENT_PAUSED:-false}
+  GATEWAY_BILLING_PAUSED: ${GATEWAY_BILLING_PAUSED:-false}
+  GATEWAY_MERCHANT_PAUSED: ${GATEWAY_MERCHANT_PAUSED:-false}
+  GATEWAY_DNS_SERVERS: ${GATEWAY_DNS_SERVERS:-}
+  GATEWAY_TRUSTED_PROXY_CIDRS: ${GATEWAY_TRUSTED_PROXY_CIDRS:?Set the actual Coolify proxy IP/32 or restricted subnet}
+  GOMEMLIMIT: ${GOMEMLIMIT:-384MiB}
+  GOGC: ${GOGC:-100}
+
+x-gateway-runtime: &gateway-runtime
+  environment: *gateway-environment
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 30s
+  mem_limit: 512m
+  cpus: 1.0
+  pids_limit: 128
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  api:
+    <<: *gateway-runtime
+    build:
+      context: .
+      target: api
+    expose: ["8090"]
+    depends_on:
+      gateway-redis:
+        condition: service_healthy
+
+  worker:
+    <<: *gateway-runtime
+    build:
+      context: .
+      target: worker
+    depends_on:
+      gateway-redis:
+        condition: service_healthy
+
+  # Explicit operator command only; never run a migration at API/worker startup.
+  migrate:
+    <<: *gateway-runtime
+    profiles: [tools]
+    restart: "no"
+    build:
+      context: .
+      target: migrate
+
+  gateway-redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    user: redis
+    working_dir: /tmp
+    environment:
+      REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Set a random hex Redis password}
+    command:
+      - sh
+      - -ec
+      - |
+        umask 077
+        printf 'requirepass %s\nappendonly no\nsave ""\nmaxmemory 128mb\nmaxmemory-policy noeviction\n' "$$REDIS_PASSWORD" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
