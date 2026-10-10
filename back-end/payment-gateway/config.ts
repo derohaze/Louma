@@ -53,13 +53,14 @@ export function loadGatewayConfig(
   const environment = values["GATEWAY_ENVIRONMENT"] ?? "test";
   if (environment !== "test" && environment !== "live")
     throw new Error("GATEWAY_ENVIRONMENT must be test or live");
+  // Beta policy: the embedded gateway shares the host's Atlas database
+  // (MONGODB_DATABASE, e.g. "louma"). Never rename or repoint the database
+  // from env to satisfy the gateway; test/live separation is by the
+  // `environment` field and collection data, not by database name.
+  // Integration tests still use isolated louma_gateway_test_* databases.
   const database = values["MONGODB_DATABASE"] ?? "";
-  if (
-    !database ||
-    (environment === "test" && !database.startsWith("louma_gateway_test")) ||
-    (environment === "live" && database.startsWith("louma_gateway_test"))
-  ) {
-    throw new Error("Gateway test and live modes require separate databases");
+  if (!database) {
+    throw new Error("Gateway requires MONGODB_DATABASE");
   }
   if (values["NODE_ENV"] === "production" && environment !== "live")
     throw new Error("Production requires gateway live mode");

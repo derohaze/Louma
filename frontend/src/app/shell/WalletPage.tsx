@@ -15,6 +15,7 @@ import {
   SecurityCheckIcon,
   Logout01Icon,
   CreditCardIcon,
+  UserGroupIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { Button } from "@/shared/ui/button";
@@ -430,6 +431,12 @@ function WalletShell({ children, titleKey }: { children: ReactNode; titleKey: Tr
                 <Icon icon={Settings01Icon} />
                 {t("menu.settings")}
               </DropdownMenuItem>
+              {developer ? (
+                <DropdownMenuItem onSelect={() => void navigate({ to: "/developer" })}>
+                  <Icon icon={UserGroupIcon} />
+                  {t("menu.developer")}
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 onSelect={(event) => {
                   event.preventDefault();

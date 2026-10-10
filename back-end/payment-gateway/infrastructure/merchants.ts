@@ -49,11 +49,43 @@ export async function authenticate(
   if (!key.scopes.includes(scope)) return reject("insufficient_scope", 403);
   const app = await store.find<Application>("gateway_applications", {
     publicId: key.applicationId,
-    status: "active",
+    status: { $in: ["active", "disabled"] },
   });
   if (!app) return reject("application_suspended", 403);
   await eligible(store, app.ownerUserId);
   return { app, credential: key };
+}
+export async function guardManagement(
+  store: GatewayStore,
+  principal: Principal,
+  session: ClientSession,
+): Promise<void> {
+  const app = principal.app;
+  changed(
+    await store
+      .c("gateway_developers")
+      .updateOne(
+        { ownerUserId: app.ownerUserId, status: "active" },
+        { $inc: { financialVersion: 1 } },
+        { session },
+      ),
+    "merchant_suspended",
+  );
+  changed(
+    await store
+      .c("gateway_applications")
+      .updateOne(
+        {
+          publicId: app.publicId,
+          ownerUserId: app.ownerUserId,
+          status: { $in: ["active", "disabled"] },
+          walletId: app.walletId,
+        },
+        { $inc: { version: 1 } },
+        { session },
+      ),
+    "application_suspended",
+  );
 }
 export async function guardApplication(
   store: GatewayStore,
@@ -193,7 +225,7 @@ export async function createCredential(
     expiresAt,
   );
   await store.transaction(async (session) => {
-    await guardApplication(store, principal, session);
+    await guardManagement(store, principal, session);
     await store
       .c("gateway_credentials")
       .insertOne(result.credential, { session });
@@ -217,7 +249,7 @@ export async function rotateCredential(
     old.expiresAt,
   );
   await store.transaction(async (session) => {
-    await guardApplication(store, principal, session);
+    await guardManagement(store, principal, session);
     changed(
       await store
         .c("gateway_credentials")

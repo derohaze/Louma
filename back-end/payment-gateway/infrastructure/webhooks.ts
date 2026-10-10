@@ -26,13 +26,16 @@ export async function createEndpoint(
 export async function expandEvents(
   store: GatewayStore,
   now: Date,
+  stopping: () => boolean = () => false,
 ): Promise<void> {
+  if (stopping()) return;
   const events = await store
     .c("gateway_events")
     .find({ expanded: false })
     .limit(50)
     .toArray();
-  for (const row of events)
+  for (const row of events) {
+    if (stopping()) return;
     try {
       await store.transaction(async (session) => {
         const current = await store.find<Event>(
@@ -55,24 +58,22 @@ export async function expandEvents(
           .toArray();
         if (endpoints.length > 16) reject("webhook_endpoint_limit", 409);
         for (const endpoint of endpoints)
-          await store
-            .c("gateway_deliveries")
-            .insertOne(
-              {
-                publicId: randomUUID(),
-                applicationId: current.applicationId,
-                eventId: current.publicId,
-                endpointId: endpoint["publicId"],
-                status: "pending",
-                attempts: 0,
-                dueAt: now,
-                createdAt: now,
-                leaseUntil: ZERO,
-                fence: 0,
-                lastStatus: 0,
-              },
-              { session },
-            );
+          await store.c("gateway_deliveries").insertOne(
+            {
+              publicId: randomUUID(),
+              applicationId: current.applicationId,
+              eventId: current.publicId,
+              endpointId: endpoint["publicId"],
+              status: "pending",
+              attempts: 0,
+              dueAt: now,
+              createdAt: now,
+              leaseUntil: ZERO,
+              fence: 0,
+              lastStatus: 0,
+            },
+            { session },
+          );
         await store
           .c("gateway_events")
           .updateOne(
@@ -84,21 +85,20 @@ export async function expandEvents(
     } catch (error) {
       if (!duplicate(error)) throw error;
     }
+  }
 }
 export async function claimDelivery(
   store: GatewayStore,
   now: Date,
 ): Promise<Delivery | null> {
-  return (await store
-    .c("gateway_deliveries")
-    .findOneAndUpdate(
-      { status: "pending", dueAt: { $lte: now }, leaseUntil: { $lte: now } },
-      {
-        $set: { leaseUntil: new Date(now.getTime() + 30000) },
-        $inc: { fence: 1 },
-      },
-      { sort: { dueAt: 1 }, returnDocument: "after" },
-    )) as Delivery | null;
+  return (await store.c("gateway_deliveries").findOneAndUpdate(
+    { status: "pending", dueAt: { $lte: now }, leaseUntil: { $lte: now } },
+    {
+      $set: { leaseUntil: new Date(now.getTime() + 30000) },
+      $inc: { fence: 1 },
+    },
+    { sort: { dueAt: 1 }, returnDocument: "after" },
+  )) as Delivery | null;
 }
 export async function deliveryPayload(
   store: GatewayStore,
@@ -142,25 +142,23 @@ export async function finishDelivery(
           ? "failed"
           : "pending";
   changed(
-    await store
-      .c("gateway_deliveries")
-      .updateOne(
-        { publicId: d.publicId, fence: d.fence, status: "pending" },
-        {
-          $set: {
-            status: state,
-            attempts,
-            lastStatus: status,
-            dueAt: new Date(
-              now.getTime() +
-                (30 * 2 ** Math.min(attempts, 8) +
-                  (d.publicId.charCodeAt(0) % 30)) *
-                  1000,
-            ),
-            leaseUntil: ZERO,
-          },
+    await store.c("gateway_deliveries").updateOne(
+      { publicId: d.publicId, fence: d.fence, status: "pending" },
+      {
+        $set: {
+          status: state,
+          attempts,
+          lastStatus: status,
+          dueAt: new Date(
+            now.getTime() +
+              (30 * 2 ** Math.min(attempts, 8) +
+                (d.publicId.charCodeAt(0) % 30)) *
+                1000,
+          ),
+          leaseUntil: ZERO,
         },
-      ),
+      },
+    ),
     "delivery_claim_lost",
   );
 }
@@ -170,21 +168,19 @@ export async function retryDelivery(
   id: string,
 ): Promise<void> {
   changed(
-    await store
-      .c("gateway_deliveries")
-      .updateOne(
-        { publicId: id, applicationId: app, status: "failed" },
-        {
-          $set: {
-            status: "pending",
-            attempts: 0,
-            dueAt: new Date(),
-            createdAt: new Date(),
-            leaseUntil: ZERO,
-          },
-          $inc: { fence: 1 },
+    await store.c("gateway_deliveries").updateOne(
+      { publicId: id, applicationId: app, status: "failed" },
+      {
+        $set: {
+          status: "pending",
+          attempts: 0,
+          dueAt: new Date(),
+          createdAt: new Date(),
+          leaseUntil: ZERO,
         },
-      ),
+        $inc: { fence: 1 },
+      },
+    ),
     "delivery_not_retryable",
   );
 }

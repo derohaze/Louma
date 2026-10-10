@@ -1,0 +1,151 @@
+.louma-checkout-backdrop {
+  background: #ffffff;
+  padding: clamp(20px, 5vw, 56px) 16px;
+}
+.louma-checkout-card {
+  --background: #ffffff;
+  --card: #ffffff;
+  --foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --primary: #8e53f8;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f5;
+  --destructive: #dc2626;
+  color-scheme: light;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 32px;
+  box-shadow: 0 20px 60px #00000014;
+  overflow: hidden;
+}
+/* The card inputs keep a static border: no focus highlight ring. */
+.louma-checkout-card input:focus-visible,
+.louma-checkout-card select:focus-visible,
+.louma-checkout-card textarea:focus-visible {
+  border-color: var(--border);
+  outline: none;
+  box-shadow: none;
+}
+.louma-checkout-state {
+  animation: louma-stage-in 240ms ease-out both;
+}
+.louma-checkout-success {
+  animation: louma-ring-in 450ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.louma-checkout-check {
+  stroke-dasharray: 30;
+  stroke-dashoffset: 30;
+  animation: louma-check-in 400ms ease-out 200ms forwards;
+}
+.louma-swipe {
+  position: relative;
+  height: 64px;
+  border-radius: 22px;
+  background: #0a0a0a;
+  color: #ffffff;
+  user-select: none;
+  outline-offset: 5px;
+}
+.louma-swipe:focus-visible {
+  outline: 2px solid #b891ff;
+}
+.louma-swipe-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline-start: 76px;
+  padding-inline-end: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  pointer-events: none;
+}
+.louma-swipe-fill {
+  position: absolute;
+  inset-block: 6px;
+  inset-inline-start: 6px;
+  min-width: 52px;
+  max-width: calc(100% - 12px);
+  border-radius: 16px;
+  background: #8e53f8;
+  color: #ffffff;
+  transition: width 200ms ease-out;
+}
+.louma-swipe-fill.is-dragging {
+  transition: none;
+}
+.louma-swipe-handle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  border-radius: 16px;
+  cursor: grab;
+  touch-action: none;
+}
+.louma-swipe-handle:active {
+  cursor: grabbing;
+}
+.louma-swipe-trail {
+  position: absolute;
+  inset: 0 52px 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  overflow: hidden;
+  pointer-events: none;
+}
+[dir="rtl"] .louma-swipe svg {
+  transform: rotate(180deg);
+}
+[dir="rtl"] .louma-swipe-trail {
+  inset-inline: 12px 52px;
+}
+@keyframes louma-stage-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes louma-ring-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes louma-check-in {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@media (max-width: 420px) {
+  .louma-checkout-card {
+    border-radius: 28px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .louma-checkout-state,
+  .louma-checkout-success,
+  .louma-checkout-check {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .louma-swipe-fill {
+    transition: none;
+  }
+}

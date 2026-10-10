@@ -7,6 +7,7 @@ export interface Application {
   name: string;
   walletId: string;
   domains: string[];
+  imageUrl?: string;
   status: string;
   version: number;
   createdAt: Date;
@@ -213,6 +214,7 @@ export const publicFields: Record<string, Record<string, string>> = {
     name: "name",
     walletId: "receiving_wallet_id",
     domains: "domains",
+    imageUrl: "image_url",
     status: "status",
     createdAt: "created_at",
   },

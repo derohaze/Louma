@@ -129,21 +129,19 @@ export async function cancelSubscription(
     if (!["active", "past_due", "paused"].includes(sub.status))
       reject("invalid_transition", 409);
     changed(
-      await store
-        .c("gateway_subscriptions")
-        .updateOne(
-          filter,
-          {
-            $set: {
-              cancelAtEnd: input.atPeriodEnd,
-              ...(!input.atPeriodEnd
-                ? { status: "canceled", mandateActive: false }
-                : {}),
-            },
-            $inc: { version: 1 },
+      await store.c("gateway_subscriptions").updateOne(
+        filter,
+        {
+          $set: {
+            cancelAtEnd: input.atPeriodEnd,
+            ...(!input.atPeriodEnd
+              ? { status: "canceled", mandateActive: false }
+              : {}),
           },
-          { session },
-        ),
+          $inc: { version: 1 },
+        },
+        { session },
+      ),
       "subscription_changed",
     );
     await event(
@@ -157,7 +155,12 @@ export async function cancelSubscription(
     );
   });
 }
-export async function schedule(store: GatewayStore, now: Date): Promise<void> {
+export async function schedule(
+  store: GatewayStore,
+  now: Date,
+  stopping: () => boolean = () => false,
+): Promise<void> {
+  if (stopping()) return;
   const rows = await store
     .c("gateway_subscriptions")
     .find({ status: { $in: ["active", "past_due"] }, dueAt: { $lte: now } })
@@ -165,6 +168,7 @@ export async function schedule(store: GatewayStore, now: Date): Promise<void> {
     .limit(50)
     .toArray();
   for (const row of rows) {
+    if (stopping()) return;
     const invoiceId = randomUUID(),
       paymentId = randomUUID();
     try {
@@ -177,16 +181,14 @@ export async function schedule(store: GatewayStore, now: Date): Promise<void> {
         if (["canceled", "paused"].includes(sub.status) || sub.dueAt > now)
           return;
         if (sub.cancelAtEnd || !sub.mandateActive) {
-          await store
-            .c("gateway_subscriptions")
-            .updateOne(
-              { publicId: sub.publicId },
-              {
-                $set: { status: "canceled", mandateActive: false },
-                $inc: { version: 1 },
-              },
-              { session },
-            );
+          await store.c("gateway_subscriptions").updateOne(
+            { publicId: sub.publicId },
+            {
+              $set: { status: "canceled", mandateActive: false },
+              $inc: { version: 1 },
+            },
+            { session },
+          );
           await event(
             store,
             sub.applicationId,
@@ -233,16 +235,14 @@ export async function claimInvoice(
   store: GatewayStore,
   now: Date,
 ): Promise<Invoice | null> {
-  return (await store
-    .c("gateway_invoices")
-    .findOneAndUpdate(
-      { status: "open", dueAt: { $lte: now }, leaseUntil: { $lte: now } },
-      {
-        $set: { leaseUntil: new Date(now.getTime() + 30000) },
-        $inc: { fence: 1 },
-      },
-      { sort: { dueAt: 1 }, returnDocument: "after" },
-    )) as Invoice | null;
+  return (await store.c("gateway_invoices").findOneAndUpdate(
+    { status: "open", dueAt: { $lte: now }, leaseUntil: { $lte: now } },
+    {
+      $set: { leaseUntil: new Date(now.getTime() + 30000) },
+      $inc: { fence: 1 },
+    },
+    { sort: { dueAt: 1 }, returnDocument: "after" },
+  )) as Invoice | null;
 }
 export async function renew(
   store: GatewayStore,
@@ -354,21 +354,19 @@ export async function renew(
         "invoice_claim_lost",
       );
       changed(
-        await store
-          .c("gateway_subscriptions")
-          .updateOne(
-            {
-              publicId: sub.publicId,
-              mandateActive: true,
-              cycle: invoice.cycle,
-              status: { $in: ["active", "past_due"] },
-            },
-            {
-              $set: { status: "active", dueAt: invoice.periodEnd },
-              $inc: { cycle: 1, version: 1 },
-            },
-            { session },
-          ),
+        await store.c("gateway_subscriptions").updateOne(
+          {
+            publicId: sub.publicId,
+            mandateActive: true,
+            cycle: invoice.cycle,
+            status: { $in: ["active", "past_due"] },
+          },
+          {
+            $set: { status: "active", dueAt: invoice.periodEnd },
+            $inc: { cycle: 1, version: 1 },
+          },
+          { session },
+        ),
         "mandate_revoked",
       );
       await event(
@@ -422,37 +420,33 @@ export async function renew(
         : now.getTime() + 86400000,
     );
     changed(
-      await store
-        .c("gateway_invoices")
-        .updateOne(
-          { publicId: claim.publicId, fence: claim.fence, status: "open" },
-          {
-            $set: {
-              status: exhausted ? "uncollectible" : "open",
-              attempts,
-              dueAt,
-              leaseUntil: ZERO,
-            },
+      await store.c("gateway_invoices").updateOne(
+        { publicId: claim.publicId, fence: claim.fence, status: "open" },
+        {
+          $set: {
+            status: exhausted ? "uncollectible" : "open",
+            attempts,
+            dueAt,
+            leaseUntil: ZERO,
           },
-          { session },
-        ),
+        },
+        { session },
+      ),
       "invoice_claim_lost",
     );
     changed(
-      await store
-        .c("gateway_subscriptions")
-        .updateOne(
-          {
-            publicId: sub.publicId,
-            mandateActive: true,
-            status: { $in: ["active", "past_due"] },
-          },
-          {
-            $set: { status: exhausted ? "paused" : "past_due" },
-            $inc: { version: 1 },
-          },
-          { session },
-        ),
+      await store.c("gateway_subscriptions").updateOne(
+        {
+          publicId: sub.publicId,
+          mandateActive: true,
+          status: { $in: ["active", "past_due"] },
+        },
+        {
+          $set: { status: exhausted ? "paused" : "past_due" },
+          $inc: { version: 1 },
+        },
+        { session },
+      ),
       "mandate_revoked",
     );
     await event(

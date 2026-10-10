@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { enforceMiningAttempt } from "../../mining-device/attempts.js";
 import { z } from "zod";
 import * as deviceGuard from "../../mining-device/service.js";
 import { authenticated, clientIp, getAuth, parseBody } from "../http-helpers.js";
@@ -13,6 +14,7 @@ export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<
     { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 3_600_000 } } },
     async (request) => {
       const current = getAuth(request);
+      await enforceMiningAttempt(app.collections, current.userId, "challenge");
       const body = parseBody(
         z.object({ deviceKeyHash: z.string().max(128).optional(), device: z.unknown().optional() }).strict(),
         request.body ?? {},
@@ -49,6 +51,7 @@ export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<
     { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 3_600_000 } } },
     async (request) => {
       const current = getAuth(request);
+      await enforceMiningAttempt(app.collections, current.userId, "prove");
       const body = parseBody(
         z
           .object({

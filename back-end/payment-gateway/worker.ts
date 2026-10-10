@@ -16,12 +16,13 @@ export async function tick(
   logger: WorkerLogger,
   stopping: () => boolean = () => false,
 ): Promise<void> {
+  if (stopping()) return;
   if (
     !store.config.billingPaused &&
     !store.config.settlementPaused &&
     !store.config.merchantPaused
   ) {
-    await schedule(store, new Date());
+    await schedule(store, new Date(), stopping);
     for (let i = 0; i < 16 && !stopping(); i++) {
       const invoice = await claimInvoice(store, new Date());
       if (!invoice) break;
@@ -33,7 +34,7 @@ export async function tick(
     }
   }
   if (stopping()) return;
-  await expandEvents(store, new Date());
+  await expandEvents(store, new Date(), stopping);
   for (let i = 0; i < 16 && !stopping(); i++) {
     const delivery = await claimDelivery(store, new Date());
     if (!delivery) break;

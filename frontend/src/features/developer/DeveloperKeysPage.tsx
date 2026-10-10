@@ -1,13 +1,14 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { messageForError } from "@/shared/api";
 import { paymentApi, type GatewayResource, type PaymentMode } from "@/shared/api/payments";
 import { useT } from "@/shared/i18n";
 import { Button } from "@/shared/ui/button";
 import { Panel } from "@/shared/ui/panels";
-import { developerScopes, DeveloperScopeGate, useDeveloperScope } from "./DeveloperScope";
-import { DateTimePicker } from "./DateTimePicker";
-import { ScopeToggleGroup } from "./ScopeToggleGroup";
+import { DeveloperScopeGate, useDeveloperScope } from "./DeveloperScope";
+
+/** Simple v1 keys: fixed permissions (create checkouts + read payments), no expiry. */
+const DEFAULT_KEY_SCOPES = ["checkout:create", "payments:read"];
 
 /**
  * The key page: one application's merchant API keys, and nothing else.
@@ -43,27 +44,12 @@ function ApplicationKeys({ mode, applicationId }: { mode: PaymentMode; applicati
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
-  const handleChange = () => {
-    if (error) {
-      setRequestKey(crypto.randomUUID());
-      setError("");
-    }
-  };
   const keys = useQuery({
     queryKey: ["account", "developer", mode, applicationId, "credentials"],
     queryFn: () => paymentApi.resources(mode, applicationId, "credentials"),
   });
   const records = keys.data?.data ?? [];
-  const createKey = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const entered = new FormData(form);
-    const scopes = entered.getAll("scope").map(String);
-    if (scopes.length === 0) {
-      setError(t("keysPage.chooseScope"));
-      return;
-    }
-    const expires = String(entered.get("expires_at") ?? "").trim();
+  const createKey = async () => {
     setBusy(true);
     setError("");
     try {
@@ -71,13 +57,12 @@ function ApplicationKeys({ mode, applicationId }: { mode: PaymentMode; applicati
         mode,
         applicationId,
         "credentials",
-        { scopes, ...(expires ? { expires_at: new Date(expires).toISOString() } : {}) },
+        { scopes: DEFAULT_KEY_SCOPES },
         requestKey,
       );
       const revealed = created["api_key"] ?? created["secret"];
       if (typeof revealed === "string") setSecret(revealed);
       setRequestKey(crypto.randomUUID());
-      form.reset();
       await keys.refetch();
     } catch (failure) {
       setError(messageForError(failure));
@@ -131,26 +116,17 @@ function ApplicationKeys({ mode, applicationId }: { mode: PaymentMode; applicati
           {error}
         </p>
       )}
-      <Panel title={t("keysPage.create")} description={t("keysPage.scopeHint")}>
-        <form
-          onSubmit={(event) => void createKey(event)}
-          onChange={handleChange}
-          className="space-y-4"
-        >
-          <ScopeToggleGroup
-            name="scope"
-            label={t("scopes")}
-            scopes={developerScopes}
-            onValueChange={handleChange}
-          />
-          <label className="block max-w-xs space-y-1.5 text-sm">
-            <span className="font-medium">{t("expires")}</span>
-            <DateTimePicker name="expires_at" onValueChange={handleChange} />
-          </label>
-          <Button type="submit" disabled={busy} className="min-h-11">
+      <Panel title={t("keysPage.create")} description={t("keysPage.defaults")}>
+        <div className="space-y-4">
+          <Button
+            type="button"
+            disabled={busy}
+            className="min-h-11"
+            onClick={() => void createKey()}
+          >
             {busy ? t("loading") : t("keysPage.create")}
           </Button>
-        </form>
+        </div>
       </Panel>
       <Panel
         title={t("keysPage.listTitle")}
@@ -227,14 +203,11 @@ function ApplicationKeys({ mode, applicationId }: { mode: PaymentMode; applicati
         <div className="mt-5 rounded-xl border bg-secondary/30 p-4">
           <p className="text-sm text-muted-foreground">{t("keysPage.checkHint")}</p>
           <code dir="ltr" className="mt-2 block break-all text-xs">
-            {`import { LoumaClient } from '@louma/payments';
-
-const client = new LoumaClient({
-  apiKey: process.env.LOUMA_API_KEY,
-  baseURL: process.env.LOUMA_BASE_URL,
+            {`const response = await fetch(process.env.LOUMA_BASE_URL + '/v1/payments', {
+  headers: { Authorization: \`Bearer \${process.env.LOUMA_API_KEY}\` },
 });
-
-await client.listPayments();`}
+if (!response.ok) throw new Error('Payment check failed');
+const payments = await response.json();`}
           </code>
         </div>
       </Panel>

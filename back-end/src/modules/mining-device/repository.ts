@@ -66,11 +66,12 @@ export async function findLiveLeasesOnNetwork(
   collections: Pick<Collections, "miningDeviceLeases" | "miningSessions">,
   ipHashValue: string,
   nowMs: number,
+  mongoSession?: ClientSession,
 ): Promise<MiningDeviceLeaseRecord[]> {
   const leases = await collections.miningDeviceLeases
-    .find({ ipHash: ipHashValue, status: "active", leaseEndsAt: { $gt: new Date(nowMs) } })
+    .find({ ipHash: ipHashValue, status: "active", leaseEndsAt: { $gt: new Date(nowMs) } }, mongoSession ? { session: mongoSession } : {})
     .toArray();
-  return leasesWithRunningSessions(collections, leases, nowMs);
+  return leasesWithRunningSessions(collections, leases, nowMs, mongoSession);
 }
 
 /**

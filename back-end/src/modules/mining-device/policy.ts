@@ -52,6 +52,13 @@ export const DEVICE_EVIDENCE_MISSING_MESSAGE =
 export const CHALLENGE_MAX_PER_HOUR = 20;
 export const PROVE_MAX_PER_HOUR = 30;
 
+/** Account-scoped attempt windows survive IP rotation, API restarts and Redis outages. */
+export const MINING_ATTEMPT_LIMITS = {
+  start: { limit: 12, windowMs: 60_000 },
+  challenge: { limit: CHALLENGE_MAX_PER_HOUR, windowMs: 3_600_000 },
+  prove: { limit: PROVE_MAX_PER_HOUR, windowMs: 3_600_000 },
+} as const;
+
 /**
  * Proof protocol version. The signed payload carries it, so a signature can never be replayed
  * across protocol revisions, and a server upgrade can refuse pre-binding handshakes outright.
@@ -66,16 +73,9 @@ export const LMDG_PROOF_ACTION = "lmdg.mining_start";
  */
 export const CLUSTER_CANDIDATE_LIMIT = 50;
 
-/**
- * How many live-lease records the fuzzy backstop pulls into one start's comparison set.
- *
- * The exact checks are unbounded by design and indexed (the observation's own lease keys, and the
- * live leases on this network); this cap only bounds the *similarity* heuristic that correlates an
- * observation with a lease-holder whose traits changed (a driver update, a rewritten fingerprint),
- * which would otherwise load every device record of the whole active mining population on every
- * start. Newest leases first, so the bounded set is the one most likely to still be running.
- */
-export const LIVE_LEASE_BACKSTOP_LIMIT = 200;
+/** Complete admission scans abort on resource exhaustion; they never accept a partial result. */
+export const ADMISSION_SCAN_BUDGET_MS = 2000;
+export const ADMISSION_CORRELATED_LIMIT = 200;
 
 /** Observation write sampling: persist at most one observation per device per this window. */
 export const OBSERVATION_MIN_INTERVAL_MS = 60_000;

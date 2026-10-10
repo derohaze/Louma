@@ -98,6 +98,7 @@ test("real Node identity and embedded gateway preserve consent, isolation, settl
       assert.equal(access.payload["eligible"], true);
       assert.equal(access.payload["mode"], "test");
       assert.equal(access.payload["available"], true);
+      assert.equal(access.payload["gateway_url"], nodeUrl);
       expectStatus(await request("POST", "/api/v1/developer/applications", { account: merchant, key: randomUUID(), body: { mode: "test", name: "Forbidden wallet", wallet_id: outsider.walletId, domains: [] } }), 403);
       const creationKey = randomUUID();
       const creation = { mode: "test", name: "Gateway integration merchant", wallet_id: merchant.walletId, domains: ["localhost:3000"] };
@@ -127,6 +128,25 @@ test("real Node identity and embedded gateway preserve consent, isolation, settl
       assert.equal(created.payload["total"], "10.0000");
       assert.equal(created.payload["fee"], "0.1000");
       assert.equal(created.payload["merchant_net"], "9.9000");
+    });
+    await suite.test("a developer needs only the scoped key to set a server price of 50 or 100 LMA", async () => {
+      for (const subtotal of ["50.0000", "100.0000"]) {
+        const headers = { Authorization: `Bearer ${merchantApiKey}`, "Content-Type": "application/json", "Idempotency-Key": randomUUID() };
+        const body = JSON.stringify({ subtotal, currency: "LMA", description: "Website product", metadata: { order_id: headers["Idempotency-Key"] } });
+        const response = await fetch(`${gatewayUrl}/v1/checkouts`, { method: "POST", headers, body });
+        assert.equal(response.status, 200);
+        const payment = await response.json() as Record<string, unknown>;
+        assert.equal(payment["total"], subtotal);
+        assert.equal(payment["status"], "requires_action");
+        assert.ok(String(payment["checkout_url"]).startsWith(gatewayUrl + "/checkout/"));
+        const replay = await fetch(`${gatewayUrl}/v1/checkouts`, { method: "POST", headers, body });
+        assert.equal((await replay.json() as Record<string, unknown>)["id"], payment["id"]);
+      }
+      const readOnly = await resource(applicationId, "credentials", { scopes: ["payments:read"] });
+      expectStatus(readOnly, 201);
+      const denied = await fetch(`${gatewayUrl}/v1/checkouts`, { method: "POST", headers: { Authorization: `Bearer ${readOnly.payload["api_key"]}`, "Content-Type": "application/json", "Idempotency-Key": randomUUID() }, body: JSON.stringify({ subtotal: "50", currency: "LMA" }) });
+      assert.equal(denied.status, 403);
+      assert.equal(await walletBalance(payer), 500_000);
     });
     await suite.test("cross-merchant resources, CSRF, mismatched intent, and wallet freezes reject", async () => {
       await db.collection("gateway_developers").insertOne({ ownerUserId: outsider.id, status: "active", updatedAt: new Date() });

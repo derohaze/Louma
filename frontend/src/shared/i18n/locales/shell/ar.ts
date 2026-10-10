@@ -24,6 +24,7 @@ const ar: Strings<typeof en> = {
     profile: "الملف الشخصي",
     security: "الأمان",
     settings: "الإعدادات",
+    developer: "المطور",
     darkMode: "الوضع الليلي",
     logOut: "تسجيل الخروج",
     language: "اللغة",

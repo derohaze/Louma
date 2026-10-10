@@ -1,6 +1,6 @@
 # Database (MongoDB — the source of truth)
 
-## Collections (25 total, including subscription and address archives)
+## Collections (including subscription and address archives)
 
 Core: users, wallets, ledger_accounts, ledger_entries, transactions.
 Pro: subscriptions, subscription_grants, wallet_address_history (permanent
@@ -11,6 +11,7 @@ financial_controls, notifications.
 Mining: mining_sessions, mining_settings, mining_pool_members, mining_devices,
 mining_device_leases, mining_device_nonces, mining_device_observations,
 mining_device_quotas.
+Mining admission coordination: mining_admission_networks (ADR-013).
 Legacy: mining_settlements (write-frozen, migrated to the journal, drop only
 after the verification in migrations.md).
 
@@ -79,3 +80,55 @@ released row kept while it anchors the room-change throttle. Retention TTLs
 for notifications/security_events are opt-in
 (RETENTION_TTL_ENABLED) and never touch unread notices. Financial facts
 (transactions, ledger_entries) NEVER expire.
+
+`mining_admission_networks` contains only `_id` (the server-keyed network
+identity), `fence` (boolean), and `expiresAt` (date). The built-in unique `_id`
+index serves exact lookups; `mining_admission_networks_ttl` reclaims rows after
+24 hours without a start. Deletion never releases a mining lease. Starts
+prepare the row before their transaction and require its presence inside it.
+The optional `mining_devices.admissionFence` boolean coordinates correlated
+starts without changing device identity, quotas, trust, or lease uniqueness.
+
+ADR-014 replaces the capped admission candidate pages with a complete cursor
+over device matching/lease fields, in batches of 64. This is an O(N) scan, with
+a 2000 ms execution/iteration budget and at most 200 retained correlated
+records; exceeding either aborts admission with `mining_start_busy`, never
+accepts a truncated result. Legacy raw snapshots, drift rings, idle contenders
+and blocked devices with surviving leases remain visible. No new index or
+schema is needed. `docsScanned` in the mining benchmarks counts documents
+delivered to the application (including streaming), not server executionStats;
+query-call counts also exclude individual `getMore` commands. Use populated
+explain/load measurements when evaluating capacity.
+
+`mining_device_attempts` (ADR-015) stores account/action `_id`, `attempts` (an
+array of at most 30 dates, enforced by the validator), and `expiresAt`. Exact
+conditional updates use the built-in unique `_id`; `mining_device_attempts_ttl`
+expires idle rows. MongoDB time and an atomic sliding-window update enforce
+12 mining starts/minute, 20 challenges/hour and 30 proof attempts/hour per
+account, independently of Redis, nonce TTL and audit storage. Refusals are
+temporary 429 responses; storage failure returns 503 without granting mining.
+These are attempt counters, not enrollments, leases, balances or audit history.
+
+ADR-016 replaces only ADR-014's transaction revalidation scan with an indexed union over
+`mining_devices`: `admissionPending > 0`, `admissionLeaseEndsAt > now`, or a
+missing `admissionLeaseEndsAt`. The ordinary ascending indexes
+`mining_devices_admission_pending` and `mining_devices_admission_window` serve
+these branches. Pending is an optional bounded nonnegative integer; the window
+is an optional date. Neither is client-writable or a trust/identity signal.
+
+Each start registers before assessment and releases after completion/abort.
+The existing transaction fence retains its cycle end on all compared records,
+including peers whose identities it leases. A stopped cycle may leave a future
+upper bound. Missing legacy windows stay visible and bootstrap backfills them
+in 200-row batches through the latest existing active cycle/lease end.
+Pending references never expire; failed cleanup remains conservative.
+
+Initial assessment still scans all historical profiles and retains its compared
+IDs/lease keys for transaction revalidation. Filtering both scans regressed
+asymmetric learned-history enforcement and was rejected by the final audit.
+Only transaction-discovery cost follows the retained/pending population;
+the total start still has an O(N) historical scan and can return temporary busy
+responses at large populations. The same scan budget/correlation cap applies.
+Drain older mining writers before bootstrap; mixed-version writers
+are unsafe. Rollback/re-upgrade and crashed-reference cleanup prerequisites
+are specified in ADR-016. No historical records or financial data are deleted.

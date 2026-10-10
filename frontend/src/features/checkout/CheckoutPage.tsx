@@ -45,7 +45,7 @@ export function CheckoutPage({ session, mode }: { session: string; mode: Payment
     setError("");
     try {
       const settled = await paymentApi.confirm(mode, session, proof, requestKey);
-      // Go's settlement response is authoritative; re-read display details separately.
+      // The settlement response is authoritative; re-read display details separately.
       queryClient.setQueryData<CheckoutDetails>(queryKey, { ...payment, ...settled });
       await checkout.refetch();
       return true;

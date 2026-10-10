@@ -6,6 +6,7 @@ export interface DeveloperAccess {
   /** Added for deployment-selected routing; optional while older API processes are still running. */
   mode?: PaymentMode;
   available?: boolean;
+  gateway_url?: string | null;
   /** Legacy response shape returned by a backend process started before deployment-selected routing. */
   environments?: Record<PaymentMode, boolean>;
 }
@@ -13,6 +14,7 @@ export interface MerchantApplication {
   id: string;
   name: string;
   receiving_wallet_id: string;
+  image_url?: string;
   status: string;
   domains: string[];
 }
@@ -59,7 +61,7 @@ export interface CheckoutDetails {
   expires_at: string;
   subscription_id?: string;
   transaction_reference?: string;
-  merchant: { id: string; name: string };
+  merchant: { id: string; name: string; image?: string };
   payer_wallet: { id: string; address: string; status: string } | null;
   recurring?: {
     price_id: string;
@@ -87,7 +89,13 @@ export const paymentApi = {
   updateApplication: (
     mode: PaymentMode,
     id: string,
-    changes: { status?: string; name?: string; domains?: string[]; wallet_id?: string },
+    changes: {
+      status?: "active" | "disabled";
+      name?: string;
+      domains?: string[];
+      wallet_id?: string;
+      image_url?: string;
+    },
   ) => api.patch<MerchantApplication>(`/api/v1/developer/applications/${id}`, { mode, ...changes }),
   resources: (mode: PaymentMode, applicationId: string, resource: string, cursor?: string) =>
     api.get<GatewayPage<GatewayResource>>(

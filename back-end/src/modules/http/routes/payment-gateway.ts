@@ -101,6 +101,7 @@ export async function registerPaymentGatewayRoutes(app: FastifyInstance): Promis
       eligible: await hasGatewayDeveloperAccess({ mongoClient: app.mongoClient, database: app.config.mongoDatabase, ownerUserId: getAuth(request).userId }),
       mode,
       available: app.gateway ? app.gateway.config.environment === mode : app.config.paymentGateway[mode] !== null,
+      gateway_url: app.gateway?.config.publicUrl ?? null,
     };
   });
   app.get("/api/v1/developer/applications", authenticated, async (request) => {
@@ -122,7 +123,7 @@ export async function registerPaymentGatewayRoutes(app: FastifyInstance): Promis
   app.patch("/api/v1/developer/applications/:id", authenticated, async (request) => {
     await requireDeveloper(app, request);
     const { id } = parseBody(z.object({ id: publicIdSchema }), request.params);
-    const body = parseBody(z.object({ mode: modeSchema, status: z.literal("disabled").optional(), name: z.string().min(1).max(120).optional(), domains: z.array(z.string().min(1).max(253)).max(16).optional(), wallet_id: publicIdSchema.optional() }).strict(), request.body);
+    const body = parseBody(z.object({ mode: modeSchema, status: z.enum(["active", "disabled"]).optional(), name: z.string().min(1).max(120).optional(), domains: z.array(z.string().min(1).max(253)).max(16).optional(), wallet_id: publicIdSchema.optional(), image_url: z.string().max(2048).optional() }).strict(), request.body);
     const { mode, wallet_id, ...changes } = body;
     if (wallet_id && !await app.collections.wallets.findOne({ publicId: wallet_id, ownerUserId: getAuth(request).userId, status: "active" })) throw forbidden("receiving_wallet_forbidden", "Select an active wallet that you own.");
     return gatewayCall(app, request, mode, `/applications/${id}`, "PATCH", { ...changes, ...(wallet_id ? { receiving_wallet_id: wallet_id } : {}) });
@@ -159,7 +160,15 @@ export async function registerPaymentGatewayRoutes(app: FastifyInstance): Promis
     const { mode } = parseBody(z.object({ mode: modeSchema }).strict(), request.query);
     const checkout = await gatewayCall(app, request, mode, `/checkout/${id}`, "GET");
     const wallet = await findPrimaryWallet(app.collections, getAuth(request).userId);
-    return { ...checkout, payer_wallet: wallet ? { id: wallet.publicId, address: wallet.address, status: wallet.status } : null };
+    let storeImage = "";
+    try {
+      const store = await gatewayCall(app, request, mode, `/applications/${checkout["application_id"]}`, "GET");
+      if (typeof store["image_url"] === "string") storeImage = store["image_url"];
+    } catch {
+      storeImage = "";
+    }
+    const merchant = { ...(checkout["merchant"] as Record<string, unknown>), ...(storeImage ? { image: storeImage } : {}) };
+    return { ...checkout, merchant, payer_wallet: wallet ? { id: wallet.publicId, address: wallet.address, status: wallet.status } : null };
   });
   app.post("/api/v1/payments/checkout/:id/confirm", { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 60_000 } } }, async (request) => {
     const { id } = parseBody(z.object({ id: publicIdSchema }), request.params);

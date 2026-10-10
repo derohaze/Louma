@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import type { MongoClient } from "mongodb";
+import type { ClientSession, MongoClient } from "mongodb";
 import { buildApp } from "../app.js";
 import { loadConfig, type AppConfig } from "../config/env.js";
 import { connectMongo } from "../infrastructure/mongodb/client.js";
@@ -1026,10 +1026,23 @@ test("EXISTING PROFILE RACE: ambiguous browser identities cannot both pass befor
   const { toCandidate, observedFeatures } = await import("../modules/mining-device/resolution.js");
   const a = await register("existing-race-a");
   const b = await register("existing-race-b");
-  const evidenceA = deviceEvidence("laptop-x", "existing-profile-race");
+  // This test deliberately edits the fixture code's CPU slot, which can move it onto an earlier
+  // test's machine. Pick two CPU classes that remain unrelated to the existing test population;
+  // the two profiles below must still be ambiguous with each other (asserted after enrollment).
+  const prototype = deviceEvidence("laptop-x", "existing-profile-race");
+  const previousDevices = await collections.miningDevices.find({}).toArray();
+  const isolatedCpus = [2, 4, 8, 16, 32].filter(hardwareConcurrency => {
+    const observed = observedFeatures(config.encryptionKey, normalizeSignals(sanitizeEvidence({ ...prototype, hardwareConcurrency })));
+    return previousDevices.every(previous => decideClusterMatch(
+      matchDeviceFeatures(toCandidate(previous), observed, config.encryptionKey),
+      config.lmdg.highConfidenceThreshold, config.lmdg.ambiguousThreshold,
+    ) === "different");
+  });
+  assert.ok(isolatedCpus.length >= 2, "two class-edited fixtures must be isolated from earlier test devices");
+  const evidenceA = { ...prototype, hardwareConcurrency: isolatedCpus[0]! };
   const evidenceB = {
     ...evidenceA,
-    hardwareConcurrency: evidenceA["hardwareConcurrency"] === 2 ? 8 : 2,
+    hardwareConcurrency: isolatedCpus[1]!,
     visitorId: `existing-profile-b-${RUN}`,
     browserKeyPublicKey: `existing-profile-b-${RUN}`,
   };
@@ -1055,19 +1068,22 @@ test("EXISTING PROFILE RACE: ambiguous browser identities cannot both pass befor
     } },
   );
 
-  // Both requests must finish admission before either inserts a session. An ordinary Promise.all
-  // can accidentally test the sequential refusal and miss this window entirely.
-  const insertOne = collections.miningSessions.insertOne.bind(collections.miningSessions);
+  // Both requests finish assessment before either transaction starts. A barrier after the
+  // transaction's fence would deadlock the winner waiting for the intentionally blocked loser.
+  const startSession = client.startSession.bind(client);
   let arrivals = 0;
   let release!: () => void;
   const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
   const timeout = setTimeout(release, 10_000);
-  const insertion = t.mock.method(collections.miningSessions, "insertOne", async (...args: Parameters<typeof insertOne>) => {
-    if ([a.userId, b.userId].includes(args[0].ownerUserId)) {
+  const startSessionMock = t.mock.method(client, "startSession", (...args: Parameters<typeof startSession>) => {
+    const session = startSession(...args);
+    const transaction = session.withTransaction.bind(session);
+    t.mock.method(session, "withTransaction", async (fn: (s: ClientSession) => Promise<unknown>, options: Parameters<typeof transaction>[1]) => {
       if (++arrivals === 2) release();
       await gate;
-    }
-    return insertOne(...args);
+      return transaction(fn, options);
+    });
+    return session;
   });
   let results;
   try {
@@ -1076,9 +1092,10 @@ test("EXISTING PROFILE RACE: ambiguous browser identities cannot both pass befor
     })));
   } finally {
     clearTimeout(timeout);
-    insertion.mock.restore();
+    startSessionMock.mock.restore();
   }
-  assert.equal(arrivals, 2, "both starts reached persistence before either committed");
+  t.diagnostic(`pre-transaction arrivals=${arrivals}; responses=${JSON.stringify(results.map(result => ({ status: result.status, error: result.body["error"] })))}`);
+  assert.equal(arrivals, 2, "both starts finished assessment before either transaction began");
   const statuses = results.map((result) => result.status).sort();
   const activeSessions = await collections.miningSessions.countDocuments({ ownerUserId: { $in: [a.userId, b.userId] }, status: "active" });
   t.diagnostic(`simultaneous start results: ${JSON.stringify(statuses)}; active sessions: ${activeSessions}`);

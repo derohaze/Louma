@@ -1,15 +1,19 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { CheckoutDetails } from "@/shared/api/payments";
 import { useI18n, useT } from "@/shared/i18n";
 import { cn } from "@/shared/lib/platform";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { ArrowRight, Check, LockKeyhole, Wallet } from "lucide-react";
+import { LockKeyhole } from "lucide-react";
+import { SlideToPay } from "./SlideToPay";
+import "./checkout.css";
 
-/**
- * Exactly what the confirm endpoint accepts, assembled from what the payer entered. The intent hash
- * always comes from the record the gateway returned, never from the page.
- */
+// Format the exact decimal string without passing money through floating point.
+const amountLabel = (value: string) => {
+  const [whole = "0", fraction] = value.replace(/(\.\d*?[1-9])0+$|\.0+$/, "$1").split(".");
+  return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (fraction ? `.${fraction}` : "");
+};
+
 export type CheckoutProof = {
   intent_hash: string;
   transferPassword?: string;
@@ -23,70 +27,35 @@ export function CheckoutShell({
   standalone = true,
 }: {
   children: ReactNode;
-  /**
-   * True on the payer's own route, which is the whole document and fills the viewport. False where
-   * the page is embedded in the developer preview: it then renders as a plain block, because a
-   * document may only have one `main`, and the preview has none of the viewport to fill. Nothing
-   * inside the card changes either way.
-   */
   standalone?: boolean;
 }) {
   const t = useT("checkout");
-  const { language, setLanguage } = useI18n();
+  const { language } = useI18n();
   const Frame = standalone ? "main" : "div";
   return (
     <Frame
       dir={language === "ar" ? "rtl" : "ltr"}
-      className={cn("bg-background px-4 py-6 sm:py-10", standalone && "min-h-dvh")}
+      className={cn("louma-checkout-backdrop min-w-0", standalone && "min-h-dvh")}
     >
-      <div className="mx-auto w-full max-w-[432px]">
-        <header className="mb-7 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <img
-              src="/Louma_Brand_logos/png/louma-logo-128x128.png"
-              alt=""
-              width={38}
-              height={38}
-              className="rounded-full"
-            />
-            <div>
-              <p className="font-display text-base font-semibold tracking-tight">Louma</p>
-              <p className="text-xs text-muted-foreground">{t("payments")}</p>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            lang={language === "en" ? "ar" : "en"}
-            onClick={() => setLanguage(language === "en" ? "ar" : "en")}
-          >
-            {language === "en" ? "العربية" : "English"}
-          </Button>
-        </header>
-        <section
-          aria-labelledby="checkout-heading"
-          className="overflow-hidden rounded-3xl border bg-card shadow-sm"
-        >
+      <div className="mx-auto w-full max-w-[420px]">
+        <section className="louma-checkout-card" aria-label={t("title")}>
+          <header className="flex h-14 items-center justify-center px-6">
+            <span className="font-display text-base font-semibold tracking-tight">Louma Pay</span>
+          </header>
           {children}
         </section>
-        <footer className="mt-5 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
-          <LockKeyhole className="size-3" aria-hidden="true" />
-          {t("poweredBy")}
+        <footer className="mt-5 flex justify-center">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-3 py-1.5 text-[11px] text-neutral-500">
+            <LockKeyhole className="size-3" aria-hidden="true" />
+            {t("poweredBy")}
+          </span>
         </footer>
       </div>
     </Frame>
   );
 }
 
-/**
- * The payment itself: merchant, exact amount, the wallet that will pay, the factor proof, and the
- * one button that moves money. Every payer sees this component — `/checkout` renders it with the
- * gateway's record, and the developer test page renders it from a sample, so a merchant previews
- * the exact markup and styles the buyer gets instead of a mock-up that can drift from them.
- *
- * It owns only what the payer types. Busy, error, and the settled/subscription state stay with the
- * caller, because the caller is what talks to the API.
- */
+/** Live checkout and the local preview share this view. Only the caller can confirm settlement. */
 export function CheckoutExperience({
   payment,
   factors,
@@ -97,16 +66,16 @@ export function CheckoutExperience({
   onCancelRenewals,
 }: {
   payment: CheckoutDetails;
-  /** The spend factors this payer has configured, and whether that read has finished. */
   factors: { transferPassword: boolean; twoFactor: boolean; pending: boolean; error: string };
   busy: boolean;
   error: string;
   subscriptionCanceled: boolean;
-  /** Resolves `true` only when the gateway confirmed settlement, so a failed attempt keeps the input. */
   onConfirm: (proof: CheckoutProof) => Promise<boolean>;
   onCancelRenewals: () => Promise<void>;
 }) {
   const t = useT("checkout");
+  const form = useRef<HTMLFormElement>(null);
+  const confirming = useRef(false);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [consent, setConsent] = useState(false);
@@ -116,205 +85,248 @@ export function CheckoutExperience({
     payment.status === "expired" ||
     (!!payment.expires_at && Date.parse(payment.expires_at) <= Date.now() && !confirmed);
   const payable = payment.status === "requires_action" && !expired;
+  const disabled =
+    busy ||
+    !payment.payer_wallet ||
+    frozen ||
+    !payable ||
+    factors.pending ||
+    !!factors.error ||
+    (!!payment.recurring && !consent);
   const confirm = async (event: FormEvent) => {
     event.preventDefault();
-    const settled = await onConfirm({
-      intent_hash: payment.intent_hash,
-      ...(password ? { transferPassword: password } : {}),
-      ...(code ? { twoFactorCode: code } : {}),
-      ...(payment.recurring
-        ? {
-            recurring_consent: consent,
-            policy_version: payment.recurring.consent_policy_version,
-          }
-        : {}),
-    });
-    if (settled) {
-      setPassword("");
-      setCode("");
+    if (disabled || confirming.current || Date.parse(payment.expires_at) <= Date.now()) return;
+    confirming.current = true;
+    try {
+      const settled = await onConfirm({
+        intent_hash: payment.intent_hash,
+        ...(password ? { transferPassword: password } : {}),
+        ...(code ? { twoFactorCode: code } : {}),
+        ...(payment.recurring
+          ? { recurring_consent: consent, policy_version: payment.recurring.consent_policy_version }
+          : {}),
+      });
+      if (settled) {
+        setPassword("");
+        setCode("");
+      }
+    } finally {
+      confirming.current = false;
     }
   };
+  const reference = (
+    <div className="text-center text-[10px] leading-5 text-neutral-500">
+      <p>{t("reference")}</p>
+      <code className="block break-all" dir="ltr">
+        {payment.payment_id}
+      </code>
+    </div>
+  );
+
+  if (busy && !confirmed)
+    return (
+      <div
+        key="processing"
+        role="status"
+        aria-live="polite"
+        className="louma-checkout-state flex min-h-[440px] flex-col items-center justify-center px-6 pb-16"
+      >
+        <svg viewBox="0 0 48 48" aria-hidden="true" className="size-20 motion-safe:animate-spin">
+          <circle cx="24" cy="24" r="20" fill="none" stroke="#e5e5e5" strokeWidth="4" />
+          <circle
+            cx="24"
+            cy="24"
+            r="20"
+            fill="none"
+            stroke="#8e53f8"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeDasharray="32 94"
+          />
+        </svg>
+        <h1 className="mt-6 text-base font-semibold">{t("processing")}</h1>
+      </div>
+    );
+
+  if (confirmed)
+    return (
+      <div
+        key="success"
+        className="louma-checkout-state flex min-h-[440px] flex-col px-6 pb-7 sm:px-8"
+      >
+        <div
+          role="status"
+          className="flex flex-1 flex-col items-center justify-center py-12 text-center"
+        >
+          <span className="louma-checkout-success grid size-24 place-items-center rounded-full border-2 border-emerald-500 bg-emerald-500/10">
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              className="size-12 text-emerald-600"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path className="louma-checkout-check" d="M4 12.5 9.5 18 20 6.5" />
+            </svg>
+          </span>
+          <h1 className="mt-6 text-2xl font-semibold tracking-tight">{t("succeeded")}</h1>
+          <p className="mt-4 text-2xl font-bold tabular-nums" dir="ltr">
+            {amountLabel(payment.total)} <span className="text-base text-neutral-500">LMA</span>
+          </p>
+          <p className="mt-3 max-w-xs text-sm leading-6 text-neutral-500">
+            {payment.merchant.name} · {t("successHint")}
+          </p>
+        </div>
+        {payment.subscription_id && (
+          <div className="mb-5 text-center">
+            <p className="text-xs text-neutral-500">
+              {subscriptionCanceled ? t("renewalsCanceled") : t("renewalsHint")}
+            </p>
+            {!subscriptionCanceled && (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3 rounded-full"
+                disabled={busy}
+                onClick={() => void onCancelRenewals()}
+              >
+                {busy ? t("processing") : t("cancelRenewals")}
+              </Button>
+            )}
+          </div>
+        )}
+        {error && (
+          <p role="alert" className="mb-4 text-sm text-red-600">
+            {error}
+          </p>
+        )}
+        {reference}
+      </div>
+    );
+
+  if (!payable)
+    return (
+      <div
+        key="inactive"
+        className="louma-checkout-state flex min-h-[440px] flex-col justify-center gap-5 px-8 pb-8 text-center"
+      >
+        <div role="status">
+          <h1 className="text-xl font-semibold">
+            {expired ? t("expired") : payment.status === "canceled" ? t("canceled") : t("failed")}
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-neutral-500">{t("newCheckout")}</p>
+        </div>
+        {reference}
+      </div>
+    );
+
   return (
-    <>
-      <div className="px-6 pb-6 pt-7 text-center sm:px-7 sm:pt-8">
-        <p className="text-xs text-muted-foreground">{t("merchant")}</p>
-        <h1 id="checkout-heading" className="mt-1 break-words font-display text-xl font-semibold">
-          {payment.merchant?.name}
+    <form
+      key="review"
+      ref={form}
+      onSubmit={(event) => void confirm(event)}
+      className="louma-checkout-state flex min-h-[440px] flex-col px-5 pb-6 sm:px-7"
+    >
+      <div className="pt-4 text-center">
+        <p className="text-xs text-neutral-500">{t("merchant")}</p>
+        {payment.merchant.image ? (
+          <img
+            src={payment.merchant.image}
+            alt=""
+            aria-hidden="true"
+            className="mx-auto mt-4 size-20 rounded-full border border-neutral-200 object-cover"
+          />
+        ) : (
+          <span
+            aria-hidden="true"
+            className="mx-auto mt-4 grid size-20 place-items-center rounded-full bg-violet-100 font-display text-2xl font-bold text-violet-700"
+          >
+            {Array.from(payment.merchant.name.trim()).slice(0, 2).join("").toUpperCase()}
+          </span>
+        )}
+        <h1 className="mt-3 break-words text-lg font-semibold tracking-tight">
+          {payment.merchant.name}
         </h1>
-        <p className="mt-5 flex items-baseline justify-center gap-2" dir="ltr">
-          <strong className="font-display text-[clamp(27px,8vw,42px)] font-semibold leading-tight tracking-[-1.7px] tabular-nums">
-            {payment.total}
+        <p className="mt-3 flex flex-wrap items-baseline justify-center gap-2" dir="ltr">
+          <strong className="break-all font-display text-[clamp(32px,9vw,40px)] leading-none font-bold tracking-tight tabular-nums">
+            {amountLabel(payment.total)}
           </strong>
-          <span className="text-sm text-muted-foreground">LMA</span>
+          <span className="text-xl font-semibold text-neutral-500">LMA</span>
         </p>
         {payment.description && (
-          <p className="mt-3 break-words text-sm text-muted-foreground">{payment.description}</p>
+          <p className="mt-2 break-words text-xs text-neutral-500">{payment.description}</p>
         )}
       </div>
-      <div className="mx-6 border-y py-4 sm:mx-7">
-        <dl className="space-y-2 text-[13px]">
-          <div className="flex justify-between gap-4">
-            <dt className="text-muted-foreground">{t("subtotal")}</dt>
-            <dd dir="ltr" className="tabular-nums">
-              {payment.subtotal} LMA
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-muted-foreground">{t("tax")}</dt>
-            <dd dir="ltr" className="tabular-nums">
-              {payment.tax} LMA
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-muted-foreground">{t("total")}</dt>
-            <dd dir="ltr" className="font-medium tabular-nums">
-              {payment.total} LMA
-            </dd>
-          </div>
-        </dl>
-        <p className="mt-3 text-[11px] text-muted-foreground">{t("fee")}</p>
-      </div>
-      <div className="px-6 py-6 sm:px-7">
-        {confirmed ? (
-          <div role="status" className="text-center">
-            <span className="mx-auto mb-3 flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <Check className="size-5" aria-hidden="true" />
+      {payment.recurring && (
+        <fieldset className="mb-5 rounded-2xl border border-neutral-200 p-4 text-sm">
+          <legend className="px-1 font-medium">{t("recurring")}</legend>
+          <p className="flex justify-between gap-2">
+            <span dir="ltr">{amountLabel(payment.recurring.amount)} LMA</span>
+            <span className="text-neutral-500">
+              {payment.recurring.interval === "year" ? t("yearly") : t("monthly")}
             </span>
-            <p className="font-medium">{t("succeeded")}</p>
-            <p className="mt-2 text-sm text-muted-foreground">{t("successHint")}</p>
-            {payment.subscription_id && (
-              <div className="mt-5 border-t pt-4">
-                <p className="text-sm text-muted-foreground">
-                  {subscriptionCanceled ? t("renewalsCanceled") : t("renewalsHint")}
-                </p>
-                {!subscriptionCanceled && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="mt-3 w-full rounded-xl"
-                    disabled={busy}
-                    onClick={() => void onCancelRenewals()}
-                  >
-                    {busy ? t("processing") : t("cancelRenewals")}
-                  </Button>
-                )}
-                {error && (
-                  <p role="alert" className="mt-3 text-sm text-destructive">
-                    {error}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        ) : !payable ? (
-          <div role="status" className="text-center">
-            <p className="font-medium">
-              {expired ? t("expired") : payment.status === "canceled" ? t("canceled") : t("failed")}
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">{t("newCheckout")}</p>
-          </div>
-        ) : (
-          <form onSubmit={(event) => void confirm(event)} className="space-y-4">
-            <div className="flex items-center gap-3 rounded-xl bg-muted/50 p-3">
-              <Wallet className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">{t("wallet")}</p>
-                <p className="mt-0.5 break-all font-mono text-xs" dir="ltr">
-                  {payment.payer_wallet?.address ?? t("noWallet")}
-                </p>
-              </div>
-            </div>
-            {frozen && (
-              <p role="alert" className="text-sm text-destructive">
-                {t("frozen")}
-              </p>
-            )}
-            {payment.recurring && (
-              <fieldset className="rounded-xl border p-4 text-sm">
-                <legend className="px-1 font-medium">{t("recurring")}</legend>
-                <p className="flex flex-wrap justify-between gap-2">
-                  <span dir="ltr" className="font-medium tabular-nums">
-                    {payment.recurring.amount} LMA
-                  </span>
-                  <span className="text-muted-foreground">
-                    {payment.recurring.interval === "year" ? t("yearly") : t("monthly")}
-                  </span>
-                </p>
-                <label className="mt-3 flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={consent}
-                    onChange={(event) => setConsent(event.target.checked)}
-                    required
-                    className="mt-1 size-4 shrink-0 accent-primary"
-                  />
-                  <span className="text-muted-foreground">{t("recurringHint")}</span>
-                </label>
-              </fieldset>
-            )}
-            {factors.transferPassword && (
-              <label className="block space-y-1.5 text-sm">
-                <span className="font-medium">{t("password")}</span>
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="off"
-                  maxLength={128}
-                />
-              </label>
-            )}
-            {factors.twoFactor && (
-              <label className="block space-y-1.5 text-sm">
-                <span className="font-medium">{t("code")}</span>
-                <Input
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  autoComplete="one-time-code"
-                  maxLength={64}
-                  dir="ltr"
-                />
-              </label>
-            )}
-            {(factors.transferPassword || factors.twoFactor) && (
-              <p className="text-xs text-muted-foreground">{t("credentialHint")}</p>
-            )}
-            {factors.error && (
-              <p role="alert" className="text-sm text-destructive">
-                {factors.error}
-              </p>
-            )}
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <Button
-              type="submit"
-              className="min-h-12 w-full gap-2 rounded-xl text-sm"
-              disabled={
-                busy ||
-                !payment.payer_wallet ||
-                frozen ||
-                expired ||
-                factors.pending ||
-                !!factors.error ||
-                (!!payment.recurring && !consent)
-              }
-            >
-              {busy ? t("processing") : t("approve")}{" "}
-              {!busy && <ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />}
-            </Button>
-            <p className="text-center text-xs text-muted-foreground">{t("approvalHint")}</p>
-          </form>
-        )}
+          </p>
+          <label className="mt-3 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(event) => setConsent(event.target.checked)}
+              required
+              className="mt-1 size-4 shrink-0 accent-violet-500"
+            />
+            <span className="text-xs leading-6 text-neutral-500">{t("recurringHint")}</span>
+          </label>
+        </fieldset>
+      )}
+      {factors.transferPassword && (
+        <label className="mb-4 block space-y-2 text-xs">
+          <span>{t("password")}</span>
+          <Input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="off"
+            required
+            maxLength={128}
+          />
+        </label>
+      )}
+      {factors.twoFactor && (
+        <label className="mb-4 block space-y-2 text-xs">
+          <span>{t("code")}</span>
+          <Input
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            autoComplete="one-time-code"
+            required
+            maxLength={64}
+            dir="ltr"
+          />
+        </label>
+      )}
+      {(factors.transferPassword || factors.twoFactor) && (
+        <p className="mb-4 text-xs leading-5 text-neutral-500">{t("credentialHint")}</p>
+      )}
+      {frozen && (
+        <p role="alert" className="mb-4 text-sm text-red-600">
+          {t("frozen")}
+        </p>
+      )}
+      {(factors.error || error) && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-red-600/20 bg-red-50 p-3 text-sm text-red-600"
+        >
+          {factors.error || error}
+        </p>
+      )}
+      <div className="mt-auto pt-3">
+        <SlideToPay disabled={disabled} onComplete={() => form.current?.requestSubmit()} />
+        <p className="mt-2 text-center text-[10px] text-neutral-500">{t("approvalHint")}</p>
       </div>
-      <div className="px-6 pb-6 text-center text-[10px] text-muted-foreground sm:px-7">
-        <p>{t("reference")}</p>
-        <code className="mt-1 block break-all font-mono" dir="ltr">
-          {payment.payment_id}
-        </code>
-      </div>
-    </>
+    </form>
   );
 }

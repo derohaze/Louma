@@ -40,9 +40,9 @@
  *   - One local MongoDB deployment, one client process. This is not a production capacity number.
  *   - Peer addresses are private 10.x test addresses, so the IP-intelligence providers are never
  *     consulted (none are configured here either).
- *   - Device evidence is synthetic and unique per account, so each cycle owns one machine
- *     identity. A real population shares machine traits; those shared traits are what the fuzzy
- *     ambiguity rule is for, and this run measures the admission path, not that rule.
+ *   - Synthetic evidence differs per account, but distinct machine keys can still correlate as
+ *     ambiguous. Report refusals alongside allowed-path latency; this is not a real-user
+ *     false-positive estimate or a guarantee that every generated device is admitted.
  *
  * Usage (throwaway database required — the script writes thousands of fixtures and stops the
  * cycles it starts between phases):
@@ -118,8 +118,8 @@ const WRITE_METHODS = new Set([
 
 /**
  * Wrap one collection so every read and write is attributed by name and its materialised document
- * count is summed — cursors are wrapped at `toArray`, which is how this codebase drains them, so
- * `docsScanned` is the number the "no unbounded candidate scan" claim has to be checked against.
+ * count is summed for both array and streaming reads. `docsScanned` counts documents delivered
+ * to the application, not server documentsExamined (use explain for that).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function wrapCollection(name: string, collection: any): any {
@@ -132,13 +132,11 @@ function wrapCollection(name: string, collection: any): any {
         return (...args: unknown[]) => {
           bump(bucketOf().reads, `${name}.${method}`);
           const result = value.apply(target, args);
-          if (result && typeof result.toArray === "function") {
-            const original = result.toArray.bind(result);
-            result.toArray = async () => {
-              const docs = await original();
-              bucketOf().docsScanned += Array.isArray(docs) ? docs.length : 0;
-              return docs;
-            };
+          if (result && typeof result.map === "function") {
+            result.map((doc: unknown) => {
+              bucketOf().docsScanned += 1;
+              return doc;
+            });
             return result;
           }
           if (method === "findOne" && result && typeof result.then === "function") {
@@ -221,8 +219,8 @@ const ZONES: [string, number][] = [
 ];
 
 /**
- * One synthetic desktop per account. Two things make each account its own machine rather than a
- * neighbour: the rendering digests (GPU strings, limits, canvas/audio/WebGL/fonts/codecs) all move
+ * One synthetic desktop per account. The rendering digests (GPU strings, limits,
+ * canvas/audio/WebGL/fonts/codecs) all move
  * with the index, and `audioSampleRate` — a machine-core trait that is not bucketed — is unique per
  * index, so no two accounts can share a machine key. Without that, the population would collapse
  * into one device cluster and the run would measure the conflict rule instead of the admission
@@ -234,10 +232,10 @@ const ZONES: [string, number][] = [
  * except the unique audio device — a machine score of 9/11 ≈ 82%, at or above the same-machine
  * threshold — and the guard would, correctly, read them as one computer: the fresh burst would turn into
  * `device_lease_active` denials and measure the identical-machine rule instead of load. Leaving
- * those two bucketed traits unreported keeps the machine score of any pair at or below 75%, below
- * the same-machine ratio, while the machine key stays unique through the audio device. This is a
- * fixture property, not a path property: a real population contains genuinely identical machines,
- * and the one-machine rule is supposed to treat them as one.
+ * those two bucketed traits unreported reduces the machine score while the machine key stays
+ * unique through the audio device. The near-clone/ambiguous rules can still correlate these
+ * fixtures: the 48-account audit admitted 30 and refused 18 with both old and new admission
+ * transactions. Distinct generated evidence is not proof of an unrelated-machine verdict.
  */
 function machineEvidence(run: string, index: number, jwkText: string): Record<string, unknown> {
   const [width, height, pixelRatio] = SHAPES[index % SHAPES.length]!;
@@ -440,6 +438,16 @@ async function main(): Promise<void> {
     redis: disabledRedis(),
     logger: false,
   });
+  // Keep failures actionable without recording request bodies or keys. Only BadValue messages
+  // are included, with long identifiers redacted (e.g. the getMore/CSOT regression).
+  const failureDiagnostics: { name: string; code: unknown; category: string; frames: string[] }[] = [];
+  app.addHook("onError", async (_request, _reply, error) => {
+    if (failureDiagnostics.length < 20) failureDiagnostics.push({
+      name: error.name, code: (error as { code?: unknown }).code ?? null,
+      category: (error as { code?: unknown }).code === 2 ? error.message.replace(/[a-z0-9_\/-]{20,}/gi, "[redacted]").slice(0, 256) : error.name,
+      frames: (error.stack ?? "").split("\n").slice(1, 12),
+    });
+  });
   const run = randomUUID().slice(0, 8);
 
   // One anonymous CSRF token covers every register call; each account then carries the token its
@@ -570,7 +578,9 @@ async function main(): Promise<void> {
     timed(() => call({ method: "GET", url: "/api/v1/mining/device/status", ip: account.ip, token: account.token }));
 
   const phases: Record<string, unknown> = {};
+  let serverFailures = 0;
   const record = async (wave: Wave): Promise<void> => {
+    serverFailures += wave.samples.filter(sample => sample.status >= 500).length;
     phases[wave.label] = summarise(wave);
   };
 
@@ -735,6 +745,7 @@ async function main(): Promise<void> {
   const orphanLeases = [...activeLeaseSessionIds].filter((sessionId) => !activeSessionIds.has(sessionId)).length;
   const sessionsWithoutDevice = await real.miningSessions.countDocuments({ ownerUserId: { $in: userIds }, status: "active", deviceId: null });
   const negativeQuotaRefs = await real.miningDeviceQuotas.countDocuments({ $or: [{ scope: "account", subject: { $in: userIds } }, { scope: "network", subject: { $in: runIpHashes } }], refs: { $lt: 0 } });
+  const pendingAdmissions = await real.miningDevices.countDocuments({ enrollmentUserId: { $in: userIds }, admissionPending: { $gt: 0 } });
   const integrityViolations = [
     activeSessions !== running.length ? `active sessions ${activeSessions} != ${running.length} running cycles expected` : null,
     (sessionsPerOwner[0]?.["max"] ?? 0) > 1 ? `an account holds ${sessionsPerOwner[0]!["max"]} active sessions` : null,
@@ -742,6 +753,7 @@ async function main(): Promise<void> {
     orphanLeases > 0 ? `${orphanLeases} active lease(s) reference no running session` : null,
     sessionsWithoutDevice > 0 ? `${sessionsWithoutDevice} active cycle(s) carry no device id` : null,
     negativeQuotaRefs > 0 ? `${negativeQuotaRefs} enrollment quota row(s) have negative refs` : null,
+    pendingAdmissions > 0 ? `${pendingAdmissions} device(s) retain unfinished admission references` : null,
   ].filter((value): value is string => value !== null);
 
   const report = {
@@ -776,6 +788,8 @@ async function main(): Promise<void> {
       ambiguousThreshold: config.lmdg.ambiguousThreshold,
     },
     phases,
+    failureDiagnostics,
+    serverFailures,
     processLoad,
     verify: {
       stopped: verifyStop.samples.filter((sample) => sample.status === 200).length,
@@ -798,12 +812,13 @@ async function main(): Promise<void> {
       deviceObservations: observations,
       enrollmentQuotaRows: quotaRows,
       negativeQuotaRefs,
+      pendingAdmissions,
     },
     integrity: { violations: integrityViolations, passed: integrityViolations.length === 0 },
     notes: [
       "latency/op stats are over ALLOWED requests only; refusals are reported separately",
       "peer addresses are private 10.x test addresses: IP-intelligence providers are not consulted",
-      "device evidence is synthetic and unique per account so every cycle owns one machine identity",
+      "synthetic evidence differs per account but ambiguous correlations can still refuse starts; this is not a real-user false-positive estimate",
       "not a production capacity number: one local MongoDB, no Redis, in-process transport",
       "waves run in sequence on the same population, so later levels see matured trust state and a larger history",
       "returning starts refused with mining_device_challenge_required are answered with a real challenge/prove/retry at the same concurrency level",
@@ -819,6 +834,10 @@ async function main(): Promise<void> {
   await app.close();
   if (integrityViolations.length > 0) {
     console.error(`INTEGRITY FAILED: ${integrityViolations.join("; ")}`);
+    process.exit(1);
+  }
+  if (serverFailures > 0) {
+    console.error("LOAD BENCHMARK FAILED: a measured request returned a server error");
     process.exit(1);
   }
 }

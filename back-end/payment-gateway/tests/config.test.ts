@@ -22,7 +22,7 @@ test("gateway is optional and rejects mixed environments and malformed configura
   const env = environment();
   assert.equal(loadGatewayConfig(env)?.publicUrl, "http://localhost:8000");
   for (const changes of [
-    { MONGODB_DATABASE: "louma" },
+    { MONGODB_DATABASE: "" },
     { NODE_ENV: "production" },
     { GATEWAY_ENVIRONMENT: "sandbox" },
     { GATEWAY_PUBLIC_URL: "http://example.com" },

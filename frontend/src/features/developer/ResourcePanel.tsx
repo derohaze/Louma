@@ -47,10 +47,13 @@ export function ResourcePanel({
   mode,
   applicationId,
   resource,
+  readOnly = false,
 }: {
   mode: PaymentMode;
   applicationId: string;
   resource: Resource;
+  /** Hide the manual create form; the list shows real records only. */
+  readOnly?: boolean;
 }) {
   const t = useT("developer");
   const [secret, setSecret] = useState("");
@@ -168,7 +171,7 @@ export function ResourcePanel({
           </div>
         </Panel>
       )}
-      {writable.has(resource) && (
+      {!readOnly && writable.has(resource) && (
         <Panel title={`${t("create")} · ${t(resource)}`}>
           <ResourceForm
             mode={mode}

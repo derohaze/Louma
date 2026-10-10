@@ -15,7 +15,7 @@ import {
   link,
   recordUsage,
   resourceApplication,
-  suspend,
+  setApplicationStatus,
   updateApplication,
   usage,
 } from "./infrastructure/resources.js";
@@ -184,7 +184,7 @@ async function dispatch(
   delete payload["idempotency_key"];
   if (kind !== "applications" && parts.length === 3 && method === "POST") {
     const app = await resourceApplication(store, owner, alias(kind), id);
-    if (app.status !== "active") reject("application_suspended", 403);
+    if (app.status === "suspended") reject("application_suspended", 403);
     return resourceRequest(
       store,
       { app, credential: { publicId: "" }, internal: true },
@@ -210,10 +210,11 @@ async function dispatch(
       const changes = parse(
         z
           .object({
-            status: z.enum(["disabled", "suspended"]).optional(),
+            status: z.enum(["active", "disabled", "suspended"]).optional(),
             name: z.string().min(1).max(120).optional(),
             receiving_wallet_id: uuidSchema.optional(),
             domains: z.array(z.string().max(240)).max(16).optional(),
+            image_url: z.string().max(2048).optional(),
           })
           .strict(),
         body,
@@ -225,11 +226,13 @@ async function dispatch(
           changes.domains !== undefined
         )
           reject("invalid_application");
-        await suspend(store, owner, id);
-        return publicView("Application", { ...app, status: "suspended" });
+        await setApplicationStatus(store, owner, id, changes.status);
+        return publicView("Application", { ...app, status: changes.status });
       }
       const domains = changes.domains ?? app.domains;
       validateDomains(domains, store.config.environment === "test");
+      const imageUrl = (changes.image_url ?? app.imageUrl ?? "").trim();
+      if (imageUrl && !/^https?:\/\/[^\s]+$/.test(imageUrl)) reject("invalid_image_url");
       return publicView(
         "Application",
         await updateApplication(
@@ -238,11 +241,12 @@ async function dispatch(
           changes.name ?? app.name,
           changes.receiving_wallet_id ?? app.walletId,
           domains,
+          imageUrl,
         ),
       );
     }
   }
-  if (app.status !== "active") reject("application_suspended", 403);
+  if (app.status === "suspended") reject("application_suspended", 403);
   if (parts.length < 3 || parts.length > 5) reject("not_found", 404);
   const resourceKind = alias(parts[2]!);
   if (resourceKind === "usage") {
@@ -280,9 +284,11 @@ export async function registerGatewayRoutes(
         "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; form-action 'self'",
       );
       if (
-        ["/healthz", "/readyz", "/assets/louma-logo.png"].includes(
-          request.url.split("?")[0] ?? "",
-        )
+        [
+          "/healthz",
+          "/readyz",
+          "/assets/louma-logo.png",
+        ].includes(request.url.split("?")[0] ?? "")
       )
         return;
       if (!(await limiter.allow("ip:" + request.ip, 300))) {
@@ -321,15 +327,13 @@ export async function registerGatewayRoutes(
           { requestId: request.id, code },
           "gateway_request_failed",
         );
-      return reply
-        .code(status)
-        .send({
-          error: {
-            code,
-            message: code.replaceAll("_", " "),
-            request_id: request.id,
-          },
-        });
+      return reply.code(status).send({
+        error: {
+          code,
+          message: code.replaceAll("_", " "),
+          request_id: request.id,
+        },
+      });
     });
     scope.get("/healthz", { config: { rateLimit: false } }, async () => ({
       status: "ok",
