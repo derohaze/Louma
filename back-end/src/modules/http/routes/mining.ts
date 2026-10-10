@@ -4,7 +4,7 @@ import * as mining from "../../mining/service.js";
 import * as pools from "../../mining/pools.js";
 import { historyWindowDays } from "../../subscriptions/service.js";
 import { authBody, historyDaysSchema, pageLimitSchema } from "../schemas.js";
-import { authenticated, clientIp, getAuth, parseBody } from "../http-helpers.js";
+import { authenticated, miningRateLimit, clientIp, getAuth, parseBody } from "../http-helpers.js";
 import { enforceRateLimit, membershipCache, settingsCache } from "../../../app.js";
 
 export async function registerMiningRoutes(app: FastifyInstance): Promise<void> {
@@ -16,7 +16,7 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
    */
   app.get(
     "/api/v1/mining/state",
-    { ...authenticated, config: { rateLimit: { max: 240, timeWindow: 60_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 240, 60_000) } },
     async (request) =>
       mining.getMiningState({
         collections: app.collections,
@@ -36,7 +36,7 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
    * cycle runs (stop first — stopping releases the room) and throttled once per cooldown. Counts
    * are live holds only.
    */
-  app.get("/api/v1/mining/pools", authenticated, async (request) =>
+  app.get("/api/v1/mining/pools", { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 120, 60_000) } }, async (request) =>
     pools.getMiningPoolsState({
       collections: app.collections,
       config: app.config,
@@ -50,7 +50,7 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
   // server-side cooldown (which is what actually throttles switching, with or without Redis).
   app.post(
     "/api/v1/mining/pools/join",
-    { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 60_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 20, 60_000) } },
     async (request) => {
       const body = parseBody(z.object({ poolId: z.enum(["low", "medium"]) }).strict(), request.body ?? {});
       return pools.joinMiningPool({
@@ -66,7 +66,7 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
 
   app.post(
     "/api/v1/mining/pools/leave",
-    { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 60_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 20, 60_000) } },
     async (request) =>
       pools.leaveMiningPool({
         collections: app.collections,
@@ -81,18 +81,19 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
     "/api/v1/mining/start",
     {
       ...authenticated,
-      config: { rateLimit: { max: 10, timeWindow: 60_000 } },
-      schema: authBody(z.object({ device: z.unknown().optional() }).loose()),
+      config: { rateLimit: miningRateLimit(app.config, 10, 60_000) },
+      schema: authBody(z.object({ device: z.unknown().optional(), proofNonce: z.string().min(16).max(128).optional(),
+        verification: z.object({ password: z.string().min(1).max(128), twoFactorCode: z.string().max(64).optional() }).strict().optional() }).strict()),
     },
     async (request, reply) => {
       // Distributed abuse throttle, fail-open: a Redis outage never blocks a legitimate start.
       const starter = getAuth(request);
       const allowed = await enforceRateLimit({ app, reply, scope: "mining-start", identity: starter.userId, limit: app.config.redis.miningStartMaxPerMinute, requestId: request.id });
       if (!allowed) return reply;
-      // Device evidence is optional: old clients and existing tests keep working, and the
-      // per-account unique index still applies. When present it is sanitized server-side and
-      // enforced through the LMDG lease — the server stays authoritative, never the client.
-      const body = (request.body ?? {}) as { device?: unknown };
+      // Browser mode requires key evidence and a fresh proof in the service layer.
+      // The transport remains optional for strict maintenance and legacy audit handling.
+      const body = parseBody(z.object({ device: z.unknown().optional(), proofNonce: z.string().min(16).max(128).optional(),
+        verification: z.object({ password: z.string().min(1).max(128), twoFactorCode: z.string().max(64).optional() }).strict().optional() }).strict(), request.body ?? {});
       const current = getAuth(request);
       return mining.startMining({
         collections: app.collections,
@@ -104,14 +105,15 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
         membershipCache: membershipCache(app),
         ...(body.device === undefined
           ? {}
-          : { device: { evidenceRaw: body.device, ip: clientIp(request).slice(0, 45) } }),
+          : { device: { evidenceRaw: body.device, ip: clientIp(request).slice(0, 45), proofNonce: body.proofNonce,
+              origin: request.headers.origin ?? null, verification: body.verification } }),
       });
     },
   );
 
   app.post(
     "/api/v1/mining/stop",
-    { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 30, 60_000) } },
     async (request) =>
       mining.stopMining({
         collections: app.collections,
@@ -126,7 +128,7 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
 
   app.post(
     "/api/v1/mining/settle",
-    { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 30, 60_000) } },
     async (request) =>
       mining.settleMining({
         collections: app.collections,
@@ -139,7 +141,7 @@ export async function registerMiningRoutes(app: FastifyInstance): Promise<void> 
       }),
   );
 
-  app.get("/api/v1/mining/history", authenticated, async (request) => {
+  app.get("/api/v1/mining/history", { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 120, 60_000) } }, async (request) => {
     const query = parseBody(
       z.object({ cursor: z.string().uuid().optional(), limit: pageLimitSchema, days: historyDaysSchema }).strict(),
       request.query,

@@ -18,7 +18,7 @@ const redis = new RedisHandle(config.redis);
 await redis.connect();
 
 try {
-  await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled, observationTtlSeconds: config.lmdg.observationTtlSeconds });
+  await ensureDatabaseIndexes(db, { retentionTtlEnabled: config.retentionTtlEnabled, observationTtlSeconds: config.lmdg.observationTtlSeconds, miningEvidenceSecret: config.encryptionKey });
   if (config.embeddedGateway) {
     const gateway = new GatewayStore(client, db, config.embeddedGateway);
     await migrate(gateway);

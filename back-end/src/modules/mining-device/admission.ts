@@ -21,6 +21,7 @@ import { detectImpossibleUaPlatform } from "./signals.js";
 import { evaluateMiningDeviceTrust, type RiskDecision } from "./risk.js";
 import {
   ADMISSION_CORRELATED_LIMIT,
+  ADMISSION_SCAN_BUDGET_MS,
   DEVICE_NETWORK_IN_USE_CODE,
   DEVICE_NETWORK_IN_USE_MESSAGE,
   DEVICE_IN_USE_CODE,
@@ -38,6 +39,7 @@ import { recordDeviceObservation, recordDeviceSeen } from "./observation.js";
 import { p256KeyFingerprint } from "./proof.js";
 import { networkLockKeyFor } from "./lease.js";
 import type { IpIntel } from "./ip-intel.js";
+import { planAdmissionEvidence } from "../../infrastructure/mongodb/mining-evidence.js";
 
 export interface StartEligibility {
   decision: RiskDecision;
@@ -82,7 +84,8 @@ export async function revalidateMiningLease(input: {
   const conflictKeys = new Set(leaseKeys);
   const fenceIds = new Set([device.publicId, ...input.comparedDeviceIds]);
   const browserKey = canonicalBrowserKey(resolution.evidence.browserKeyPublicKey);
-  for await (const candidate of iterateMiningAdmissionCandidates(collections, mongoSession)) {
+  if (!resolution.candidateEvidenceTokens) throw serviceUnavailable("mining_start_busy", "Mining admission changed. Try again.");
+  for await (const candidate of iterateMiningAdmissionCandidates(collections, mongoSession, resolution.candidateEvidenceTokens)) {
     if (candidate.publicId === device.publicId) continue;
     const match = matchDeviceFeatures(toCandidate(candidate), resolution.observed, config.encryptionKey);
     const keyMatch = browserKey !== null && canonicalBrowserKey(candidate.browserKeyPublicKey) === browserKey;
@@ -165,13 +168,9 @@ export async function assessMiningStart(input: {
     return { decision: "deny", reasonCode: "device_lease_active", confidence: 0.95, riskScore: 70, device, equivalentLeaseKeys: ownLeaseKeys, conflictingLeaseOwner: direct.ownerUserId };
   }
 
-  // Cross-browser / cross-profile check over the complete device population.
-  //
-  // A candidate carrying the same machine key is the same machine outright — that verdict is
-  // identity, not similarity, so no client-side string editing moves it. The weighted match stays as
-  // the fallback for a machine whose *browser* traits drifted (a privacy browser randomizes the
-  // rendering stack) and for records written before the machine key existed. Network traits carry no
-  // weight in the feature model, so a different machine on the same Wi-Fi scores low and passes.
+  // Complete indexed candidate coverage of the legacy matcher. Machine hashes and browser
+  // continuity remain client-controlled evidence, not independently verified physical identity.
+  // This diagnostic policy is reachable only in the isolated legacy-test configuration.
   const sameClusterKeys: string[] = [];
   const ambiguousClusterKeys: string[] = [];
   const ambiguousPairKeys: string[] = [];
@@ -191,7 +190,11 @@ export async function assessMiningStart(input: {
   let knownMachineIsIdentity = false;
   let knownMachineScore = -1;
   const browserKey = canonicalBrowserKey(evidence.browserKeyPublicKey);
-  for await (const candidate of iterateMiningAdmissionCandidates(collections)) {
+  const deadline = performance.now() + ADMISSION_SCAN_BUDGET_MS;
+  input.resolution.candidateEvidenceTokens = await planAdmissionEvidence({ collections, observed: input.resolution.observed,
+    secret: config.encryptionKey, machineKey, browserKey: evidence.browserKeyPublicKey,
+    ambiguousThreshold: config.lmdg.ambiguousThreshold, deadline });
+  for await (const candidate of iterateMiningAdmissionCandidates(collections, undefined, input.resolution.candidateEvidenceTokens, deadline)) {
     if (candidate.publicId === device.publicId) continue;
     const match = matchDeviceFeatures(toCandidate(candidate), input.resolution.observed, config.encryptionKey);
     // Existing records may store any JWK serialization. Equal public material must share leases

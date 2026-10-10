@@ -33,6 +33,10 @@ import { isNetworkResident } from "../mining-device/enrollment.js";
 import { networkLockKeyFor } from "../mining-device/lease.js";
 import { revalidateMiningLease } from "../mining-device/admission.js";
 import { enforceMiningAttempt } from "../mining-device/attempts.js";
+import { requireVerifiedMining } from "../mining-device/verified-policy.js";
+import { prepareBrowserAdmission, type MiningAccountVerification } from "../mining-device/browser-admission.js";
+import { commitBrowserAdmission } from "../../infrastructure/mongodb/browser-mining.js";
+import { consumeMiningAccountProof } from "../security/service.js";
 import type { DeviceResolution } from "../mining-device/resolution.js";
 import { beginMiningAdmission, endMiningAdmission, retainMiningAdmission, findRunningMiningAccount, prepareMiningNetworkFence } from "../../infrastructure/mongodb/mining-admission.js";
 import {
@@ -51,6 +55,9 @@ import type {
 } from "../../shared/types.js";
 
 export interface MiningStartDeviceContext {
+  proofNonce?: string | undefined;
+  origin?: string | null;
+  verification?: MiningAccountVerification | undefined;
   /** Raw client device evidence (sanitized server-side; never trusted as-is). */
   evidenceRaw: unknown;
   /** Server-observed client IP (from Fastify/trustProxy), never a client claim. */
@@ -79,6 +86,8 @@ export async function startMining(input: {
   membershipCache?: CacheContext | undefined;
 }): Promise<PublicMiningState> {
   const { collections, config } = input;
+  // Before quota, device registration, settlement or any other state mutation.
+  requireVerifiedMining(config);
   const live = await loadMiningSettings(collections, config, input.cache);
   const mining = live.mining;
   const poolsLive = { mining: live.mining, miningPools: live.miningPools };
@@ -86,7 +95,8 @@ export async function startMining(input: {
     throw serviceUnavailable("mining_disabled", "Mining is temporarily unavailable.");
   }
 
-  if (config.lmdg.enabled) await enforceMiningAttempt(collections, input.ownerUserId, "start");
+  const browserMode = config.lmdg.identityMode === "browser";
+  if (browserMode || config.lmdg.enabled) await enforceMiningAttempt(collections, input.ownerUserId, "start");
 
   const { wallet, walletAccount } = await loadWalletAndAccount(collections, input.ownerUserId);
 
@@ -181,7 +191,7 @@ export async function startMining(input: {
   // as "legacy" would make the one-cycle-per-device rule optional for anyone who omits the field —
   // i.e. the first thing an abuser would do — so a start without evidence is refused instead.
   // `LMDG_ENABLED=false` remains the operational escape hatch.
-  const deviceLeaseEnabled = config.lmdg?.enabled === true && config.lmdg?.leaseEnabled === true;
+  const deviceLeaseEnabled = browserMode || (config.lmdg?.enabled === true && config.lmdg?.leaseEnabled === true);
   if (deviceLeaseEnabled && input.device === undefined) {
     await recordSecurityEvent({
       collections,
@@ -226,8 +236,19 @@ export async function startMining(input: {
   // (guard off, or no evidence supplied): the quota can still bind by machine identity alone.
   let resolvedDevicePublicId: string | null = null;
   let pendingAdmissionDeviceId: string | null = null;
+  let browserAdmission: Awaited<ReturnType<typeof prepareBrowserAdmission>> | null = null;
   try {
-  if (deviceLeaseEnabled && input.device) {
+  if (browserMode && input.device) {
+    browserAdmission = await prepareBrowserAdmission({ collections, config, ownerUserId: input.ownerUserId,
+      correlationId: input.correlationId,
+      evidenceRaw: input.device.evidenceRaw, nonce: input.device.proofNonce, origin: input.device.origin ?? null, verification: input.device.verification });
+    leaseKeys = browserAdmission.leaseKeys;
+    leaseDeviceId = browserAdmission.identity.publicId;
+    resolvedDevicePublicId = leaseDeviceId;
+    deviceQuotaSubject = browserAdmission.identity.keyHash;
+    const foreign = (await findLiveLeases(collections, leaseKeys, Date.now())).find(lease => lease.ownerUserId !== input.ownerUserId);
+    if (foreign) throw conflict(DEVICE_IN_USE_CODE, DEVICE_IN_USE_MESSAGE);
+  } else if (deviceLeaseEnabled && input.device) {
     // An empty or non-object payload (`{"device":{}}`) is not evidence: it sanitizes to no machine
     // traits and no browser key, so the lease would fall back to a network-dependent identity that a
     // second account reproduces differently. Refuse it exactly like a missing field.
@@ -491,6 +512,12 @@ export async function startMining(input: {
     throw serviceUnavailable("mining_rate_unavailable", "Mining is temporarily unavailable.");
   }
   const session: Omit<MiningSessionRecord, "_id"> = {
+    ...(browserAdmission ? { admissionPolicy: "browser-v1" as const, browserAdmission: {
+      keyHash: browserAdmission.identity.keyHash, intentHash: browserAdmission.identity.intentHash,
+      proofId: browserAdmission.proof.publicId, verifiedAt: browserAdmission.proof.consumedAt!,
+      accountVerified: browserAdmission.accountProof !== null, riskReasons: browserAdmission.reasons,
+      rateUnits, rateScale: mining.rate.scale, endsAt: new Date(endsAtMs),
+    } } : {}),
     publicId: randomUUID(),
     ownerUserId: input.ownerUserId,
     poolId: poolDef.id,
@@ -533,6 +560,22 @@ export async function startMining(input: {
           // Re-check convergence before every retry. A competing request from this account may
           // already have committed; it must not spend retries on fences or credit another start.
           if (await findRunningMiningAccount(collections, input.ownerUserId, mongoSession)) return false;
+          if (browserAdmission) {
+            await commitBrowserAdmission({ collections, identity: browserAdmission.identity, secret: config.encryptionKey,
+              ownerUserId: input.ownerUserId, nonce: browserAdmission.nonce, origin: browserAdmission.origin,
+              session: mongoSession, endsAt: session.endsAt, leaseKeys: browserAdmission.leaseKeys,
+              previousId: browserAdmission.previousId, deviceUpdatedAt: browserAdmission.deviceUpdatedAt,
+              accountVerified: browserAdmission.accountProof !== null });
+            const currentAccountQuota = await loadAccountQuota(collections, input.ownerUserId, startedAtMs, mongoSession);
+            const currentKeyQuota = await loadDeviceQuota(collections, browserAdmission.identity.keyHash, startedAtMs, mongoSession);
+            const currentAllowed = allowedSessionSeconds({ accountRemainingSeconds: currentAccountQuota.remainingSeconds,
+              deviceRemainingSeconds: currentKeyQuota.remainingSeconds, accountWindowRemainingSeconds: currentAccountQuota.windowRemainingSeconds,
+              deviceWindowRemainingSeconds: currentKeyQuota.windowRemainingSeconds });
+            if (currentAllowed < allowedSeconds || currentAccountQuota.windowStartMs !== accountQuota.windowStartMs ||
+                currentKeyQuota.windowStartMs !== deviceQuota!.windowStartMs) throw conflict("mining_quota_changed", "Mining quota changed. Try again.");
+            if (browserAdmission.accountProof) await consumeMiningAccountProof({ collections, ownerUserId: input.ownerUserId,
+              proof: browserAdmission.accountProof, session: mongoSession, intentHash: browserAdmission.identity.intentHash, correlationId: input.correlationId });
+          }
           // The driver retries aborted transactions with a new snapshot. Never reuse the earlier
           // admission's candidate set: a concurrent first enrollment may have been invisible then.
           if (leaseResolution) {

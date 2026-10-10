@@ -16,6 +16,7 @@ import {
   OBSERVATION_MIN_INTERVAL_MS,
 } from "./policy.js";
 import type { IpIntel } from "./ip-intel.js";
+import { admissionEvidence } from "./candidate-evidence.js";
 
 /**
  * Records that an account was seen on a device, sampled to at most one row per account per
@@ -134,7 +135,11 @@ export async function recordDeviceSeen(
     else delete nextSnapshot[driftedKey];
   }
   await collections.miningDevices.updateOne(
-    { _id: device._id },
+    // A stale observation must not overwrite newer history or derive tokens from a machine
+    // value that a concurrent observation changed. Dropping this sampled observation is safe.
+    { _id: device._id, featureProfile: device.featureProfile ?? null,
+      featureSnapshot: device.featureSnapshot ?? null, machineKeyHash: device.machineKeyHash ?? null,
+      browserKeyPublicKey: device.browserKeyPublicKey ?? null },
     {
       $set: {
         lastSeenAt: now,
@@ -142,6 +147,8 @@ export async function recordDeviceSeen(
         // Digests only — see `createDevice`.
         featureSnapshot: nextSnapshot,
         featureProfile: fold.profile,
+        ...admissionEvidence({ ...device, featureSnapshot: nextSnapshot, featureProfile: fold.profile,
+          machineKeyHash: machineKey ?? device.machineKeyHash }, secret),
         machineFeatureProfile: machineFold.profile,
         // The record's platform drives the candidate pre-filter above; a client that changes its
         // user agent must not also hide the record it belongs to from that filter. Never downgraded

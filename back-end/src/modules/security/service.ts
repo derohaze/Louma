@@ -17,10 +17,30 @@ const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_MAX_LENGTH = 128;
 const ARGON2_OPTIONS = { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 
-async function verifyAccountPassword(collections: Collections, ownerUserId: string, password: unknown): Promise<void> {
+async function verifyAccountPassword(collections: Collections, ownerUserId: string, password: unknown): Promise<string> {
   if (typeof password !== "string" || password.length > PASSWORD_MAX_LENGTH) throw forbidden("invalid_credentials", "The current password is incorrect.");
   const user = await collections.users.findOne({ publicId: ownerUserId }, { projection: { passwordHash: 1 } });
   if (!user || !(await argon2.verify(user.passwordHash, password).catch(() => false))) throw forbidden("invalid_credentials", "The current password is incorrect.");
+  return user.passwordHash;
+}
+
+export async function proveMiningAccount(input: {
+  collections: Collections; config: Pick<AppConfig, "encryptionKey">; ownerUserId: string; password: unknown; twoFactorCode?: string | undefined;
+}) {
+  const passwordHash = await verifyAccountPassword(input.collections, input.ownerUserId, input.password);
+  const factor = await input.collections.twoFactorCredentials.findOne({ ownerUserId: input.ownerUserId, enabledAt: { $ne: null } });
+  const proof = factor ? await proveTransferCredential({ ...input, password: undefined, twoFactorCode: input.twoFactorCode }) : null;
+  return { passwordHash, factorEnabledAt: factor?.enabledAt ?? null, proof };
+}
+
+export async function consumeMiningAccountProof(input: {
+  collections: Collections; ownerUserId: string; proof: Awaited<ReturnType<typeof proveMiningAccount>>;
+  session: ClientSession; intentHash: string; correlationId: string;
+}) {
+  const user = await input.collections.users.findOne({ publicId: input.ownerUserId, passwordHash: input.proof.passwordHash }, { session: input.session, projection: { _id: 1 } });
+  const factor = await input.collections.twoFactorCredentials.findOne({ ownerUserId: input.ownerUserId, enabledAt: { $ne: null } }, { session: input.session });
+  if (!user || (factor?.enabledAt?.getTime() ?? null) !== (input.proof.factorEnabledAt?.getTime() ?? null)) throw forbidden("mining_account_verification_required", "Account security changed. Verify again.");
+  if (input.proof.proof) await consumeTransferCredentialProof({ ...input, proof: input.proof.proof, purpose: "mining" });
 }
 
 async function verifyTotpOrRecovery(input: { config: Pick<AppConfig, "encryptionKey">; collections: Collections; ownerUserId: string; code: unknown }) {
@@ -160,6 +180,7 @@ export async function proveTransferCredential(input: {
  * reuse this defends against.
  */
 export async function consumeTransferCredentialProof(input: {
+  purpose?: "transfer" | "mining";
   collections: Collections;
   proof: TransferCredentialProof;
   ownerUserId: string;
@@ -175,7 +196,7 @@ export async function consumeTransferCredentialProof(input: {
         {
           _id: new ObjectId(),
           ownerUserId: input.ownerUserId,
-          purpose: "transfer",
+          purpose: input.purpose ?? "transfer",
           timeStep: input.proof.timeStep,
           intentHash: input.intentHash,
           correlationId: input.correlationId,

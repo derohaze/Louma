@@ -1,6 +1,7 @@
 import { MongoServerError, type ClientSession, type Db } from "mongodb";
 import type { Collections } from "./collections.js";
-import { ADMISSION_SCAN_BUDGET_MS, ENROLLMENT_DAY_MS } from "../../modules/mining-device/policy.js";
+import { ADMISSION_CORRELATED_LIMIT, ADMISSION_SCAN_BUDGET_MS, ENROLLMENT_DAY_MS } from "../../modules/mining-device/policy.js";
+import { evidenceCandidateFilter } from "./mining-evidence.js";
 import { isDuplicateKeyError } from "../../shared/mongo-retry.js";
 import { serviceUnavailable } from "../../shared/errors.js";
 
@@ -77,21 +78,25 @@ export async function fenceMiningNetwork(collections: Collections, networkHash: 
 }
 
 /**
- * Assessment preserves full historical matching, including asymmetric learned profiles.
- * Transaction revalidation scans current work and retains the assessment's compared IDs/keys.
- * Idle contenders register before assessment, so discovery never depends on device recency.
+ * Evidence predicates include all historical states, including asymmetric learned profiles.
+ * Transaction revalidation repeats the predicate and retains assessed IDs/keys.
+ * The legacy fallback is retained for counterfactual tests; production assessment supplies tokens.
  */
-export async function* iterateMiningAdmissionCandidates(collections: Collections, session?: ClientSession) {
-  const deadline = performance.now() + ADMISSION_SCAN_BUDGET_MS;
-  const cursor = collections.miningDevices.find(session ? miningAdmissionCandidateFilter(Date.now()) : {}, {
-    ...(session ? { session } : {}), maxTimeMS: ADMISSION_SCAN_BUDGET_MS,
+export async function* iterateMiningAdmissionCandidates(collections: Collections, session?: ClientSession, evidenceTokens?: string[], deadline = performance.now() + ADMISSION_SCAN_BUDGET_MS) {
+  const remaining = Math.floor(deadline - performance.now());
+  if (remaining <= 0) throw serviceUnavailable("mining_start_busy", "Mining admission is busy. Try again.");
+  const cursor = collections.miningDevices.find(evidenceTokens ? evidenceCandidateFilter(evidenceTokens) : session ? miningAdmissionCandidateFilter(Date.now()) : {}, {
+    ...(session ? { session } : {}), maxTimeMS: remaining,
     projection: {
       publicId: 1, deviceKeyHash: 1, machineKeyHash: 1, anchorHash: 1, quotaAnchorHash: 1,
       aliasHashes: 1, featureProfile: 1, featureSnapshot: 1, browserKeyPublicKey: 1, fingerprintVisitorIdHash: 1,
     },
   }).batchSize(64);
+  if (evidenceTokens) cursor.limit(ADMISSION_CORRELATED_LIMIT + 1);
   try {
+    let examined = 0;
     for await (const candidate of cursor) {
+      if (evidenceTokens && ++examined > ADMISSION_CORRELATED_LIMIT) throw serviceUnavailable("mining_start_busy", "Mining admission needs additional device verification. Try again later.");
       if (performance.now() > deadline) throw serviceUnavailable("mining_start_busy", "Mining admission is busy. Try again.");
       yield candidate;
     }

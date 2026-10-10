@@ -310,10 +310,10 @@ test("a retained funding credit keeps its paired treasury debit, and a removed o
   await seedTreasury();
   const retained = await seedAccount(`cleanup.paired.retained.${RUN}@example.test`, "Cleanup paired retained");
   const removable = await seedAccount(`cleanup.paired.free.${RUN}@example.test`, "Cleanup paired free");
-  // Entangle `retained` with the real counterparty so the script must keep it whole.
-  await seedTransfer(retained, realUser, 3, true);
   const keptFunds = await fundPair(retained, 50, `smoke-funding-cleanup-${RUN}-paired-retained`);
   const lostFunds = await fundPair(removable, 70, `smoke-funding-cleanup-${RUN}-paired-free`);
+  // Fund before spending: the real validator correctly rejects a negative wallet projection.
+  await seedTransfer(retained, realUser, 3, true);
 
   const { stdout } = await runCleanup(true);
   assert.match(stdout, /"applied": true/);

@@ -39,6 +39,7 @@ export interface SignupLocation {
 }
 
 export interface UserRecord {
+  miningAdmissionFence?: boolean;
   _id: ObjectId;
   publicId: string;
   email: string;
@@ -102,7 +103,7 @@ export interface TransferPasswordCredentialRecord {
  * Which financial surface a consumed authenticator step belonged to. Scoped so a login-time code
  * and a transfer-time code are separate consumption windows (see `consumeTransferProof`).
  */
-export type TwoFactorUsePurpose = "transfer";
+export type TwoFactorUsePurpose = "transfer" | "mining";
 
 /**
  * One accepted authenticator time step, consumed. The unique index on

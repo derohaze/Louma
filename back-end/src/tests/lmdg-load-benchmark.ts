@@ -360,12 +360,15 @@ function summarise(wave: Wave): Record<string, unknown> {
   const allowed = wave.samples.filter((sample) => sample.status === 200);
   const refused = wave.samples.filter((sample) => sample.status !== 200);
   const latencies = allowed.map((sample) => sample.ms).sort((a, b) => a - b);
+  const allLatencies = wave.samples.map(sample => sample.ms).sort((a, b) => a - b);
   const wallSeconds = wave.wallMs / 1000;
   const stats = (values: number[]): { mean: number; max: number } => ({ mean: mean(values), max: round2(Math.max(...values, 0)) });
   return {
     phase: wave.label,
     requests: wave.samples.length,
     allowed: allowed.length,
+    allRequestLatencyMs: { p50: round2(percentile(allLatencies, 50)), p95: round2(percentile(allLatencies, 95)),
+      p99: round2(percentile(allLatencies, 99)), mean: mean(allLatencies) },
     wallMs: round2(wave.wallMs),
     requestsPerSecond: wallSeconds === 0 ? null : round2(wave.samples.length / wallSeconds),
     allowedPerSecond: wallSeconds === 0 ? null : round2(allowed.length / wallSeconds),
@@ -816,7 +819,7 @@ async function main(): Promise<void> {
     },
     integrity: { violations: integrityViolations, passed: integrityViolations.length === 0 },
     notes: [
-      "latency/op stats are over ALLOWED requests only; refusals are reported separately",
+      "allRequestLatencyMs includes every request; latencyMs/perAllowed describe allowed requests; refusal outcomes are separate",
       "peer addresses are private 10.x test addresses: IP-intelligence providers are not consulted",
       "synthetic evidence differs per account but ambiguous correlations can still refuse starts; this is not a real-user false-positive estimate",
       "not a production capacity number: one local MongoDB, no Redis, in-process transport",

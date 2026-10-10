@@ -267,11 +267,13 @@ function mergeMethodCounts(samples: Sample[], key: "readsByMethod" | "writesByMe
 function summarise(samples: Sample[]): Record<string, unknown> {
   const allowed = samples.filter((s) => s.status === 200);
   const latencies = allowed.map((s) => s.ms).sort((a, b) => a - b);
+  const allLatencies = samples.map(sample => sample.ms).sort((a, b) => a - b);
   const totalMs = latencies.reduce((sum, value) => sum + value, 0);
   const mean = (values: number[]): number => (values.length === 0 ? 0 : Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 100) / 100);
   return {
     samples: samples.length,
     allowedSamples: allowed.length,
+    allRequestLatencyMs: { p50: percentile(allLatencies, 50), p95: percentile(allLatencies, 95), p99: percentile(allLatencies, 99) },
     // Latency is reported over the ALLOWED starts only: a refused start is a different, shorter path
     // and would flatter the numbers.
     latencyMs: {
@@ -462,7 +464,7 @@ async function main(): Promise<void> {
     generatedAt: new Date().toISOString(),
     database: process.env["MONGODB_DATABASE"] ?? null,
     samplesPerPhase: SAMPLES,
-    note: "latency, throughput and Mongo counts are reported over ALLOWED starts only",
+    note: "allRequestLatencyMs includes every request; latencyMs, throughput and Mongo counts describe allowed starts",
     phases: {
       "A.fresh-device-enrollment": summarise(freshSamples),
       "B.challenge": summarise(challengeOps),

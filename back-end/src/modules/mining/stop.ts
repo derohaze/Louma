@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertBrowserRewardEntitlement, BrowserRewardSnapshotChanged } from "../../infrastructure/mongodb/browser-mining.js";
 import type { ClientSession, MongoClient } from "mongodb";
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { AppConfig } from "../../config/env.js";
@@ -102,6 +103,7 @@ export async function stopMining(input: {
     try {
       await mongoSession.withTransaction(
         async () => {
+          await assertBrowserRewardEntitlement(collections, active, mongoSession);
           // Compare-and-set on the live segment: a concurrent stop/settle that
           // committed first makes this match nothing and forces a re-read.
           if (delta > 0) {
@@ -204,7 +206,7 @@ export async function stopMining(input: {
         { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } },
       );
     } catch (error) {
-      if (error instanceof ConcurrentStopError || isDuplicateKeyError(error) || isTransientTransactionError(error)) {
+      if (error instanceof BrowserRewardSnapshotChanged || error instanceof ConcurrentStopError || isDuplicateKeyError(error) || isTransientTransactionError(error)) {
         if (attempt < MAX_STOP_ATTEMPTS) {
           await sleep(RETRY_BACKOFF_BASE_MS * 2 ** (attempt - 1));
           continue;

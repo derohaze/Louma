@@ -1,4 +1,5 @@
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
+import type { ClientSession } from "mongodb";
 import {
   MINING_DAILY_QUOTA_SECONDS,
   MINING_QUOTA_WINDOW_MS,
@@ -42,10 +43,12 @@ export async function loadAccountQuota(
   collections: Collections,
   ownerUserId: string,
   nowMs: number,
+  session?: ClientSession,
 ): Promise<AccountQuotaState> {
+  const options = session ? { session } : {};
   const latest = await collections.miningSessions.findOne(
     { ownerUserId },
-    { sort: { createdAt: -1, publicId: -1 }, projection: { startedAt: 1, endsAt: 1, accountWindowStart: 1 } },
+    { ...options, sort: { createdAt: -1, publicId: -1 }, projection: { startedAt: 1, endsAt: 1, accountWindowStart: 1 } },
   );
   const latestWindowMs = latest ? accountWindowStartOf(latest) : null;
   const current = currentAccountWindowStart(latestWindowMs, nowMs);
@@ -59,24 +62,22 @@ export async function loadAccountQuota(
     };
   }
   const windowStart = new Date(current.windowStartMs);
-  const [anchored, legacy] = await Promise.all([
-    collections.miningSessions
+  const anchored = await collections.miningSessions
       .find(
         { ownerUserId, accountWindowStart: windowStart },
-        { projection: { startedAt: 1, endsAt: 1, accountWindowStart: 1 } },
+        { ...options, projection: { startedAt: 1, endsAt: 1, accountWindowStart: 1 } },
       )
-      .toArray(),
-    collections.miningSessions
+      .toArray();
+  const legacy = await collections.miningSessions
       .find(
         {
           ownerUserId,
           accountWindowStart: { $exists: false },
           startedAt: { $gte: windowStart, $lt: new Date(current.windowStartMs + MINING_QUOTA_WINDOW_MS) },
         },
-        { projection: { startedAt: 1, endsAt: 1, accountWindowStart: 1 } },
+        { ...options, projection: { startedAt: 1, endsAt: 1, accountWindowStart: 1 } },
       )
-      .toArray(),
-  ]);
+      .toArray();
   const consumed = accountConsumedSeconds([...anchored, ...legacy], current.windowStartMs, nowMs);
   return {
     windowStartMs: current.windowStartMs,
@@ -95,10 +96,12 @@ export async function loadDeviceQuota(
   collections: Collections,
   quotaKey: string,
   nowMs: number,
+  session?: ClientSession,
 ): Promise<DeviceQuotaState> {
+  const options = session ? { session } : {};
   const latest = await collections.miningSessions.findOne(
     { deviceQuotaKey: quotaKey },
-    { sort: { startedAt: -1, publicId: -1 }, projection: { startedAt: 1, endsAt: 1, deviceWindowStart: 1, deviceQuotaKey: 1 } },
+    { ...options, sort: { startedAt: -1, publicId: -1 }, projection: { startedAt: 1, endsAt: 1, deviceWindowStart: 1, deviceQuotaKey: 1 } },
   );
   const latestWindowMs = latest ? deviceWindowStartOf(latest) : null;
   const current = currentDeviceWindowStart(latestWindowMs, nowMs);
@@ -117,7 +120,7 @@ export async function loadDeviceQuota(
   const windowSessions = await collections.miningSessions
     .find(
       { deviceQuotaKey: quotaKey, deviceWindowStart: new Date(current.windowStartMs) },
-      { projection: { startedAt: 1, endsAt: 1, deviceWindowStart: 1, deviceQuotaKey: 1 } },
+      { ...options, projection: { startedAt: 1, endsAt: 1, deviceWindowStart: 1, deviceQuotaKey: 1 } },
     )
     .toArray();
   const consumed = deviceConsumedSeconds(windowSessions, current.windowStartMs, nowMs);

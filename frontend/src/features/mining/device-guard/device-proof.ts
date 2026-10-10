@@ -230,10 +230,10 @@ async function provePossession(
  * proof-of-possession round and retries once. Throws ApiError otherwise — callers map
  * `mining_device_already_in_use` to DEVICE_IN_USE_MESSAGE.
  */
-export async function startMiningWithGuard(): Promise<unknown> {
+export async function startMiningWithGuard(verification?: { password: string; twoFactorCode?: string }): Promise<unknown> {
   const device = await collectDeviceEvidence().catch(() => null);
   try {
-    return await api.post("/api/v1/mining/start", device ? { device } : undefined);
+    return await api.post("/api/v1/mining/start", device ? { device, verification } : undefined);
   } catch (error) {
     if (error instanceof ApiError && error.code === "mining_device_challenge_required" && device) {
       const challenge = await api.post<{ nonce: string; payload: string }>(
@@ -241,14 +241,14 @@ export async function startMiningWithGuard(): Promise<unknown> {
         { device },
       );
       await provePossession(challenge.nonce, challenge.payload, device);
-      return api.post("/api/v1/mining/start", { device });
+      return api.post("/api/v1/mining/start", { device, proofNonce: challenge.nonce, verification });
     }
     throw error;
   }
 }
 
 export const DEVICE_EVIDENCE_MISSING_MESSAGE =
-  "Mining cannot start because this browser hides or does not provide enough device information. Your account is not blocked.";
+  "This browser could not provide a signing key. Enable browser storage and WebCrypto, then try again.";
 
 export const POOL_REQUIRED_MESSAGE =
   "Join a mining pool before starting a cycle. Open Mining Pools and pick Low or Medium.";

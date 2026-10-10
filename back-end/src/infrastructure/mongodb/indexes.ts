@@ -11,6 +11,7 @@ import { createIndexMigratingOptions, dropIndexIfExists, ensureCoreIndexes } fro
 import { ensureSubscriptionStorage } from "./subscription-storage.js";
 import { schemas } from "./schemas.js";
 import { backfillMiningAdmissionWindows } from "./mining-admission.js";
+import { backfillMiningEvidence, ensureMiningEvidenceIndexes } from "./mining-evidence.js";
 
 /**
  * How long each append-only log is kept.
@@ -29,6 +30,8 @@ const SECURITY_EVENT_RETENTION_DAYS = 180;
 const DAY_SECONDS = 24 * 60 * 60;
 
 export interface EnsureDatabaseIndexesOptions {
+  /** Required to backfill keyed legacy evidence; readers fail closed during partial migrations. */
+  miningEvidenceSecret?: Buffer;
   /**
    * Whether the retention TTL indexes may be created. Deleting notifications older than 90 days and
    * security events older than 180 days destroys customer-visible history — including unread
@@ -64,6 +67,8 @@ export async function ensureDatabaseIndexes(db: Db, options: EnsureDatabaseIndex
   await dropIndexIfExists(db, "mining_device_leases", "mining_device_leases_session_unique");
 
   await ensureCoreIndexes(db);
+  await ensureMiningEvidenceIndexes(db);
+  if (options.miningEvidenceSecret) await backfillMiningEvidence(db, options.miningEvidenceSecret);
   // Candidate discovery: pending requests, future cycle bounds and missing legacy bounds.
   await db.collection("mining_devices").createIndex({ admissionPending: 1 }, { name: "mining_devices_admission_pending" });
   await db.collection("mining_devices").createIndex({ admissionLeaseEndsAt: 1 }, { name: "mining_devices_admission_window" });

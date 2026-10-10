@@ -52,8 +52,12 @@ import {
   lookupMachineKey,
 } from "./repository.js";
 import type { IpIntel } from "./ip-intel.js";
+import { admissionEvidence } from "./candidate-evidence.js";
+import { requireVerifiedMining } from "./verified-policy.js";
 
 export interface DeviceResolution {
+  /** Complete predicate chosen outside the transaction; re-queried inside its fresh snapshot. */
+  candidateEvidenceTokens?: string[];
   device: MiningDeviceRecord;
   signature: string;
   vector: string;
@@ -173,6 +177,8 @@ export async function resolveOrCreateDevice(input: {
   nowMs?: number;
 }): Promise<DeviceResolution> {
   const { collections, config } = input;
+  requireVerifiedMining(config);
+  if (config.lmdg.identityMode === "browser") throw new AppError(403, "mining_device_challenge_required", "Browser enrollment requires an admitted signed start.");
   const evidence = sanitizeEvidence(input.evidenceRaw);
   const signals = normalizeSignals(evidence);
   const network = { ipFamily: ipFamilyOf(input.ip), asn: input.intel.asn, country: input.intel.country };
@@ -467,6 +473,7 @@ async function createDevice(
     updatedAt: now,
   };
   try {
+    Object.assign(doc, admissionEvidence(doc, input.config.encryptionKey));
     await collections.miningDevices.insertOne({ _id: new ObjectId(), ...doc } as MiningDeviceRecord);
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error;

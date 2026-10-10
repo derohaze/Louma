@@ -17,11 +17,11 @@
  * evidence, never block the customer's start.
  */
 
-// Must match the server's `DEVICE_IN_USE_MESSAGE` byte for byte: the cycle hook uses this constant
+// The cycle hook uses this presentation constant
 // as a sentinel (`error === DEVICE_IN_USE_MESSAGE`), and the start wrapper returns it verbatim for
 // `mining_device_already_in_use`.
 export const DEVICE_IN_USE_MESSAGE =
-  "A mining cycle is already active on this device, or on a machine the guard identifies as the same hardware. One device runs one mining cycle at a time. Try again after the current cycle ends, or use a different device.";
+  "This browser identity is already mining on another account. Try again after that cycle ends.";
 
 export interface DeviceEvidencePayload {
   visitorId: string | null;

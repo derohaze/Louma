@@ -1,5 +1,6 @@
 import type { Collections } from "../../infrastructure/mongodb/collections.js";
 import type { AppConfig } from "../../config/env.js";
+import { VERIFIED_DEVICE_MESSAGE, VERIFIED_DEVICE_REQUIRED } from "../mining-device/verified-policy.js";
 import { formatMoney } from "../ledger/money.js";
 import { accruedMinorFor, totalAccrualMinor } from "./rate.js";
 import { loadMiningSettings } from "./settings.js";
@@ -224,7 +225,7 @@ export async function loadAccountWindowSessions(
 
 export async function getMiningState(input: {
   collections: Collections;
-  config: Pick<AppConfig, "mining" | "miningPools">;
+  config: Pick<AppConfig, "mining" | "miningPools"> & Partial<Pick<AppConfig, "lmdg">>;
   ownerUserId: string;
   cache?: CacheContext | undefined;
   membershipCache?: CacheContext | undefined;
@@ -272,5 +273,13 @@ export async function getMiningState(input: {
       };
     }
   }
-  return stateFromRecord(record, nowMs, live.mining.enabled, live.mining.settlementEnabled, live.mining.cycleDurationSeconds, poolId, poolId === null, quota);
+  const state = stateFromRecord(record, nowMs, live.mining.enabled, live.mining.settlementEnabled, live.mining.cycleDurationSeconds, poolId, poolId === null, quota);
+  if (input.config.lmdg?.identityMode === "strict") {
+    state.canStart = false;
+    state.startRestriction = {
+      code: VERIFIED_DEVICE_REQUIRED,
+      message: VERIFIED_DEVICE_MESSAGE,
+    };
+  }
+  return state;
 }

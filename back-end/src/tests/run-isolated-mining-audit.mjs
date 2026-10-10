@@ -12,8 +12,8 @@ import { MongoClient } from "mongodb";
 // Usage: node src/tests/run-isolated-mining-audit.mjs /absolute/path/to/mongod [all|audit|regression|benchmark|scale]
 // Starts its OWN loopback-only replica set. Never accepts a database URI or loads an application env file.
 const [binary, suite = "all"] = process.argv.slice(2);
-if (!binary || !["all", "audit", "regression", "benchmark", "scale"].includes(suite)) {
-  throw new Error("Usage: node src/tests/run-isolated-mining-audit.mjs <mongod executable> [all|audit|regression|benchmark|scale]");
+if (!binary || !["all", "audit", "regression", "benchmark", "scale", "strict", "retrieval", "counterfactual", "browser", "browser-scale", "browser-load"].includes(suite)) {
+  throw new Error("Usage: node src/tests/run-isolated-mining-audit.mjs <mongod executable> [all|audit|regression|benchmark|scale|strict|retrieval|counterfactual]");
 }
 const cwd = fileURLToPath(new URL("../../", import.meta.url));
 const directory = await mkdtemp(join(tmpdir(), "louma-mining-audit-"));
@@ -44,6 +44,7 @@ Object.assign(environment, {
   NODE_ENV: "test", MONGODB_URI: uri, MINING_AUDIT_URI: uri,
   ACCESS_TOKEN_SECRET: randomBytes(32).toString("base64"), APP_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
   FRONTEND_ORIGINS: "http://localhost:5173", REDIS_ENABLED: "false", LMDG_RISK_MODE: "enforce",
+  LMDG_TEST_LEGACY_IDENTITY: "true",
 });
 
 async function run(label, args, extra = {}) {
@@ -84,17 +85,35 @@ try {
   }
   const version = await connection.db("admin").command({ buildInfo: 1 });
   console.log(`MongoDB ${version.version}, single-node replica set, loopback only, Redis disabled`);
+  if (suite === "browser-load") {
+    await run("browser-load", ["--import", "tsx", "--test", "--test-name-pattern=BROWSER LOAD:", "src/tests/browser-mining.integration.test.ts"], {
+      LMDG_TEST_LEGACY_IDENTITY: "false", LMDG_IDENTITY_MODE: "browser", BROWSER_SCALE: "1",
+    });
+  }
+  if (suite === "all" || suite === "browser" || suite === "browser-scale") {
+    await run("browser", ["--import", "tsx", "--test", "src/tests/browser-mining.integration.test.ts"], {
+      LMDG_TEST_LEGACY_IDENTITY: "false", LMDG_IDENTITY_MODE: "browser", BROWSER_SCALE: suite === "browser-scale" ? "1" : "0",
+    });
+  }
+  if (suite === "counterfactual") {
+    await run("counterfactual", ["--import", "tsx", "--test", "--test-name-pattern=INDEXED SCALE", "src/tests/mining-adversarial.integration.test.ts"]);
+  }
+  if (suite === "strict" || suite === "retrieval") {
+    await run(suite, ["--import", "tsx", "--test", `--test-name-pattern=${suite === "strict" ? "STRICT:" : "EVIDENCE:"}`, "src/tests/mining-adversarial.integration.test.ts"]);
+  }
   if (suite === "all" || suite === "audit") {
     await run("adversarial", ["--import", "tsx", "--test", "src/tests/mining-adversarial.integration.test.ts"]);
   }
   if (suite === "scale") {
-    await run("indexed-scale", ["--import", "tsx", "--test", "--test-name-pattern=INDEXED SCALE", "src/tests/mining-adversarial.integration.test.ts"]);
+    await run("indexed-scale", ["--import", "tsx", "--test", "--test-name-pattern=EVIDENCE SCALE:", "src/tests/mining-adversarial.integration.test.ts"], {
+      MINING_SCALE_PROFILES: "1000,5000,50000,100000", MINING_SCALE_OUT: join(directory, "indexed-scale.jsonl"),
+    });
     await run("mining-scale-load", ["--import", "tsx", "src/tests/lmdg-load-benchmark.ts"], {
       BENCH_ALLOW_DESTRUCTIVE_CLEANUP: "1", BENCH_ACCOUNTS: "256", BENCH_LEVELS: "8,16,32", BENCH_OUT: join(directory, "mining-scale-load.json"),
     });
   }
   if (suite === "all" || suite === "regression") {
-    for (const name of ["database", "mining", "mining-device", "mining-pool-race"]) {
+    for (const name of ["database", "mining", "mining-device", "mining-pool-race", "transfer-security", "cleanup-test-accounts", "pro"]) {
       await run(name, ["--import", "tsx", "--test", `src/tests/${name}.integration.test.ts`]);
     }
   }

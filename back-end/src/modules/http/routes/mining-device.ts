@@ -2,18 +2,21 @@ import type { FastifyInstance } from "fastify";
 import { enforceMiningAttempt } from "../../mining-device/attempts.js";
 import { z } from "zod";
 import * as deviceGuard from "../../mining-device/service.js";
-import { authenticated, clientIp, getAuth, parseBody } from "../http-helpers.js";
+import { authenticated, miningRateLimit, clientIp, getAuth, parseBody } from "../http-helpers.js";
+import { miningIdentityAvailability, requireVerifiedMining } from "../../mining-device/verified-policy.js";
 
 export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/api/v1/mining/device/requirements", { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 120, 60_000) } }, async () => miningIdentityAvailability(app.config));
   /**
    * LMDG device endpoints. None of them exposes another account, an IP, a fingerprint, or a risk
    * score — only this account's own lease state and its own challenge nonces.
    */
   app.post(
     "/api/v1/mining/device/challenge",
-    { ...authenticated, config: { rateLimit: { max: 20, timeWindow: 3_600_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 20, 3_600_000) } },
     async (request) => {
       const current = getAuth(request);
+      requireVerifiedMining(app.config);
       await enforceMiningAttempt(app.collections, current.userId, "challenge");
       const body = parseBody(
         z.object({ deviceKeyHash: z.string().max(128).optional(), device: z.unknown().optional() }).strict(),
@@ -48,9 +51,10 @@ export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<
 
   app.post(
     "/api/v1/mining/device/prove",
-    { ...authenticated, config: { rateLimit: { max: 30, timeWindow: 3_600_000 } } },
+    { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 30, 3_600_000) } },
     async (request) => {
       const current = getAuth(request);
+      requireVerifiedMining(app.config);
       await enforceMiningAttempt(app.collections, current.userId, "prove");
       const body = parseBody(
         z
@@ -94,7 +98,7 @@ export async function registerMiningDeviceRoutes(app: FastifyInstance): Promise<
     },
   );
 
-  app.get("/api/v1/mining/device/status", authenticated, async (request) =>
+  app.get("/api/v1/mining/device/status", { ...authenticated, config: { rateLimit: miningRateLimit(app.config, 120, 60_000) } }, async (request) =>
     deviceGuard.getDeviceStatus({
       collections: app.collections,
       ownerUserId: getAuth(request).userId,

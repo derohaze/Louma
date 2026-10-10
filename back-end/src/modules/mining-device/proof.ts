@@ -16,8 +16,12 @@ import {
 import { findDeviceByAnchor, findDeviceByPublicKey } from "./repository.js";
 import { applyCommittedCredit } from "./credit.js";
 import { observedFeatures } from "./resolution.js";
+import { requireVerifiedMining } from "./verified-policy.js";
+import { browserIdentity } from "./browser-identity.js";
+import { canonicalBrowserKey } from "./identity.js";
 
 export interface DeviceBinding {
+  intentHash?: string;
   /** The server-resolved machine anchor this handshake belongs to; null when evidence named none. */
   anchorHash: string | null;
   /** The enrolled cluster (`publicId`) when the evidence resolved to one; null for a first-sight device. */
@@ -59,9 +63,13 @@ export function p256KeyFingerprint(jwkText: string | null | undefined): string |
  */
 export async function resolveDeviceBinding(input: {
   collections: Pick<Collections, "miningDevices">;
-  config: Pick<AppConfig, "encryptionKey">;
+  config: Pick<AppConfig, "encryptionKey"> & Partial<Pick<AppConfig, "lmdg">>;
   evidenceRaw: unknown;
 }): Promise<DeviceBinding> {
+  if (input.config.lmdg?.identityMode === "browser") {
+    const identity = browserIdentity(input.config.encryptionKey, input.evidenceRaw);
+    return { anchorHash: identity.keyHash, clusterId: null, browserKeyText: identity.evidence.browserKeyPublicKey, intentHash: identity.intentHash };
+  }
   const evidence = sanitizeEvidence(input.evidenceRaw);
   const signals = normalizeSignals(evidence);
   const observed = observedFeatures(input.config.encryptionKey, signals);
@@ -89,6 +97,9 @@ export async function issueChallenge(input: {
   correlationId: string;
   nowMs?: number;
 }): Promise<{ nonce: string; expiresAt: Date; payload: string }> {
+  requireVerifiedMining(input.config);
+  const browser = input.config.lmdg.identityMode === "browser";
+  if (browser && !input.binding?.intentHash) throw new AppError(400, "mining_device_evidence_missing", "Browser evidence is required.");
   const nowMs = input.nowMs ?? Date.now();
   const hourAgo = new Date(nowMs - 60 * 60 * 1000);
   const issued = await input.collections.miningDeviceNonces.countDocuments({ ownerUserId: input.ownerUserId, issuedAt: { $gt: hourAgo } });
@@ -111,7 +122,8 @@ export async function issueChallenge(input: {
     // The key material the evidence named at issuance (null when it named no well-formed key). The
     // proof that consumes this nonce must be signed by exactly this key, so a challenge accepted by a
     // different key cannot mint a verified handshake for a possession that was never proven.
-    boundBrowserKeyFingerprint: p256KeyFingerprint(input.binding?.browserKeyText ?? null),
+    boundBrowserKeyFingerprint: browser ? canonicalBrowserKey(input.binding?.browserKeyText ?? null) : p256KeyFingerprint(input.binding?.browserKeyText ?? null),
+    ...(browser ? { purpose: "browser-start-v1", intentHash: input.binding!.intentHash, origin: input.origin ?? null, startUsedAt: null } : {}),
     nonce,
     issuedAt: new Date(nowMs),
     expiresAt,
@@ -139,6 +151,7 @@ export async function issueChallenge(input: {
     deviceKeyHash: input.binding?.anchorHash ?? input.deviceKeyHash ?? null,
     issuedAtMs: nowMs,
     expiresAtMs: expiresAt.getTime(),
+    ...(browser ? { intentHash: input.binding!.intentHash } : {}),
   });
   return { nonce, expiresAt, payload };
 }
@@ -167,6 +180,7 @@ function canonicalJson(value: unknown): string {
  * the whole object is irrelevant because the client is given the exact field list to sign.
  */
 export function buildProofPayload(parts: {
+  intentHash?: string;
   nonce: string;
   origin: string | null;
   ownerUserId: string;
@@ -175,6 +189,7 @@ export function buildProofPayload(parts: {
   expiresAtMs: number;
 }): string {
   return canonicalJson({
+    ...(parts.intentHash ? { purpose: "browser-start-v1", intent: parts.intentHash } : {}),
     v: LMDG_PROOF_VERSION,
     action: LMDG_PROOF_ACTION,
     origin: parts.origin ?? "null",
@@ -269,6 +284,7 @@ export async function verifyProof(input: {
   correlationId: string;
   nowMs?: number;
 }): Promise<{ deviceKeyHash: string; verified: boolean }> {
+  requireVerifiedMining(input.config);
   const nowMs = input.nowMs ?? Date.now();
   const hourAgo = new Date(nowMs - 60 * 60 * 1000);
   // Every proof call writes exactly one audit event — `challengeFailed` on any rejection,
@@ -307,6 +323,8 @@ export async function verifyProof(input: {
     throw rejectProof(reason);
   };
   if (!record) return fail("unknown_nonce");
+  const browser = input.config.lmdg.identityMode === "browser";
+  if (browser && (record.purpose !== "browser-start-v1" || record.intentHash !== input.binding?.intentHash || record.origin !== (input.origin ?? null))) return fail("intent_mismatch");
   if (record.consumedAt) return fail("reused_nonce");
   if (record.expiresAt.getTime() <= nowMs) return fail("expired_nonce");
   // The signature must cover the canonical bound payload, not just the nonce. A bare-nonce
@@ -339,7 +357,7 @@ export async function verifyProof(input: {
   // JWK of the same key still verifies.
   const issuedKeyFingerprint = (record as { boundBrowserKeyFingerprint?: string | null }).boundBrowserKeyFingerprint ?? null;
   if (issuedKeyFingerprint !== null) {
-    const signingKey = p256KeyFingerprint(JSON.stringify(input.publicKeyJwk));
+    const signingKey = browser ? canonicalBrowserKey(JSON.stringify(input.publicKeyJwk)) : p256KeyFingerprint(JSON.stringify(input.publicKeyJwk));
     if (signingKey === null || signingKey !== issuedKeyFingerprint) return fail("device_binding_mismatch");
   }
   // A nonce with no anchor and no cluster was issued without device evidence (a legacy client): it
@@ -352,6 +370,7 @@ export async function verifyProof(input: {
     deviceKeyHash: storedAnchor ?? record.deviceKeyHash ?? null,
     issuedAtMs: record.issuedAt.getTime(),
     expiresAtMs: record.expiresAt.getTime(),
+    ...(browser ? { intentHash: record.intentHash } : {}),
   });
   const ok = verifyEcdsaP256(input.publicKeyJwk, payload, input.signature);
   if (!ok) return fail("bad_signature");
@@ -364,6 +383,8 @@ export async function verifyProof(input: {
     { $set: { consumedAt: new Date(nowMs), verifiedBrowserKey: publicKeyText } },
   );
   if (consumed.modifiedCount !== 1) return fail("reused_nonce");
+  // Possession never upgrades a browser into a trusted physical device or network resident.
+  if (browser) return { deviceKeyHash: storedAnchor ?? "", verified: true };
   await input.collections.miningDevices.updateOne(
     { browserKeyPublicKey: publicKeyText },
     { $set: { lastSeenAt: new Date(nowMs), updatedAt: new Date(nowMs) } },

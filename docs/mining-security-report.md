@@ -1,168 +1,188 @@
-# Mining security — current verified position
+# Historical strict-mode remediation report
 
-Date: 2026-10-10. Browser-only, self-hosted, no paid service or installed client.
-Changes remain local: no production access, commit, push or deployment.
+The browser-only continuation supersedes this report's unavailable-mining policy.
+See [Browser mining report](browser-mining-report.md) and ADR-018 for the current
+implementation, verification evidence and limits. The strict-phase findings below
+are preserved as historical evidence, not the current browser policy.
 
-This is the single current mining security report. Earlier reports and raw test
-evidence are consolidated in the [evidence archive](../artifacts/mining-security-evidence-2026-10-10.zip).
-The archive preserves their original paths and an integrity manifest. Earlier
-measurements and completion claims describe their own trees, not this final tree.
+Date: 2026-10-10. Local changes only; no production database access, deployment,
+commit or push. The pre-change report is preserved as
+[prior-report.txt](artifacts/mining-remediation-2026-10-10/prior-report.txt).
 
-## Confirmed protections and remaining problems
+The historical candidate scan has been replaced with complete indexed discovery.
+Production mining now rejects all new unverified starts before admission state
+changes. **No independently trusted device enrollment is available, so all new
+mining is unavailable.** This is the requested fail-closed fallback. It is not a
+finished native mining client or a demonstrated physical-device identity system.
+Existing cycles can stop and settle; account and wallet operations remain web-based.
 
-| Scenario | Current result | Evidence / limit |
-| --- | --- | --- |
-| Equivalent P-256 key encoded differently | Prevented in tested sequential/concurrent starts | Canonical material comparison; two racing accounts produce one cycle and no loser leases. |
-| Near-clone enrollment/admission races | Previous protection retained | Real snapshot barriers, device/network fences, bounded retries and unique leases. Six contenders across two API/Mongo clients produce one owner. |
-| Recency-window omission | Previous protection retained | Full initial historical assessment plus transaction revalidation; older/live/blocked records remain enforceable. |
-| Excessive per-account probing, rotating IPs, Redis unavailable | Bounded | MongoDB sliding windows: 12 starts/minute, 20 challenges/hour, 30 proofs/hour/account. More accounts still multiply the allowance. |
-| Partial cycle/lease writes | Rolled back in tested failures | Actual MongoDB validator rejection aborts cycle, leases, fences and retained windows. Pending references are released; healthy retry succeeds. |
-| Peer identity leases outlive the peer's own pending request | Addressed in this round | Every directly compared record retains the new cycle's end in the transaction, including peers whose identities it leases. |
-| Idle learned history discarded by optimization | Regression found and removed | Prototype permits two cycles; final first assessment remains complete and permits only one. Counterfactual restores the failure. |
-| Coherent alternate evidence, independent keys, separate networks | **Open** | Two accepted cycles with disjoint leases. Three edited identity slots already suffice; total replacement is not necessary. |
-| Fresh independently generated P-256 keys with valid proofs | **Open** | Both keys pass real nonce/signature verification; that does not establish two physical computers. |
-| Forged newcomer before established resident on the same network | **Open** | Both starts accepted under the existing residency exemption. |
-| Coarse-profile collisions between independent-key fixtures | **Open false-positive risk** | Different keys and rendering values sharing the coarse machine core still yield a device-conflict 409. Synthetic witness, not a physical-device study or real-user error rate. |
-| Large historical populations | **Still a scaling limit** | Initial assessment remains O(N), with a 2000 ms budget. The final 50,000-profile probe reports the actual full-start outcome separately from indexed transaction discovery. |
+## Problems, corrections and evidence
 
-Tests named `OPEN` pass by reproducing an unresolved bypass/collision. A green
-suite is not evidence that those attacks are closed. No thresholds were loosened
-or broad fingerprint/network bans added in this round. Existing identity and
-network restrictions still have legitimate-user costs.
+| Problem | Root cause in the old code | Implemented correction | Before / after evidence |
+| --- | --- | --- | --- |
+| O(N) admission | Initial `find({})` examined historical profiles under a 2,000 ms budget | Bounded indexed evidence union, exact-match tokens, weighted feature cover, absence and legacy fallback; fresh transactional predicate | Original 50k start: 503 / 2582.2 ms. Restoring only the original loader in a temporary copy makes the strengthened 50k acceptance test fail with `503 !== 200`. Indexed acceptance succeeds. |
+| Spoofed physical identity | New P-256 keys and coherent client-controlled traits create independent identities | Strict service guards before starts, resolution/enrollment and proofs; no unverified production fallback | Three original strict tests failed with actual 200 vs expected 403 before guards. Final strict tests deny forged/fresh-key starts and prove no device, lease, nonce, attempt or quota rows are created. |
+| False-positive identity merges | Coarse machine hashes merge independent-key fixtures | Unverified evidence has no production enrollment authority; strict requests create/merge no identities | Legacy OPEN collision still reproduces. Strict shared-model/shared-NAT tests create zero identities. No measured real-device false-positive rate or working verified enrollment path is claimed. |
+| Network residency ordering | A newcomer can start before an established resident, whose exemption permits overlap | Residency cannot bypass strict device authorization, regardless of order, IP or heuristic flags | Legacy OPEN ordering still reproduces. Both strict resident/newcomer orders refuse new cycles and preserve seeded historical records. |
+| Partial/stale indexing | Missing or outdated evidence could remove a candidate | Missing-version fallback; same-document writes; guarded resumable backfill and full verifier | Interrupted migration commits 200/410, resumes remaining 210, preserves IDs; stale versioned tokens detected/rebuilt; partial migration refuses. |
+| Probe timeout defect found during review | Per-query budgets reset and MongoDB code 50 escaped as HTTP 500 | Shared remaining deadline, cancellation and normalized 503 | Route injection fails before (`500 !== 503`) and passes after. Delayed probes verify outstanding reads cancel. |
+| Stale observation defect found during final review | A partial observation could derive an old machine token while leaving a newer stored machine hash | Compare all four source fields before updating evidence/tokens; discard stale sampled observation | Permanent race test fails before with one mismatched row and passes after with the newer record intact. |
 
-## Final performance change and rejected prototype
+The four `OPEN` cases are confirmed failures of the isolated legacy policy. Their
+passing test assertions do not mean those heuristics are repaired. They are kept
+as evidence of why production strict mode cannot use that policy. There are no
+production verified-device throughput or physical uniqueness claims.
 
-The prototype excluded idle history from both admission scans. It started beside
-50,000 idle profiles in 232.7 ms with two examined documents, but final review
-found a security regression: learned feature rings can make correlation
-directional. An idle peer may recognize caller A through its history, while the
-reverse comparison using its current evidence says `different`. Excluding that
-idle peer allowed A and the peer's account to mine simultaneously. Reinstating
-the complete first assessment changes the result from `200,200` to `200,409`.
-**The 232.7 ms full-start result does not describe the delivered implementation.**
+## Architecture and invariants
 
-The final implementation keeps full initial historical assessment, its risk
-inputs and its compared IDs/lease keys. Only the second scan, inside the MongoDB
-transaction, uses indexed discovery of current work. Historical resolution and
-quota code remain unchanged. This reduces transaction work; it does not solve
-the full-start O(N) bottleneck or establish a large-user capacity guarantee.
+[ADR-017](adr.md) records the candidate completeness proof and schema contract.
+Candidate discovery covers all positive matcher verdicts, canonical keys, exact
+machine hashes, directional learned rings, eligible drift and normalized raw
+legacy snapshots. Idle and blocked records remain eligible. Covered selectivity
+probes choose a complete feature cover; they do not decide trust. Candidate
+unions over 200 refuse instead of truncating. Probe and initial matching share
+the unchanged 2,000 ms budget; no global admission mutex was introduced.
 
-Optional `mining_devices.admissionPending` records outstanding starts before
-assessment. `admissionLeaseEndsAt` conservatively retains cycle windows. The
-transaction fence extends that end on every compared record, atomically with
-cycle and lease creation. Early stops do not shorten it. `finally` releases only
-the request's pending reference after completion/abort. A crash/failed release
-leaves extra candidates; a timer must never make an in-flight request disappear.
+Transactions repeat the predicate in a fresh snapshot, retain assessed IDs/keys
+and preserve device/network write fences, unique leases, majority writes, short
+snapshot transactions and bounded retries. Creation, backfill and observation
+writes keep derived tokens consistent with source evidence. MongoDB remains the
+financial authority; no Redis identity, balance or authorization cache is added.
+No unique/TTL index is removed, historical record deleted, or reward rule changed.
+Below-threshold diagnostic telemetry can inspect fewer unrelated records than
+the old full scan; positive matcher completeness is the guarantee.
 
-Transaction discovery selects positive pending counts, future retained ends and
-missing legacy ends. Two ordinary ascending indexes serve that exact query.
-The existing 2000 ms scan budget and 200-correlated-record cap still apply;
-exhaustion returns temporary 503 without accepting a partial comparison.
-Large retained populations can still overload transaction discovery too.
+The [hardware trust boundary and device matrix](mining-device-security.md) names
+what is missing. Read-only host inspection found a ready TPM but no manufacturer
+EK certificate or configured independent verifier. TPM signing alone does not
+link multiple keys to one approved physical device. Browser updates, different
+browsers, resets, shared NAT and VM/attestation claims have synthetic backend
+coverage or explicit unsupported status; no real multi-device study was performed.
 
-## Executed verification
+## Verification
 
-- Typecheck: exit 0. Unit tests: **151/151**.
-- Integration: **142/142** — 34 adversarial, 46 database, 22 mining,
-  35 mining-device and 5 pool-race. No failures, cancellations or skips.
-- Architecture, start, 48-account and 256-account load benchmarks: exit 0.
-- Fresh enrollment, 12 samples: p50 **120.46 ms**, p95 **160.95 ms**.
-- Architecture mining-state query: p50 **1.37 ms**, p95 **1.85 ms**.
-- 5,000 idle profiles: full start **579.7 ms**, transaction callbacks **8.7 ms**;
-  the hidden blocked/raw-snapshot conflict still receives 409.
-- 50,000 idle profiles: full start returns **503 in 2165.9 ms**. A separately
-  exercised transaction-discovery scan takes **21.7 ms** and returns one pending
-  candidate. Explain after pending cleanup examines zero documents/one index key.
-  This proves a small transaction query, not a successful full start at that size.
-- The history counterfactual filters the first scan again and restores two
-  accepted cycles. The corrected implementation passes the same scenario.
+The final full isolated runner exited 0 using MongoDB 8.0.0, one fresh loopback
+replica set per run, Redis disabled, random databases, synthetic credentials and
+Fastify `app.inject`. No application environment files were loaded.
 
-Full measurements are recorded in the archive's
-`docs/artifacts/mining-indexed-admission-2026-10-10/verification.json`, logs,
-source hashes and load JSON. Files prefixed `prototype` preserve the rejected
-both-scans-filtered implementation's results; they are not final-tree evidence.
+| Check | Result |
+| --- | --- |
+| Backend unit suite | 155 passed, zero failures |
+| Permanent adversarial suite | 45 passed, zero failures, including five strict guard cases and six evidence cases |
+| Database / financial integration | 46 passed |
+| Mining / quota integration | 22 passed |
+| Mining-device integration | 35 passed |
+| Pool concurrency integration | 5 passed |
+| Transfer-security integration | 15 passed |
+| Cleanup-account integration | 3 passed |
+| Pro integration | 10 passed |
+| Integration total (seven standard suites) | 136 passed |
+| Architecture benchmark | Completed; `BENCHMARK_DONE` |
+| Backend / frontend typechecks | Exit 0 |
+| Independent static review | Two probe findings repaired; follow-up and stale-observation review found no remaining material findings |
 
-Tests use Node 24.17.0, MongoDB 8.0.0, an owned loopback-only single-node replica
-set, random isolated databases and synthetic secrets. Redis is disabled and the
-runner never loads application `.env` files. Authenticated requests go through
-Fastify `app.inject`; MongoDB transactions/indexes and P-256 signatures are real.
-Two API instances use separate Mongo clients in one process.
+The UI changes were typechecked; no real-browser or real-hardware acceptance
+session was performed. The hardware matrix explicitly labels that limitation.
 
-The final larger load enrolls 256 accounts, with a fresh concurrency limit of
-64 and returning limits of 8/16/32. Its fixtures reuse coarse characteristics:
-**30 accepted, 226 device-conflict refusals**, both before and after. Returning
-phases therefore have only 30 accounts, even at the limit of 32. Both load runs
-have zero server failures and intact session/lease invariants. The final run
-has zero orphan leases, missing cycle leases, negative quota references or
-pending admissions; max active sessions/account is one.
+Financial regression setup initially exposed two existing test defects: an
+unfunded fixture spent before funding (correctly rejected by the validator), and
+rollback expected hard-coded subscription version 1 although new grants start at
+0. Tests now fund before spending and compare the version read before the failed
+transaction. Production financial code and validators were not relaxed. Failing
+and repaired logs are retained.
 
-| Accepted-request p95 | Before this round | Final tree |
-| --- | ---: | ---: |
-| Fresh wave, limit 64 | 3539.49 ms | 2964.91 ms |
-| Returning start, limit 8 | 813.66 ms | 557.66 ms |
-| Returning start, limit 16 | 1371.32 ms | 1165.78 ms |
-| Returning start, limit 32; 30 accounts available | 2149.24 ms | 2233.71 ms |
+Adversarial evidence covers multiple API/Mongo clients, actual snapshot write
+conflicts, bounded five-attempt retry exhaustion, canonical keys, fresh-key proofs,
+forged fingerprints, directional history, hidden blocked/raw records, 70 live
+fixture devices, IP switching, rate-limit races, expired nonces, quota races,
+abandoned/pending work and transaction rollback after invalid lease insertion.
+Strict recovery/key-rotation claims and unsupported attestation refuse. This is
+not successful native attestation or hardware recovery testing.
 
-The highest-concurrency sample is slower; no across-the-board speedup is
-claimed. A separate final scale probe again returns full-start 503 with 50,000
-idle profiles (2176.5 ms), while transaction discovery takes 11.4 ms and delivers
-one record. Refusals and accepted latency must be read together. These fixtures
-are not a real-user false-positive estimate or an experiment with 256
-independently verified physical devices.
+Architecture query p50s were 0.54–1.59 ms and p95s 0.71–3.27 ms in the final run.
+Wallet lookups examined one key/document. Several history/idempotency queries
+were guaranteed misses or used empty collections, so their plans do not establish
+populated production performance. Covered evidence probes separately verified
+zero fetched documents. Existing concurrency barriers observed actual transaction
+retry callbacks and one resulting owner. Detailed logs include the actual counts.
 
-No Internet/TLS load, physical browser/device cohort, multi-host clock behavior,
-replica failover or real-user false-positive rate was tested. The small start
-benchmark's verification retry can report an already-active cycle; proof/retry
-success comes from integration and the load benchmark. Workstation timings are
-not production capacity or controlled causal speedup estimates.
+## Scalability and load
 
-## Stronger browser-only verification: realistic assurance
+Final scale measurements follow. All
+numbers concern the isolated legacy matching diagnostic, not strict verified
+mining. There are eight start samples per history size, no HTTP/TLS/network
+transport, one local MongoDB with a 256 MiB WiredTiger cache, and no Redis.
+Percentiles from eight samples are descriptive only. The fixture contains raw
+legacy records and conservatively retained windows; separate adversarial tests
+exercise actual active cycles. High-collision unions are tested to refuse safely.
 
-The [WebAuthn specification](https://www.w3.org/TR/webauthn-3/) and
-[WebCrypto extractability documentation](https://developer.mozilla.org/en-US/docs/Web/API/CryptoKey/extractable)
-were fetched during this review; excerpts are archived with the evidence.
+| Historical profiles | Accepted / refused | First start ms | p50 ms | p95 / p99 ms | Candidate docs / keys examined |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 8 / 0 | 174.2 | 129.1 | 174.2 / 174.2 | 1 / 22 |
+| 5,000 | 8 / 0 | 129.9 | 129.2 | 147.2 / 147.2 | 1 / 22 |
+| 50,000 | 8 / 0 | 310.9 | 299.8 | 319.4 / 319.4 | 1 / 23 |
+| 100,000 | 8 / 0 | 562.7 | 579.9 | 659.9 / 659.9 | 1 / 19 |
 
-| Option | Benefit | Limit / legitimate-user cost |
-| --- | --- | --- |
-| Browser key, server nonce and account budgets — implemented | Continuity, replay resistance, bounded account probing | A caller can generate another valid key and use another account. Non-extractable WebCrypto keys restrict API export, not the number of keys a computer may create. |
-| WebAuthn with required user verification | Origin-bound credential possession and authenticator-mediated verification; adds friction to unattended scripts on supported devices | PIN/face/fingerprint verification is not a unique person/device identifier sent to the site. Multiple credentials/authenticators are possible; synchronized passkeys span devices. Prompts, compatibility and recovery need product work. |
-| Trusted attestation plus non-backup-eligible credentials | Stronger evidence of authenticator/storage properties where supported and validated | Ordinary attestation is not a universal computer serial number. AAGUID identifies model/type. Multiple credentials remain possible; hardware allowlists exclude legitimate users. |
-| Enterprise attestation | May identify a specific authenticator in managed deployments | Requires permitted RP/device configuration; not generally available to an ordinary public site. The authenticator need not be the computer mining. |
-| Fresh server-bound computational challenge | Raises per-attempt cost | Optimized/parallel solvers remain possible; weak phones pay battery/heat/latency costs. Needs measured cost limits across device classes. Not implemented in this round. |
-| Stronger account enrollment/ownership verification | Makes extra usable accounts harder to acquire | Changes onboarding/recovery and possibly privacy requirements; does not itself identify a physical computer. |
+First start means the first measured request after fixture seeding/enrollment and
+index construction, not a cold operating-system cache or fresh database boot.
+All 32 starts succeeded within the unchanged budget. Each population ended with
+zero pending admission references and zero active leases after explicit stops.
+The candidate plans used the evidence index for initial and transactional reads.
 
-`excludeCredentials` avoids re-registering known credentials; it is not a
-server-verifiable global one-device enrollment limit. Cookies, local storage,
-obfuscation and JavaScript tamper flags can add continuity/telemetry but cannot
-authorize physical uniqueness against a caller controlling the evidence.
+| Profiles | Node CPU ms across 8 starts (user + system) | Peak Node RSS MiB | Mongo resident MiB after run |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 843 | 198.0 | 415 |
+| 5,000 | 641 | 263.8 | 509 |
+| 50,000 | 607 | 289.6 | 753 |
+| 100,000 | 966 | 244.3 | 795 |
 
-The demonstrated limit is concrete: two valid independent keys and two consistent
-evidence sets are accepted. They can come from two legitimate computers or one
-controlled client. Blocking every such case would also block legitimate devices.
-Stronger browser credentials can reduce automation without resolving this
-ambiguity. There is no evidence that AI-assisted evasion is impossible.
+Each eight-start window recorded 606 finds, 88 updates, 72 getMores, 40 distincts,
+24 aggregates, 25 inserts, eight commits and eight findAndModify commands. These
+are whole-request command totals, including covered probes and other admission
+work; examined-doc/key numbers above concern the candidate queries only. Memory
+includes fixture/process effects and Mongo allocation retained between populations.
 
-## Rollout requirements and reproduction
+Final 256-account load, fresh starts at concurrency 64: **30 accepted, 226 refused
+with `mining_device_already_in_use`**. All-request latency p50 **2466.74 ms**, p95
+**4284.86 ms**, p99 **4476.02 ms**. This rejection composition is unchanged from
+the baseline. Returning 30 accounts all succeeded at concurrency 8/16/32; their
+start p95s were 544.68 / 996.14 / 1769.33 ms. Peak Node RSS was 498.61 MiB.
+Integrity checks passed with zero violations, zero pending references, zero orphan
+leases/cycles, zero negative quota references and at most one active cycle per
+account. The ending 30 active cycles and their 316 lease keys belonged to the
+accepted users. The runner then shut down its own isolated MongoDB.
 
-See **ADR-016** in [adr.md](adr.md) and [database.md](database.md). Drain every old
-mining-start writer and its in-flight work before bootstrap/serving this version.
-Bootstrap initializes missing windows in batches of 200 through the latest old
-active session/lease end, preserving pending counts and concurrently published
-new-version windows. Legacy records remain conservative candidates meanwhile.
+The 256-account diagnostic must not be interpreted as increased real-user capacity
+or a measured physical-device false-positive rate. Refused requests are included
+in `allRequestLatencyMs`; older `latencyMs` and per-allowed counters describe
+accepted requests only. Some retained raw reports have the old note mentioning
+allowed-only metrics; the explicit all-request field is the source for this report.
+CPU/memory and all database command counts for scale runs are retained in JSONL.
+The load report includes process memory, event-loop delay, outcomes, Mongo method
+counts, retry/error samples and final integrity checks. Mongo server CPU was not
+separately sampled. The 2,000 ms assessment budget is not an overall API SLA under
+load; request work and queueing outside assessment can take longer.
 
-Mixed old/new writers are unsafe because old code does not publish windows.
-After running old writers during rollback, re-upgrade requires drained backfill
-of all windows, not only missing ones. Reclaim crashed pending references only
-after draining writers and verifying no transaction can still commit. No
-production cleanup, history deletion, financial changes or deployment occurred.
-Expected historical/retained-population capacity and independent-device collision
-measurements remain necessary before claiming readiness for wider rollout.
+## Operations and delivery
 
-From `back-end`, using a locally installed MongoDB executable:
+[Migration/deployment/rollback instructions](migrations.md#mining-evidence-v1-adr-017)
+require drained old writers, unchanged encryption key, safe backup, strict route
+closure, bounded bootstrap, full token verification, counts/ID checks and ledger
+reconciliation. The standalone migration is read-only by default and requires
+explicit database confirmation plus a drained-writer assertion to repair.
+No operator command was run against production. A rollback must preserve the
+strict guard or ingress closure; returning to an old browser-only binary reopens
+the known bypass. After any old writer ran, missing-only backfill is insufficient.
 
-```powershell
-npm run typecheck
-npm test
-node src/tests/run-isolated-mining-audit.mjs 'C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe' all
-node src/tests/run-isolated-mining-audit.mjs 'C:/Program Files/MongoDB/Server/8.0/bin/mongod.exe' scale
-```
+The [exact file list](artifacts/mining-remediation-2026-10-10/implementation-files.txt)
+identifies every changed implementation, test and document. Main changes are the
+candidate-evidence model, Mongo evidence query/backfill/verifier, admission and
+observation writers, strict policy/config/service guards, requirements/state API,
+English/Arabic mining UI, permanent attack tests and isolated runners. The
+[evidence index](artifacts/mining-remediation-2026-10-10/README.md) links raw before/
+after logs, counterfactual commands, benchmark data and the independent review.
+
+The delivered security guarantee is prevention of **unverified new mining** under
+the strict service policy. Legitimate new mining is unavailable until independently
+trusted enrollment is implemented and validated. There is no claim of successful
+one-device-one-enrollment, arbitrary compromise resistance or zero false positives.

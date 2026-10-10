@@ -1,5 +1,149 @@
 # Architecture Decision Records
 
+## ADR-018 — browser key admission, account step-up and reward entitlement
+
+The browser-only product decision replaces ADR-017's default unavailable admission.
+`LMDG_IDENTITY_MODE=browser` is the default; `strict` remains an explicit maintenance
+policy. The restricted `legacy-test` switch still exists only in isolated audit databases.
+Browser mode always enforces MongoDB attempts, proof, quotas and leases, even when legacy
+heuristic or monitor switches are off. A browser key establishes possession, never one
+physical computer, one person or one independently attested device.
+
+Mining HTTP throttles run after authentication and use verified account IDs in
+browser mode. The old IP bucket rejected every account in a concurrent 256-user
+NAT fixture before admission. Account limits retain their configured sizes and
+the independent MongoDB budgets remain authoritative across API processes.
+
+Canonical P-256 material has a separate HMAC namespace and unique enrollment key.
+The existing evidence index finds exact legacy key continuity and bounded historical
+correlation. Hardware classes and IP addresses never merge browser records, take network
+locks or spend another account's enrollment budget. Correlated rendering history,
+coordinated drift, key resets, sparse evidence and reported automation require account
+password plus enabled 2FA BEFORE admission. The user's chosen policy has no reward hold.
+These signals are fallible; coherent new keys and accounts remain an OPEN Sybil boundary.
+
+Every start consumes a fresh nonce bound to account, canonical key, normalized evidence,
+origin, protocol purpose and expiry. Proof verification is distinct from admission use.
+Nonce consumption, browser enrollment/history, immutable session receipt and exact-key
+leases commit together. Account document fence writes serialize history across keys;
+transaction revalidation rejects changed risk snapshots, revoked enrollments or quotas.
+Enrollment attempts remain charged after downstream failure, bounded by account only.
+
+The session receipt records admitted rate/window, proof reference, key, risk reasons and
+whether the account was reverified. Settlement (including transfer-triggered settlement)
+and stop re-read authoritative sessions and permanent lease bindings before issuing a
+balanced journal. Expiry/deletion of challenge rows cannot revoke already-earned money.
+A legitimate concurrent stop triggers bounded reload, not an invalid-entitlement error.
+Missing/altered admission records cannot issue. This does not claim resistance to arbitrary
+database administrator compromise. Historical financial records keep their compatibility path.
+Explicit enrollment revocation or account suspension observed in the financial
+snapshot also denies new credit; heuristic suspicion alone does not revoke rewards.
+
+Optional bounded fields are added to users (boolean account fence), browser device records,
+nonces and mining sessions. `two_factor_uses.purpose` adds `mining`, retaining the same unique
+owner/purpose/step index and TTL. No financial index is removed and no new collection,
+database, queue or paid dependency is introduced. The evidence multikey index handles
+exact key and rendering-token lookup; nonce lookup uses its existing unique index.
+
+Deployment is not performed by this task. Cutover requires draining all legacy admission
+writers, completing evidence verification, and allowing the final legacy 24-hour quota
+windows to end before browser admission is enabled. Preserve legacy rewards and exact-key
+operator blocks. Mixed admission versions are unsupported. Roll back new starts with
+`LMDG_IDENTITY_MODE=strict` while keeping the upgraded settlement code and additive data;
+do not roll back to a writer which ignores browser receipts. A real-device pilot and measured
+false-positive/step-up rates are required before production rollout.
+
+## ADR-017 — complete indexed evidence discovery and strict unavailable enrollment
+
+Superseded for admission availability by ADR-018; indexed evidence migration remains required.
+
+Date: 2026-10-10. Supersedes ADR-016's initial O(N) scan and transaction candidate
+predicate. Financial, quota, unique-lease and transaction contracts remain.
+
+Browser fingerprints and self-generated P-256 keys do not establish a physical
+device. Multiple keys can originate from one TPM. This repository has no trusted
+endorsement-key enrollment, approved manufacturer roots, attestation verifier or
+native mining client. Strict mining therefore refuses all new starts, enrollment,
+challenges and proofs with `403 mining_verified_device_required`, before device,
+quota, attempt or settlement mutations. This is the authorized fail-closed
+fallback, not hardware enrollment. Existing cycles remain stoppable/settleable
+under normal financial controls. There are zero supported hardware configurations.
+
+The sole legacy path requires `LMDG_TEST_LEGACY_IDENTITY=true`, `NODE_ENV=test`,
+the exact loopback `louma_audit` replica-set URI and a random audit database name.
+Configuration rejects production/development and remote databases. This preserves
+adversarial witnesses and diagnostic benchmarks; it is never a deployment option.
+Heuristic flags and network residency cannot disable the strict service guard.
+
+### Evidence contract and completeness proof
+
+Device rows optionally contain `admissionEvidenceVersion: 1` and
+`admissionEvidenceTokens`; the validator requires both together. Array maximum:
+`DEVICE_FEATURES.length * 11 + 2`; string maximum: 160 characters. Tokens cover
+five learned values, five eligible non-class drift values, one normalized legacy
+snapshot per feature, explicit missing baselines, canonical P-256 continuity and
+exact machine hashes. These private derived values grant no identity trust.
+
+Two ordinary indexes serve the union: `{admissionEvidenceTokens:1, publicId:1}`
+(`mining_devices_evidence`) and `{admissionEvidenceVersion:1}`
+(`mining_devices_evidence_version`). No unique or TTL index is removed.
+
+Completeness is relative to `decideClusterMatch`, not physical identity:
+
+1. Every positive verdict requires at least three agreeing machine features OR
+   rounded overall score at least the ambiguity threshold. Independent exact
+   key/machine comparisons have their own tokens.
+2. Of `m` observed machine features, any `m-2` features intersect every agreeing
+   triple. Query their agreement tokens, choosing the cheapest observed costs.
+3. Let observed weight be `W`, ambiguity threshold `A`, and
+   `T=(ceil(A)-0.5)/100`. Select weight `C > W*(1-T)` and query both agreement and
+   absence tokens. If none hits, every selected feature is present and disagrees.
+   Agreement on all remaining weight gives at most `(W-C)/W < T`. Missing
+   unselected features only lowers this maximum. Rounding cannot reach `A`.
+4. Raw snapshots normalize exactly like the matcher. Class drift is excluded;
+   drift with no baseline remains absence. All historical states are included:
+   idle, active, blocked and legacy. There is no recency or network filter.
+5. Missing-version rows remain in the union; partial migration can refuse but
+   cannot silently omit unindexed historical evidence.
+
+Covered probes read at most 201 index entries per token, four features at a time.
+A bounded weighted-cover search minimizes estimated cost. Counts are hints only;
+changing them cannot invalidate the proof. Probes and initial iteration share the
+existing 2,000 ms deadline. Every probe receives the remaining server timeout and
+common cancellation signal. Timeout becomes `503 mining_start_busy`. Candidate
+unions over 200 rows refuse; no truncated comparison can authorize mining.
+Popular and absent values therefore have an explicit availability cost.
+
+Transactions rerun the token predicate in a fresh snapshot and retain initial
+compared IDs/lease keys. Existing device/network write fences, unique leases,
+snapshot reads, majority writes and bounded retries remain. Token selection and
+network calls remain outside transactions. One-sided comparisons retain their
+write-conflict protection. Redis never stores or authorizes this evidence.
+
+The cover preserves positive verdicts and exact identities. Below-threshold
+diagnostic telemetry may see fewer unrelated rows than the old full scan. Legacy
+risk scores remain heuristic; no threshold is loosened or promoted to verified
+identity confidence.
+
+### Migration and compatibility
+
+Creation/observation writers update source evidence and tokens atomically in the
+same document. Backfill reads batches of 200, compares original source fields,
+majority-writes derived fields and skips completed rows after interruption. The
+maintenance verifier also detects stale versioned rows and checks counts plus
+a digest of stable IDs after repair.
+
+Drain all old mining writers and in-flight requests before migration. Old writers
+can change source fields without changing versioned tokens; missing-only startup
+cannot detect this. `--writers-drained` is an operator assertion, not a distributed
+lock. Never run mixed admission writers. Keep strict mining closed throughout
+rollback and re-upgrade; after any old writer ran, fully verify/rebuild evidence.
+Keep the encryption key unchanged: existing source digests also depend on it,
+so rotation requires a separate migration. No history or financial data is deleted.
+
+See [migration instructions](migrations.md#mining-evidence-v1-adr-017),
+[trust boundary](mining-device-security.md) and [current report](mining-security-report.md).
+
 ## ADR-001 — MongoDB remains the source of truth
 
 Alternatives (event bus, second database, Redis-backed balances) were rejected:

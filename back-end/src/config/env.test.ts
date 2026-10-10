@@ -20,6 +20,19 @@ test("proxy trust is off unless a proxy is named", () => {
   assert.equal(loadConfig({ ...base, TRUST_PROXY: "  " }).trustProxy, false);
 });
 
+test("browser is the default, strict is explicit, and legacy remains restricted to isolated tests", () => {
+  assert.equal(loadConfig(base).lmdg.identityMode, "browser");
+  assert.equal(loadConfig({ ...base, LMDG_IDENTITY_MODE: "strict" }).lmdg.identityMode, "strict");
+  assert.throws(() => loadConfig({ ...base, LMDG_IDENTITY_MODE: "legacy-test" }), /LMDG_IDENTITY_MODE/);
+  const isolated = { ...base, NODE_ENV: "test", MONGODB_URI: "mongodb://127.0.0.1:27017/?replicaSet=louma_audit",
+    MONGODB_DATABASE: `louma_audit_${"a".repeat(32)}`, LMDG_TEST_LEGACY_IDENTITY: "true" };
+  assert.equal(loadConfig(isolated).lmdg.identityMode, "legacy-test");
+  for (const override of [{ NODE_ENV: "development" }, { NODE_ENV: "production", FRONTEND_ORIGINS: "https://example.test" },
+    { MONGODB_URI: "mongodb://example.test:27017" }, { MONGODB_DATABASE: "louma" }, { MONGODB_DATABASE: "louma_gateway_test_dev" }]) {
+    assert.throws(() => loadConfig({ ...isolated, ...override }), /LMDG_TEST_LEGACY_IDENTITY/);
+  }
+});
+
 test("named addresses and CIDRs become the trusted-proxy list", () => {
   assert.deepEqual(loadConfig({ ...base, TRUST_PROXY: "10.0.0.0/8, 192.168.1.7" }).trustProxy, [
     "10.0.0.0/8",
