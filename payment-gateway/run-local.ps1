@@ -16,7 +16,6 @@ if ($Mode -eq "prod") {
 }
 
 $backendEnvPath = Join-Path $repoRoot "back-end\.env.development"
-$productionEnvPath = Join-Path $repoRoot "back-end\.env.production"
 
 function Read-EnvFile([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { throw "Environment file not found: $Path" }
@@ -36,27 +35,23 @@ function Read-EnvFile([string]$Path) {
 }
 
 $backendEnv = Read-EnvFile $backendEnvPath
-$productionEnv = Read-EnvFile $productionEnvPath
 $database = $backendEnv["MONGODB_DATABASE"]
 if (-not $database -or -not $backendEnv["MONGODB_URI"]) {
   throw "MONGODB_URI or MONGODB_DATABASE is missing from back-end/.env.development."
 }
-if ($database -eq $productionEnv["MONGODB_DATABASE"] -and $database -ne "louma") {
-  throw "Development and production currently use the same MongoDB database. Set MONGODB_DATABASE in back-end/.env.development to an isolated louma_gateway_test* database before starting the test gateway. Node and Go must share that sandbox database for ledger consistency."
-}
-if ($database -ne "louma" -and -not $database.StartsWith("louma_gateway_test")) {
-  throw "The development database must be louma (the confirmed Atlas test database) or start with louma_gateway_test."
+if (-not $database.StartsWith("louma_gateway_test")) {
+  throw "Set the Node development database to an isolated louma_gateway_test* database. The louma database is now reserved for production."
 }
 
-$gatewayEnv = Read-EnvFile (Join-Path $PSScriptRoot ".env.test")
+$gatewayEnv = Read-EnvFile (Join-Path $PSScriptRoot ".env.development")
 if ($gatewayEnv["GATEWAY_ENVIRONMENT"] -ne "test") {
-  throw "Set GATEWAY_ENVIRONMENT=test in payment-gateway/.env.test."
+  throw "Set GATEWAY_ENVIRONMENT=test in payment-gateway/.env.development."
 }
 foreach ($requiredKey in @("GATEWAY_SERVICE_KEY", "GATEWAY_API_KEY_PEPPER", "GATEWAY_ENCRYPTION_KEY")) {
-  if (-not $gatewayEnv[$requiredKey]) { throw "$requiredKey is missing from payment-gateway/.env.test." }
+  if (-not $gatewayEnv[$requiredKey]) { throw "$requiredKey is missing from payment-gateway/.env.development." }
 }
 if ($backendEnv["PAYMENT_GATEWAY_TEST_SERVICE_KEY"] -ne $gatewayEnv["GATEWAY_SERVICE_KEY"]) {
-  throw "PAYMENT_GATEWAY_TEST_SERVICE_KEY in back-end/.env.development must match GATEWAY_SERVICE_KEY in payment-gateway/.env.test."
+  throw "PAYMENT_GATEWAY_TEST_SERVICE_KEY in back-end/.env.development must match GATEWAY_SERVICE_KEY in payment-gateway/.env.development."
 }
 
 $gatewayEnv["GATEWAY_MONGODB_URI"] = $backendEnv["MONGODB_URI"]

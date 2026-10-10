@@ -1,2 +1,5 @@
 .env.test
 .env.live
+.env.development
+.env.production
+.tmp*/

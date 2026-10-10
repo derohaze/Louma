@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,7 +89,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.json(w, map[string]string{"status": "ready"})
 		return
 	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := clientIP(r, s.Service.Store.Config.TrustedProxyCIDRs)
 	if !s.Rate.Allow(ctx, "ip:"+ip, 300) {
 		w.Header().Set("Retry-After", "60")
 		err = domain.Reject("rate_limit_exceeded", 429)

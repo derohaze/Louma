@@ -1,0 +1,11 @@
+# Only production source enters the build context. Never send env files or test keys.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!web/
+!web/**
+**/*_test.go

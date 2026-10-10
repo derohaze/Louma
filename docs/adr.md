@@ -137,3 +137,21 @@ weaken ledger, idempotency, uniqueness, or transaction invariants. Live gateway
 operation still requires its explicit enablement and a separately verified
 compatible deployment database. Revisit this exception when the Atlas sandbox
 or production database assignments change.
+
+## ADR-012 — production gateway deployment and sandbox separation
+
+On 2026-10-10 the operator confirmed `louma` on the configured Atlas cluster as
+the production gateway database. The Node production backend and live Go gateway
+must use this same database for financial consistency. ADR-011's temporary
+permission to use `louma` in gateway test mode is therefore retired.
+
+Development uses `louma_gateway_test_dev`, shared only by the development Node
+backend and test Go gateway. The gateway loader and local runner reject `louma`
+in test mode. This changes configuration only: existing data is not moved,
+deleted, converted, or reclassified by a migration.
+
+Live deployment requires shared Redis rate limits, purpose-separated secrets,
+explicit live enablement, and the existing compatible-schema checks. Redis
+continues to hold ephemeral throttling counters only; all authorization,
+idempotency, balances and ledger events remain in MongoDB. Proxy-derived client
+IPs are accepted only through explicitly trusted proxy CIDRs.
