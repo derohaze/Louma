@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { resolve, join } from "node:path";
 import { MongoClient, ObjectId } from "mongodb";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config/env.js";
@@ -12,35 +15,38 @@ import { ensureDatabaseIndexes } from "../infrastructure/mongodb/indexes.js";
 import { disabledRedis } from "../infrastructure/redis/client.js";
 import { ensureFeeAccount } from "../modules/wallets/service.js";
 import { verifyAccessToken } from "../modules/security/access-token.js";
-import { gatewayRequest } from "../modules/payment-gateway/client.js";
+import { gatewayInternalRequest } from "../../payment-gateway/transport.js";
+import { migrate } from "../../payment-gateway/infrastructure/migrations.js";
+import { GatewayStore } from "../../payment-gateway/infrastructure/store.js";
 
 const mongoUri = process.env["PAYMENT_GATEWAY_E2E_MONGO_URI"];
-const database = process.env["PAYMENT_GATEWAY_E2E_DATABASE"];
-const gatewayUrl = process.env["PAYMENT_GATEWAY_E2E_URL"];
-const serviceKey = process.env["PAYMENT_GATEWAY_E2E_SERVICE_KEY"];
-const configured = !!(mongoUri && database && gatewayUrl && serviceKey);
+const configured = !!mongoUri;
 
 interface TestAccount { id: string; walletId: string; address: string; token: string; csrf: string; email: string; password: string }
 interface HttpOutcome { status: number; payload: Record<string, unknown> }
 
-test("real Node identity and Go sandbox preserve consent, isolation, settlement, and replay", { skip: !configured, timeout: 90_000 }, async (suite) => {
-  assert.ok(mongoUri && database && gatewayUrl && serviceKey);
+test("real Node identity and embedded gateway preserve consent, isolation, settlement, and replay", { skip: !configured, timeout: 90_000 }, async (suite) => {
+  assert.ok(mongoUri);
+  const database = `louma_gateway_test_${randomUUID().replaceAll("-", "")}`;
   assert.match(mongoUri, /^mongodb:\/\/(?:127\.0\.0\.1|localhost):\d+(?:\/|\?)/, "Financial tests require an explicitly local replica set");
   assert.match(database, /^louma_gateway_test_[a-zA-Z0-9_]+$/, "Financial tests require an isolated test database");
-  const parsedGateway = new URL(gatewayUrl);
-  assert.ok(["127.0.0.1", "localhost"].includes(parsedGateway.hostname) && parsedGateway.protocol === "http:");
-  const config = loadConfig({ NODE_ENV: "test", MONGODB_URI: mongoUri, MONGODB_DATABASE: database, ACCESS_TOKEN_SECRET: Buffer.alloc(32, 17).toString("base64"), APP_ENCRYPTION_KEY: Buffer.alloc(32, 29).toString("base64"), PAYMENT_GATEWAY_TEST_URL: gatewayUrl, PAYMENT_GATEWAY_TEST_SERVICE_KEY: serviceKey, FRONTEND_ORIGINS: "http://localhost:3000", MINING_ENABLED: "false" });
+  const config = loadConfig({ NODE_ENV: "test", MONGODB_URI: mongoUri, MONGODB_DATABASE: database, ACCESS_TOKEN_SECRET: Buffer.alloc(32, 17).toString("base64"), APP_ENCRYPTION_KEY: Buffer.alloc(32, 29).toString("base64"), GATEWAY_ENABLED: "true", GATEWAY_ENVIRONMENT: "test", GATEWAY_SERVICE_KEY: "s".repeat(32), GATEWAY_API_KEY_PEPPER: "p".repeat(32), GATEWAY_ENCRYPTION_KEY: "ab".repeat(32), FRONTEND_ORIGINS: "http://localhost:3000", MINING_ENABLED: "false" });
   const client = new MongoClient(mongoUri);
   await client.connect();
   const db = client.db(database);
   for (const [name, validator] of Object.entries(schemas)) await ensureCollection(db, name, validator);
   await ensureDatabaseIndexes(db, { retentionTtlEnabled: false });
+  assert.ok(config.embeddedGateway);
+  const gatewayStore = new GatewayStore(client, db, config.embeddedGateway);
+  await migrate(gatewayStore);
   const collections = getCollections(db);
   const app = await buildApp({ config, collections, mongoClient: client, redis: disabledRedis(), logger: false });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   assert.ok(address && typeof address === "object");
   const nodeUrl = `http://127.0.0.1:${address.port}`;
+  const gatewayUrl = nodeUrl;
+  config.embeddedGateway.publicUrl = nodeUrl;
   const request = async (method: string, path: string, options: { account?: TestAccount; body?: unknown; key?: string; csrf?: string } = {}): Promise<HttpOutcome> => {
     const response = await fetch(`${nodeUrl}${path}`, { method, headers: { "Content-Type": "application/json", ...(options.account ? { Authorization: `Bearer ${options.account.token}`, "X-CSRF-Token": options.csrf ?? options.account.csrf } : {}), ...(options.key ? { "Idempotency-Key": options.key } : {}) }, ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }) });
     return { status: response.status, payload: await response.json() as Record<string, unknown> };
@@ -81,9 +87,7 @@ test("real Node identity and Go sandbox preserve consent, isolation, settlement,
   let paymentIntent = "";
   let credentialId = "";
   let merchantApiKey = "";
-  let browserCheckoutId = "";
   let recurringPriceId = "";
-  let browserRecurringCheckoutId = "";
   const paymentRequestKey = randomUUID();
   try {
     await suite.test("developer eligibility is explicit and every Node dashboard request enforces it", async () => {
@@ -110,13 +114,13 @@ test("real Node identity and Go sandbox preserve consent, isolation, settlement,
       assert.equal(saved.payload["name"], "Verified merchant");
       assert.equal(saved.payload["receiving_wallet_id"], merchant.walletId);
     });
-    await suite.test("scoped secret credentials and immutable checkout intents reach real Go HTTP", async () => {
+    await suite.test("scoped secret credentials and immutable checkout intents reach real gateway HTTP", async () => {
       const createdKey = await resource(applicationId, "credentials", { scopes: ["checkout:create", "payments:read"] });
       expectStatus(createdKey, 201);
       credentialId = String(createdKey.payload["id"]);
       assert.equal(typeof (createdKey.payload["secret"] ?? createdKey.payload["api_key"]), "string");
       merchantApiKey = String(createdKey.payload["secret"] ?? createdKey.payload["api_key"]);
-      const created = await resource(applicationId, "checkouts", { subtotal: "10.0000", tax: "0.0000", currency: "LMA", description: "Real Node to Go checkout" });
+      const created = await resource(applicationId, "checkouts", { subtotal: "10.0000", tax: "0.0000", currency: "LMA", description: "Real Node module checkout" });
       expectStatus(created, 201);
       paymentId = String(created.payload["id"]);
       paymentIntent = String(created.payload["intent_hash"]);
@@ -137,21 +141,21 @@ test("real Node identity and Go sandbox preserve consent, isolation, settlement,
     });
     await suite.test("pending approval retries bind the current session, wallet, consent, policy, and expiry", async () => {
       const claims = await verifyAccessToken(payer.token, config.accessTokenSecret);
-      const approval = await gatewayRequest<{ id: string; expires_at: string }>({ connection: config.paymentGateway.test, ownerUserId: payer.id, method: "POST", path: "/internal/v1/approvals", body: { payment_id: paymentId, owner_user_id: payer.id, wallet_id: payer.walletId, session_id: claims.sessionId, intent_hash: paymentIntent, idempotency_key: paymentRequestKey, recurring_consent: false, policy_version: "", proof: { kind: "none", passwordChangedAt: null, twoFactorEnabledAt: null } } });
+      const approval = await gatewayInternalRequest(gatewayStore, { ownerUserId: payer.id, method: "POST", path: "/internal/v1/approvals", body: { payment_id: paymentId, owner_user_id: payer.id, wallet_id: payer.walletId, session_id: claims.sessionId, intent_hash: paymentIntent, idempotency_key: paymentRequestKey, recurring_consent: false, policy_version: "", proof: { kind: "none", passwordChangedAt: null, twoFactorEnabledAt: null } } });
       const retry = (additional: Record<string, unknown> = {}) => request("POST", `/api/v1/payments/checkout/${paymentId}/confirm`, { account: payer, key: paymentRequestKey, body: { mode: "test", intent_hash: paymentIntent, ...additional } });
       expectStatus(await retry({ recurring_consent: true }), 409);
       expectStatus(await retry({ policy_version: "changed" }), 409);
-      await db.collection("gateway_approvals").updateOne({ publicId: approval.id }, { $set: { sessionId: randomUUID() } });
+      await db.collection("gateway_approvals").updateOne({ publicId: approval["id"] }, { $set: { sessionId: randomUUID() } });
       expectStatus(await retry(), 409);
-      await db.collection("gateway_approvals").updateOne({ publicId: approval.id }, { $set: { sessionId: claims.sessionId, walletId: outsider.walletId } });
+      await db.collection("gateway_approvals").updateOne({ publicId: approval["id"] }, { $set: { sessionId: claims.sessionId, walletId: outsider.walletId } });
       expectStatus(await retry(), 409);
-      await db.collection("gateway_approvals").updateOne({ publicId: approval.id }, { $set: { walletId: payer.walletId, expiresAt: new Date(Date.now() - 1_000) } });
+      await db.collection("gateway_approvals").updateOne({ publicId: approval["id"] }, { $set: { walletId: payer.walletId, expiresAt: new Date(Date.now() - 1_000) } });
       expectStatus(await retry(), 409);
-      await db.collection("gateway_approvals").updateOne({ publicId: approval.id }, { $set: { expiresAt: new Date(approval.expires_at) } });
+      await db.collection("gateway_approvals").updateOne({ publicId: approval["id"] }, { $set: { expiresAt: new Date(String(approval["expires_at"])) } });
       assert.equal(await walletBalance(payer), 500_000);
       assert.equal(await collections.transactions.countDocuments({ paymentId }), 0);
     });
-    await suite.test("settlement and concurrent duplicate Node confirmations post exactly one balanced Go journal", async () => {
+    await suite.test("settlement and concurrent duplicate Node confirmations post exactly one balanced gateway journal", async () => {
       const paid = await request("POST", `/api/v1/payments/checkout/${paymentId}/confirm`, { account: payer, key: paymentRequestKey, body: { mode: "test", intent_hash: paymentIntent } });
       expectStatus(paid, 200);
       assert.equal(paid.payload["status"], "succeeded");
@@ -176,7 +180,7 @@ test("real Node identity and Go sandbox preserve consent, isolation, settlement,
       const revoked = await fetch(`${gatewayUrl}/v1/payments/${paymentId}`, { headers: { Authorization: `Bearer ${merchantApiKey}` } });
       assert.equal(revoked.status, 401);
     });
-    await suite.test("products, recurring prices, checkout consent, and subscription cancellation use real Go state", async () => {
+    await suite.test("products, recurring prices, checkout consent, and subscription cancellation use real gateway state", async () => {
       const product = await resource(applicationId, "products", { name: "Monthly test service", description: "Synthetic subscription" });
       expectStatus(product, 201);
       const price = await resource(applicationId, "prices", { product_id: product.payload["id"], amount: "2.0000", currency: "LMA", interval: "monthly" });
@@ -222,7 +226,7 @@ test("real Node identity and Go sandbox preserve consent, isolation, settlement,
       assert.ok(Number(summary.payload["requests"]) >= 1);
       expectStatus(await request("GET", `/api/v1/developer/applications/${applicationId}/usage?mode=test`, { account: outsider }), 404);
     });
-    await suite.test("refund and SSRF rejection use Go-owned authorization and financial records", async () => {
+    await suite.test("refund and SSRF rejection use gateway-owned authorization and financial records", async () => {
       const refund = await resource(applicationId, "refunds", { payment_id: paymentId, amount: "1.0000", reason: "Integration refund" });
       expectStatus(refund, 201);
       assert.equal(refund.payload["status"], "succeeded");
@@ -234,12 +238,39 @@ test("real Node identity and Go sandbox preserve consent, isolation, settlement,
       expectStatus(await request("GET", "/api/v1/developer/applications?mode=test", { account: outsider }), 403);
       const created = await resource(applicationId, "checkouts", { subtotal: "3.2500", tax: "0", currency: "LMA", description: "Browser payment verification" });
       expectStatus(created, 201);
-      browserCheckoutId = String(created.payload["id"]);
+      assert.equal(typeof created.payload["id"], "string");
       const recurring = await resource(applicationId, "checkouts", { subtotal: "2.0000", tax: "0", currency: "LMA", description: "Browser recurring consent verification", price_id: recurringPriceId });
       expectStatus(recurring, 201);
-      browserRecurringCheckoutId = String(recurring.payload["id"]);
+      assert.equal(typeof recurring.payload["id"], "string");
     });
-    await mkdir(".temp", { recursive: true });
-    await writeFile(".temp/gateway-browser-fixture.json", JSON.stringify({ database, gatewayUrl, applicationId, checkoutId: browserCheckoutId, recurringCheckoutId: browserRecurringCheckoutId, merchant: { email: merchant.email, password: merchant.password, id: merchant.id }, payer: { email: payer.email, password: payer.password, id: payer.id }, outsider: { email: outsider.email, password: outsider.password, id: outsider.id } }, null, 2));
-  } finally { await app.close(); await client.close(); }
+    await suite.test("hosted checkout escapes merchant input and internal approval HTTP is absent", async () => {
+      const response = await fetch(`${nodeUrl}/checkout/${paymentId}?lang=ar`);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+      assert.match(await response.text(), /تم الدفع بنجاح/);
+      const unsafeDescription = await resource(applicationId, "checkouts", { subtotal: "1", currency: "LMA", description: "<script>window.x=1</script>&" });
+      expectStatus(unsafeDescription, 201);
+      const escapedPage = await (await fetch(`${nodeUrl}/checkout/${String(unsafeDescription.payload["id"])}`)).text();
+      assert.match(escapedPage, /&lt;script&gt;window.x=1&lt;\/script&gt;&amp;/);
+      assert.doesNotMatch(escapedPage, /<script>/);
+      assert.equal((await fetch(`${nodeUrl}/internal/v1/approvals`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 404);
+    });
+    await suite.test("real Python SDK responses conform to the shipped public OpenAPI", async () => {
+      const credential = await resource(applicationId, "credentials", { scopes: ["checkout:create", "payments:read", "refunds:create", "subscriptions:manage", "products:manage", "webhooks:manage", "credentials:manage"] });
+      expectStatus(credential, 201);
+      const temporaryRoot = resolve(".temp");
+      await mkdir(temporaryRoot, { recursive: true });
+      const temporary = await mkdtemp(join(temporaryRoot, "gateway-contract-"));
+      try {
+        const keyFile = join(temporary, "merchant-key.txt");
+        await writeFile(keyFile, String(credential.payload["api_key"]), { mode: 0o600 });
+        const result = await promisify(execFile)("python", ["payment-gateway/tests/sdk-openapi.test.py"], { windowsHide: true, env: { ...process.env, LMA_API_KEY_FILE: keyFile, LMA_BASE_URL: nodeUrl } });
+        assert.match(result.stderr, /OK/);
+        assert.doesNotMatch(result.stderr, /skipped/);
+      } finally {
+        if (!temporary.startsWith(temporaryRoot + "/") && !temporary.startsWith(temporaryRoot + "\\")) throw new Error("Unexpected temporary fixture path");
+        await rm(temporary, { recursive: true });
+      }
+    });
+  } finally { await app.close(); await db.dropDatabase(); await client.close(); }
 });

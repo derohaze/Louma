@@ -1,0 +1,17 @@
+# Coolify deployment
+
+Use **`back-end` as the build context/base directory**, with its `Dockerfile`. The image runs `dist/src/server.js` as a non-root user and contains no `.env` files. Alternatively use `back-end/docker-compose.production.yml`; its external network defaults to `coolify`. If your network has another name, set `COOLIFY_NETWORK` for Compose interpolation in Coolify or the shell.
+
+Expose container port **8000** and assign **https://checkout.loumapay.com** to this application. Keep any existing customer API hostname on the same application. Coolify's reverse proxy terminates TLS. Configure `/ready` as the readiness check; `/health` is process liveness. `/readyz` checks the gateway specifically. Set `TRUST_PROXY` to the actual proxy IP/CIDR, never `true` or a universal range. The real server CIDR is intentionally not guessed.
+
+Development values live in `back-end/.env.development`; production values live in `back-end/.env.production`. Both files are Git-ignored. Their `.example` counterparts contain no actual credentials. In Coolify, inject the production file's values as **runtime environment variables**, not build arguments. `npm run dev` loads development settings. The container receives production settings from Coolify; local production execution can use `node --env-file=.env.production dist/src/server.js`.
+
+The backend and gateway share `MONGODB_URI`, `MONGODB_DATABASE`, `REDIS_URL`, and `REDIS_KEY_PREFIX`. Production database is `louma`; development is `louma_gateway_test_dev`. Startup rejects a test gateway pointed at production. Startup installs the existing compatible gateway validators/indexes after the host financial schema; it does not migrate, delete or copy existing financial data. MongoDB must support transactions. Keep the gateway pepper and encryption key unchanged when upgrading to preserve merchant keys and webhook secrets.
+
+`GATEWAY_ENABLED=true` mounts the module. `GATEWAY_ENVIRONMENT` is `test` in development and `live` in production. `GATEWAY_LIVE_ENABLED=false` remains the production default: creation, settlement and recurring billing stay paused until the operator finishes deployment checks. Separate emergency flags are `GATEWAY_CREATION_PAUSED`, `GATEWAY_SETTLEMENT_PAUSED`, `GATEWAY_BILLING_PAUSED` and `GATEWAY_MERCHANT_PAUSED`. Run reconciliation using the existing backend operator commands before enabling live payments.
+
+The supplied production Redis hostname is internal to Coolify and must be reachable from this application's network. It was not resolvable from the local Windows workstation. Local development Redis on port 6379 was verified with PONG and shared-limit tests. Verify production Redis, MongoDB, proxy CIDRs, DNS and TLS from the deployed container before changing `GATEWAY_LIVE_ENABLED` to `true`.
+
+The Compose example limits the container to 1 GiB, two CPUs and 128 processes, drops capabilities and uses a read-only filesystem with a bounded `/tmp`. These are initial deployment limits, not a measured capacity guarantee. Tune from workload measurements. Shutdown stops new worker iterations and drains outstanding work before closing shared database connections.
+
+Rollback uses the previous Git revision and previously deployed image. BSON collections, journal fields, indexes, money representation and encryption remain compatible; no database rollback or deletion is required. Do not restore old development/production database mixing from historical instructions.

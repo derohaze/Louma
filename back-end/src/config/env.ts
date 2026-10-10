@@ -1,5 +1,6 @@
 import { LEDGER_AMOUNT_MAX_MINOR, MONEY_SCALE } from "../shared/types.js";
 import { loadPaymentGatewayConfig, type PaymentGatewayConfig } from "../modules/payment-gateway/config.js";
+import { loadGatewayConfig, type GatewayConfig } from "../../payment-gateway/config.js";
 
 export type RuntimeEnvironment = "development" | "test" | "production";
 export type CookieSameSite = "lax" | "strict" | "none";
@@ -194,6 +195,7 @@ export interface AppConfig {
   miningPools: MiningPoolsConfig;
   lmdg: LmdgConfig;
   paymentGateway: PaymentGatewayConfig;
+  embeddedGateway: GatewayConfig | null;
 }
 
 /**
@@ -627,5 +629,6 @@ export function loadConfig(values: NodeJS.ProcessEnv = process.env): AppConfig {
     miningPools: loadMiningPoolsConfig(values),
     lmdg: loadLmdgConfig(values),
     paymentGateway: loadPaymentGatewayConfig(values),
+    embeddedGateway: loadGatewayConfig(values),
   };
 }

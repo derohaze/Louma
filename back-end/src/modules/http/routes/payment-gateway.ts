@@ -12,6 +12,8 @@ import { proveTransferCredential } from "../../security/service.js";
 import { recordSecurityEvent } from "../../security/audit.js";
 import { assertTransferAuthorizationAttemptsRemain } from "../../transfers/intent.js";
 import { settleMiningForOwner } from "../../mining/service.js";
+import { gatewayInternalRequest } from "../../../../payment-gateway/transport.js";
+import { GatewayError } from "../../../../payment-gateway/domain/money.js";
 
 const modeSchema = z.enum(["test", "live"]);
 const amountSchema = z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,4})?$/).max(17);
@@ -35,7 +37,15 @@ function requestKey(request: FastifyRequest): string {
   return key;
 }
 
-function gatewayCall(app: FastifyInstance, request: FastifyRequest, mode: GatewayMode, path: string, method: "GET" | "POST" | "PATCH", body?: unknown) {
+async function gatewayCall(app: FastifyInstance, request: FastifyRequest, mode: GatewayMode, path: string, method: "GET" | "POST" | "PATCH", body?: unknown) {
+  if (app.gateway) {
+    if (app.gateway.config.environment !== mode) throw new AppError(503, "payment_gateway_disabled", "Payments are unavailable in this environment.");
+    if (method === "POST" && /^\/checkout\/[^/]+\/confirm$/.test(path) && !await app.gatewayLimiter!.allow(`payer:${getAuth(request).userId}`, 20)) {
+      throw new AppError(429, "rate_limit_exceeded", "Too many payment attempts. Try again later.");
+    }
+    try { return await gatewayInternalRequest(app.gateway, { ownerUserId: getAuth(request).userId, path: `/internal/v1${path}`, method, ...(body === undefined ? {} : { body }) }); }
+    catch (error) { if (error instanceof GatewayError) throw new AppError(error.statusCode, error.code, error.code.replaceAll("_", " ")); throw error; }
+  }
   return gatewayRequest<Record<string, unknown>>({ connection: app.config.paymentGateway[mode], ownerUserId: getAuth(request).userId, path: `/internal/v1${path}`, method, ...(body === undefined ? {} : { body }) });
 }
 
@@ -90,7 +100,7 @@ export async function registerPaymentGatewayRoutes(app: FastifyInstance): Promis
     return {
       eligible: await hasGatewayDeveloperAccess({ mongoClient: app.mongoClient, database: app.config.mongoDatabase, ownerUserId: getAuth(request).userId }),
       mode,
-      available: app.config.paymentGateway[mode] !== null,
+      available: app.gateway ? app.gateway.config.environment === mode : app.config.paymentGateway[mode] !== null,
     };
   });
   app.get("/api/v1/developer/applications", authenticated, async (request) => {

@@ -21,6 +21,11 @@ import { stopNotificationStream } from "./modules/security/notification-stream.j
 import { assertCsrfToken, CSRF_HEADER, isStateChangingMethod, sessionCsrfToken } from "./modules/security/csrf.js";
 import { authenticateUser } from "./modules/auth/service.js";
 import { createPrettyLogStream } from "./config/logger.js";
+import { GatewayStore } from "../payment-gateway/infrastructure/store.js";
+import { GatewayLimiter } from "../payment-gateway/infrastructure/rate-limit.js";
+import { registerGatewayRoutes } from "../payment-gateway/transport.js";
+import { GatewayError } from "../payment-gateway/domain/money.js";
+import { compatible } from "../payment-gateway/infrastructure/migrations.js";
 
 export interface AuthContext {
   userId: string;
@@ -41,6 +46,8 @@ declare module "fastify" {
     mongoClient: MongoClient;
     /** Ephemeral infrastructure (cache/rate-limit/locks). Disabled handle when REDIS_URL is unset. */
     redis: RedisHandle;
+    gateway: GatewayStore | null;
+    gatewayLimiter: GatewayLimiter | null;
     authenticate: (request: FastifyRequest) => Promise<AuthContext>;
   }
 }
@@ -143,6 +150,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.decorate("collections", options.collections);
   app.decorate("mongoClient", options.mongoClient);
   app.decorate("redis", options.redis);
+  const gateway = options.config.embeddedGateway ? new GatewayStore(options.mongoClient, options.mongoClient.db(options.config.mongoDatabase), options.config.embeddedGateway) : null;
+  app.decorate("gateway", gateway);
+  const gatewayLimiter = gateway ? new GatewayLimiter(options.redis, gateway.config.environment) : null;
+  app.decorate("gatewayLimiter", gatewayLimiter);
   app.decorateRequest("auth", null);
   app.decorate("authenticate", async (request: FastifyRequest) => {
     const authenticated = await authenticateUser({
@@ -220,6 +231,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     };
 
     if (error instanceof AppError) return reject(error.statusCode, error.code, error.message);
+    if (error instanceof GatewayError) return reject(error.statusCode, error.code, error.code.replaceAll("_", " "));
 
     const statusCode = clientErrorStatus(error);
     if (statusCode === 429) return reject(429, "rate_limited", "Too many requests. Try again later.");
@@ -243,8 +255,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get("/health", async () => ({ status: "ok" }));
   /**
    * Readiness: the process can serve traffic safely. MongoDB gates (a process that cannot reach
-   * the source of truth must not take traffic); Redis is reported but never gates — financial
-   * correctness does not depend on it, and every consumer degrades to MongoDB or local state.
+   * the source of truth must not take traffic). When the gateway is enabled, its schema and
+   * configured Redis limiter also gate readiness; money remains authoritative in MongoDB.
    */
   app.get("/ready", async (_request, reply) => {
     let mongo: { ok: boolean; latencyMs: number | null };
@@ -256,14 +268,22 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       mongo = { ok: false, latencyMs: null };
     }
     const redis = await options.redis.describe();
+    let gatewayReady = true;
+    if (gateway) {
+      try { await compatible(gateway); gatewayReady = !options.redis.enabled || redis.status === "ready"; }
+      catch { gatewayReady = false; }
+    }
+    const ready = mongo.ok && gatewayReady;
     const counters = options.redis.counters;
     const body = {
-      status: mongo.ok ? "ready" : "not_ready",
+      status: ready ? "ready" : "not_ready",
       mongo,
+      gateway: gateway ? { ready: gatewayReady, mode: gateway.config.environment, liveEnabled: gateway.config.liveEnabled } : null,
       redis: { ...redis, hits: counters.hits, misses: counters.misses, errors: counters.errors, reconnects: counters.reconnects },
     };
-    return reply.code(mongo.ok ? 200 : 503).send(body);
+    return reply.code(ready ? 200 : 503).send(body);
   });
   await registerCustomerRoutes(app);
+  if (gateway && gatewayLimiter) await registerGatewayRoutes(app, gateway, gatewayLimiter);
   return app;
 }

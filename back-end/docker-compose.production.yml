@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      LOUMA_API_PORT: 8000
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    stop_grace_period: 45s
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 128
+    networks:
+      - coolify
+networks:
+  coolify:
+    external: true
+    name: ${COOLIFY_NETWORK:-coolify}
